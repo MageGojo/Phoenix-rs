@@ -40,6 +40,74 @@ describe("Phoenix Vite plugin", () => {
     expect(source).toContain("startRenderer(");
   });
 
+  it("pins a production renderer to the client asset and contract identity", () => {
+    const root = fixture();
+    mkdirSync(join(root, "public/assets"), { recursive: true });
+    writeFileSync(join(root, "public/assets/phoenix-manifest.json"), JSON.stringify({
+      schema: 1,
+      version: "sha256-client-build",
+      contract_hash: "sha256-contract",
+    }));
+    const plugin = configuredPlugin(root, {
+      contractHash: "sha256-contract",
+      renderer: true,
+    });
+    const resolved = invokeHook(plugin.resolveId, phoenixVirtualModules.server) as string;
+    const source = invokeHook(plugin.load, resolved) as string;
+
+    expect(source).toContain('assetVersion: "sha256-client-build"');
+    expect(source).toContain('contractHash: "sha256-contract"');
+  });
+
+  it("emits a versioned production manifest with contract identity", () => {
+    const root = fixture();
+    const plugin = configuredPlugin(root, { contractHash: "sha256-contract" });
+    const emitted: Array<{ fileName: string; source: string; type: string }> = [];
+    invokeHookWithContext(plugin.generateBundle, {
+      emitFile(value: { fileName: string; source: string; type: string }) {
+        emitted.push(value);
+        return value.fileName;
+      },
+    }, {}, {
+      "phoenix-a1.js": {
+        code: "entry",
+        fileName: "phoenix-a1.js",
+        imports: ["chunks/page-c3.js"],
+        isEntry: true,
+        type: "chunk",
+      },
+      "chunks/page-c3.js": {
+        code: "page",
+        fileName: "chunks/page-c3.js",
+        imports: [],
+        isEntry: false,
+        type: "chunk",
+      },
+      "client-b2.css": {
+        fileName: "client-b2.css",
+        source: "body{}",
+        type: "asset",
+      },
+    });
+
+    const manifest = emitted.find((item) => item.fileName === "phoenix-manifest.json");
+    expect(manifest).toBeDefined();
+    const parsed = JSON.parse(manifest!.source) as {
+      contract_hash: string;
+      entries: { client: { css: string[]; file: string; imports: string[] } };
+      schema: number;
+      version: string;
+    };
+    expect(parsed.schema).toBe(1);
+    expect(parsed.version).toMatch(/^sha256-[0-9a-f]{24}$/);
+    expect(parsed.contract_hash).toBe("sha256-contract");
+    expect(parsed.entries.client).toEqual({
+      file: "phoenix-a1.js",
+      css: ["client-b2.css"],
+      imports: ["chunks/page-c3.js"],
+    });
+  });
+
   it("compiles client:load into an Island boundary without changing the component", () => {
     const root = fixture();
     const plugin = configuredPlugin(root);
@@ -105,10 +173,21 @@ function fixture(): string {
   return root;
 }
 
-function configuredPlugin(root: string) {
-  const plugin = phoenix();
+function configuredPlugin(root: string, options: Parameters<typeof phoenix>[0] = {}) {
+  const plugin = phoenix(options);
   invokeHook(plugin.configResolved, { root });
   return plugin;
+}
+
+function invokeHookWithContext(
+  hook: unknown,
+  context: object,
+  ...args: unknown[]
+): unknown {
+  const handler = typeof hook === "function"
+    ? hook
+    : (hook as { handler: (...values: unknown[]) => unknown }).handler;
+  return Reflect.apply(handler, context, args);
 }
 
 function invokeHook(hook: unknown, ...args: unknown[]): unknown {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -17,7 +18,11 @@ const RESOLVED_SERVER_ID = `\0${SERVER_ID}`;
 const COMPONENT_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 
 export interface PhoenixViteOptions {
+  clientManifest?: string;
+  contractHash?: string;
   generatedRoutes?: string;
+  manifest?: string;
+  publicPath?: string;
   renderer?: boolean;
   routes?: string;
   views?: string;
@@ -35,6 +40,8 @@ interface Discovery {
 }
 
 export function phoenix(options: PhoenixViteOptions = {}): Plugin {
+  let buildContractHash = "";
+  let clientManifestFile = "";
   let generatedRoutesFile = "";
   let routesRoot = "";
   let viewsRoot = "";
@@ -51,6 +58,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
             emptyOutDir: true,
             outDir: "public/ssr",
             ssr: true,
+            ssrEmitAssets: true,
             rollupOptions: {
               input: SERVER_ID,
               output: { entryFileNames: "renderer.js" },
@@ -66,7 +74,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
           rollupOptions: {
             input: CLIENT_ID,
             output: {
-              entryFileNames: "phoenix.js",
+              entryFileNames: "phoenix-[hash].js",
               chunkFileNames: "chunks/[name]-[hash].js",
               assetFileNames: "[name][extname]",
             },
@@ -83,6 +91,11 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
         options.generatedRoutes ?? "views/generated/routes.ts",
       );
       generateRouteTypes(routesRoot, generatedRoutesFile);
+      buildContractHash = options.contractHash ?? sourceHash(readFileSync(generatedRoutesFile, "utf8"));
+      clientManifestFile = resolve(
+        resolved.root,
+        options.clientManifest ?? "public/assets/phoenix-manifest.json",
+      );
     },
 
     resolveId(id) {
@@ -96,7 +109,12 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
       const discovery = discover(viewsRoot);
       return id === RESOLVED_CLIENT_ID
         ? clientModule(discovery)
-        : serverModule(discovery);
+        : serverModule(
+          discovery,
+          options.renderer
+            ? readClientBuildIdentity(clientManifestFile, buildContractHash)
+            : undefined,
+        );
     },
 
     transform(source, id) {
@@ -120,7 +138,104 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
       if (!isWithin(file, viewsRoot)) return;
       invalidateVirtualModules(server);
     },
+
+    generateBundle(_output, bundle) {
+      const version = bundleVersion(bundle);
+      const entry = Object.values(bundle).find(
+        (item) => item.type === "chunk" && item.isEntry,
+      );
+      if (!entry || entry.type !== "chunk") {
+        throw new Error("Phoenix build did not produce an entry chunk");
+      }
+
+      if (options.renderer) {
+        this.emitFile({
+          type: "asset",
+          fileName: options.manifest ?? "phoenix-renderer.json",
+          source: `${JSON.stringify({
+            schema: 1,
+            version,
+            contract_hash: buildContractHash,
+            entry: entry.fileName,
+          }, null, 2)}\n`,
+        });
+        return;
+      }
+
+      const css = Object.values(bundle)
+        .filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
+        .map((item) => item.fileName)
+        .sort();
+      this.emitFile({
+        type: "asset",
+        fileName: options.manifest ?? "phoenix-manifest.json",
+        source: `${JSON.stringify({
+          schema: 1,
+          version,
+          contract_hash: buildContractHash,
+          public_path: options.publicPath ?? "/assets/",
+          entries: {
+            client: {
+              file: entry.fileName,
+              css,
+              imports: [...new Set(entry.imports)].sort(),
+            },
+          },
+        }, null, 2)}\n`,
+      });
+    },
   };
+}
+
+function sourceHash(source: string): string {
+  return `sha256-${createHash("sha256").update(source).digest("hex")}`;
+}
+
+function readClientBuildIdentity(
+  clientManifestFile: string,
+  expectedContractHash: string,
+): { assetVersion: string; contractHash: string } {
+  if (!existsSync(clientManifestFile)) {
+    throw new Error(
+      `Phoenix SSR build requires the client manifest; run the client build first: ${clientManifestFile}`,
+    );
+  }
+  const manifest = JSON.parse(readFileSync(clientManifestFile, "utf8")) as {
+    contract_hash?: string;
+    schema?: number;
+    version?: string;
+  };
+  if (manifest.schema !== 1 || !manifest.version || !manifest.contract_hash) {
+    throw new Error(`Phoenix client manifest is invalid: ${clientManifestFile}`);
+  }
+  if (manifest.contract_hash !== expectedContractHash) {
+    throw new Error(
+      `Phoenix client/renderer contract hash mismatch: ${manifest.contract_hash} != ${expectedContractHash}`,
+    );
+  }
+  return {
+    assetVersion: manifest.version,
+    contractHash: expectedContractHash,
+  };
+}
+
+function bundleVersion(
+  bundle: Record<string, {
+    code?: string;
+    fileName: string;
+    source?: string | Uint8Array;
+    type: string;
+  }>,
+): string {
+  const hash = createHash("sha256");
+  for (const item of Object.values(bundle).sort((left, right) => (
+    left.fileName.localeCompare(right.fileName)
+  ))) {
+    hash.update(item.fileName);
+    if (item.type === "chunk") hash.update(item.code ?? "");
+    else hash.update(item.source ?? "");
+  }
+  return `sha256-${hash.digest("hex").slice(0, 24)}`;
 }
 
 interface RustToken {
@@ -574,7 +689,10 @@ function clientModule({ pages, islands, styles }: Discovery): string {
   return lines.join("\n");
 }
 
-function serverModule({ pages, islands }: Discovery): string {
+function serverModule(
+  { pages, islands }: Discovery,
+  identity?: { assetVersion: string; contractHash: string },
+): string {
   const imports: string[] = [
     'import { registerIsland } from "@phoenix/react";',
     'import { startRenderer } from "@phoenix/react-ssr";',
@@ -593,7 +711,9 @@ function serverModule({ pages, islands }: Discovery): string {
   return [
     ...imports,
     ...registrations,
-    `startRenderer({ pages: ${pageRegistry}, islands: ${islandRegistry} });`,
+    `startRenderer({${identity
+      ? ` assetVersion: ${JSON.stringify(identity.assetVersion)}, contractHash: ${JSON.stringify(identity.contractHash)},`
+      : ""} pages: ${pageRegistry}, islands: ${islandRegistry} });`,
   ].join("\n");
 }
 
