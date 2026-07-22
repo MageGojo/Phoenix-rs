@@ -284,9 +284,10 @@ Vite 生成：
 
 1. 已完成：统一 `PageEnvelope`、三种渲染语义、`client:load`、Vite 自动发现与按需加载。
 2. 已完成：版本化生产 manifest、多 worker renderer 池、contract/resource 握手、健康指标、优雅关闭和流式 SSR。
-3. 下一步：Head、结构化流错误、CSP nonce 和 hydration 诊断。
-4. 稳定前：独立 island 入口、bundle 预算、缓存和部署验证。
-5. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
+3. 已完成：受控 PageHead 在 HTML 与局部页面协议间保持一致。
+4. 下一步：结构化流错误、CSP nonce 和 hydration 诊断。
+5. 稳定前：独立 island 入口、bundle 预算、缓存和部署验证。
+6. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 
 ## 10. 验收标准
 
@@ -295,3 +296,7 @@ Vite 生成：
 - Islands 页面只下载实际出现的交互岛代码，不下载完整页面应用包。
 - renderer 不可用时按配置快速失败或显式降级，不悬挂 Hyper 请求。
 - 三种模式返回相同状态码、验证错误、flash 和业务 props 语义。
+
+## 11. 受控页面元数据
+
+`Page::head(PageHead::new(...))` 把 title、description、canonical、robots 和 Open Graph 写入同一个页面信封。完整 HTML 由 Rust 使用上下文正确的 HTML 转义生成 `<head>`；局部导航读取相同结构，不接受业务注入任意标签、脚本或样式。`Page::csrf_token(...)` 是可选协议字段，供浏览器 action 传输使用，不应进入日志或页面业务 props。

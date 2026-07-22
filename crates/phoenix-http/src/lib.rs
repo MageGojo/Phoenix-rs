@@ -10,6 +10,8 @@ use std::{
 pub use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 pub use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
+pub use mime::Mime;
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -191,6 +193,10 @@ pub struct Header<T>(pub T);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Form<T>(pub T);
 
+/// A clone of application state stored in the request extension map.
+#[derive(Clone, Debug)]
+pub struct State<T>(pub T);
+
 macro_rules! extractor_deref {
     ($extractor:ident) => {
         impl<T> Deref for $extractor<T> {
@@ -214,6 +220,27 @@ extractor_deref!(Path);
 extractor_deref!(Header);
 extractor_deref!(Form);
 extractor_deref!(Json);
+extractor_deref!(State);
+
+#[derive(Clone, Copy, Debug, Error)]
+#[error("Required application state is unavailable.")]
+pub struct StateRejection;
+
+impl<T> FromRequest for State<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    type Rejection = StateRejection;
+
+    fn from_request(request: &Request) -> Result<Self, Self::Rejection> {
+        request
+            .extensions()
+            .get::<T>()
+            .cloned()
+            .map(Self)
+            .ok_or(StateRejection)
+    }
+}
 
 #[derive(Debug, Error)]
 #[error("The query string is invalid.")]
@@ -790,6 +817,168 @@ impl std::fmt::Display for InvalidHeader {
 
 impl std::error::Error for InvalidHeader {}
 
+/// A validated HTTP redirect response.
+#[derive(Clone, Debug)]
+pub struct Redirect {
+    status: StatusCode,
+    location: HeaderValue,
+}
+
+impl Redirect {
+    /// Create a `302 Found` redirect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidHeader`] when the location contains invalid header bytes.
+    pub fn to(location: impl TryInto<HeaderValue>) -> Result<Self, InvalidHeader> {
+        Self::with_status(StatusCode::FOUND, location)
+    }
+
+    /// Create a `303 See Other` redirect, suitable after a form submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidHeader`] when the location contains invalid header bytes.
+    pub fn see_other(location: impl TryInto<HeaderValue>) -> Result<Self, InvalidHeader> {
+        Self::with_status(StatusCode::SEE_OTHER, location)
+    }
+
+    /// Create a `307 Temporary Redirect` response.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidHeader`] when the location contains invalid header bytes.
+    pub fn temporary(location: impl TryInto<HeaderValue>) -> Result<Self, InvalidHeader> {
+        Self::with_status(StatusCode::TEMPORARY_REDIRECT, location)
+    }
+
+    fn with_status(
+        status: StatusCode,
+        location: impl TryInto<HeaderValue>,
+    ) -> Result<Self, InvalidHeader> {
+        Ok(Self {
+            status,
+            location: location.try_into().map_err(|_| InvalidHeader)?,
+        })
+    }
+}
+
+impl IntoResponse for Redirect {
+    fn into_response(self) -> Response {
+        let mut response = Response::new(self.status, Bytes::new());
+        response
+            .headers_mut()
+            .insert(header::LOCATION, self.location);
+        response
+    }
+}
+
+/// A buffered binary response with safe download headers.
+#[derive(Clone, Debug)]
+pub struct Download {
+    body: Bytes,
+    content_type: Mime,
+    disposition: &'static str,
+    file_name: String,
+    cache_control: HeaderValue,
+}
+
+impl Download {
+    #[must_use]
+    pub fn attachment(
+        body: impl Into<Bytes>,
+        file_name: impl Into<String>,
+        content_type: Mime,
+    ) -> Self {
+        Self::new(body, file_name, content_type, "attachment")
+    }
+
+    #[must_use]
+    pub fn inline(
+        body: impl Into<Bytes>,
+        file_name: impl Into<String>,
+        content_type: Mime,
+    ) -> Self {
+        Self::new(body, file_name, content_type, "inline")
+    }
+
+    fn new(
+        body: impl Into<Bytes>,
+        file_name: impl Into<String>,
+        content_type: Mime,
+        disposition: &'static str,
+    ) -> Self {
+        Self {
+            body: body.into(),
+            content_type,
+            disposition,
+            file_name: file_name.into(),
+            cache_control: HeaderValue::from_static("private, no-store"),
+        }
+    }
+
+    /// Override the conservative private download cache policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidHeader`] when the value contains invalid header bytes.
+    pub fn with_cache_control(
+        mut self,
+        value: impl TryInto<HeaderValue>,
+    ) -> Result<Self, InvalidHeader> {
+        self.cache_control = value.try_into().map_err(|_| InvalidHeader)?;
+        Ok(self)
+    }
+}
+
+impl IntoResponse for Download {
+    fn into_response(self) -> Response {
+        let fallback = ascii_file_name(&self.file_name);
+        let encoded = utf8_percent_encode(&self.file_name, NON_ALPHANUMERIC);
+        let content_disposition = format!(
+            "{}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}",
+            self.disposition
+        );
+        let mut response = Response::new(StatusCode::OK, self.body);
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(self.content_type.as_ref())
+                .expect("a parsed MIME value is a valid header"),
+        );
+        response.headers_mut().insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&content_disposition)
+                .expect("sanitized content disposition is a valid header"),
+        );
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, self.cache_control);
+        response.headers_mut().insert(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        );
+        response
+    }
+}
+
+fn ascii_file_name(file_name: &str) -> String {
+    let sanitized = file_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.trim_matches(['.', '_', '-']).is_empty() {
+        "download".to_owned()
+    } else {
+        sanitized
+    }
+}
+
 pub trait IntoResponse {
     fn into_response(self) -> Response;
 }
@@ -900,6 +1089,12 @@ impl IntoResponse for FormRejection {
             Self::InvalidForm(_) => StatusCode::BAD_REQUEST,
         };
         rejection_response(status, &self.to_string())
+    }
+}
+
+impl IntoResponse for StateRejection {
+    fn into_response(self) -> Response {
+        rejection_response(StatusCode::INTERNAL_SERVER_ERROR, &self.to_string())
     }
 }
 
@@ -1041,6 +1236,29 @@ impl Next {
 
 pub trait Middleware: Send + Sync + 'static {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response>;
+}
+
+/// Insert cloneable application state into every request handled downstream.
+#[derive(Clone, Debug)]
+pub struct StateMiddleware<T> {
+    value: T,
+}
+
+impl<T> StateMiddleware<T> {
+    #[must_use]
+    pub const fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> Middleware for StateMiddleware<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
+        request.extensions_mut().insert(self.value.clone());
+        Box::pin(async move { next.run(request).await })
+    }
 }
 
 pub struct MiddlewareFn<F>(F);
@@ -1316,5 +1534,56 @@ mod tests {
             ))
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn state_middleware_feeds_typed_handlers_and_missing_state_is_safe() {
+        #[derive(Clone, Debug)]
+        struct AppName(&'static str);
+
+        let handler = typed(|State(name): State<AppName>| async move { name.0 });
+        let request = Request::new(Method::GET, "/".parse().expect("valid URI"));
+        let response = handler.call(request).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let handler: Arc<dyn Handler> = Arc::new(handler);
+        let handler = apply_middleware(
+            handler,
+            &[Arc::new(StateMiddleware::new(AppName("Phoenix")))],
+        );
+        let response = handler
+            .call(Request::new(Method::GET, "/".parse().expect("valid URI")))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), "Phoenix");
+    }
+
+    #[test]
+    fn redirect_and_download_headers_reject_injection_and_preserve_unicode() {
+        assert!(Redirect::see_other("/safe\r\nx-injected: yes").is_err());
+        let redirect = Redirect::see_other("/account")
+            .expect("valid redirect")
+            .into_response();
+        assert_eq!(redirect.status(), StatusCode::SEE_OTHER);
+        assert_eq!(redirect.headers()[header::LOCATION], "/account");
+
+        let response = Download::attachment(
+            Bytes::from_static(b"profile"),
+            "证书\r\nset-cookie: bad.mobileconfig",
+            "application/x-apple-aspen-config"
+                .parse()
+                .expect("valid MIME"),
+        )
+        .into_response();
+        let disposition = response.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .expect("ASCII header");
+        assert!(disposition.contains("filename*=UTF-8''"));
+        assert!(!disposition.contains("\r\n"));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
     }
 }

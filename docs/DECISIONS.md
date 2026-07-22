@@ -168,3 +168,10 @@
 - 决定：Input、Resource、Page Props 和 Shared Props 使用 `#[phoenix::contract(...)]` 标记；Vite 从 Rust 源码生成 TypeScript，并把 Serde 的 rename、rename_all、flatten、alias、default 和方向性 skip 作为 wire-name 权威规则。
 - 原因：过程宏不能安全地直接向业务源码目录写文件；Vite 已经负责页面和路由发现，把生成阶段集中在同一个可观察构建入口可以免除业务 build script。
 - 边界：已支持的 Rust/Serde 形态必须生成准确类型；尚未支持的数据 enum、tuple/generic struct、无法解析的嵌套类型和可能越过 JavaScript 安全范围的整数必须中止构建，不允许退化成静默 `any`。生产 client 与 renderer manifest 携带同一 contract hash，Rust worker 握手不一致时失败关闭。
+
+## ADR-026：应用状态与页面外围协议使用显式强类型 API
+
+- 状态：已接受
+- 决定：应用依赖由 `StateMiddleware<T>` 放入 Request extensions，并通过 `State<T>` extractor 进入控制器。受控页面元数据与 CSRF 分别使用 `PageHead` 和 `PageEnvelope.csrf_token`；React action 自动转发 token。重定向和文件响应使用 `Redirect`、`Download`，不鼓励业务手写敏感响应头。
+- 原因：数据库、配置和客户端需要可测试的显式依赖边界；SEO、CSRF 和下载头同时涉及 HTML/HTTP 上下文，集中在框架能避免每个应用重复实现转义与注入防护。
+- 边界：`State<T>` 是显式类型映射，不是运行时服务定位器；`PageHead` 不允许任意 HTML；`Download` 只负责响应安全，文件授权仍由应用控制器完成。

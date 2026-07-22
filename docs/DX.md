@@ -394,3 +394,19 @@ async fn guest_can_view_posts(app: TestApp) {
 ```
 
 测试 API 必须能区分完整 HTML 响应、页面协议响应和 JSON API 响应，并默认隔离数据库状态。
+
+## 9. 应用状态与安全响应
+
+应用级配置、数据库和外部客户端通过显式状态中间件进入强类型控制器：
+
+```rust
+let routes = routes.with_middleware(StateMiddleware::new(app_state));
+
+async fn index(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.catalog.summary().await)
+}
+```
+
+`AppState` 必须可克隆且线程安全；通常内部持有连接池或 `Arc`，不要把逐请求可变数据放进全局状态。缺失状态会在控制器执行前返回通用 500，不暴露类型或内部配置。
+
+控制器可用 `Redirect::see_other(...)` 处理 POST 后跳转，用 `Download::attachment(...)` 返回受控文件。下载响应默认 `private, no-store` 与 `nosniff`，并同时生成安全 ASCII 回退文件名和 UTF-8 `filename*`；不要绕过该 API 手写来自用户输入的 `Content-Disposition`。

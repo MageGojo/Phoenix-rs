@@ -166,3 +166,11 @@
 - `docs/SECURITY.md` 增加完整中间件装配顺序、Session/CSRF、Cookie、CSP/HSTS 和日志使用示例。
 - `docs/RENDERING.md` 增加 client/SSR 构建顺序、manifest、renderer 预热、流式页面、静态资源、健康指标与关闭流程。
 - `docs/DX.md` 和 `docs/BUSINESS_GUIDE.md` 记录自动路由、resource routes、中间件别名、模型绑定与 `phoenix dev` 的当前公开用法。
+
+## 2026-07-22：应用状态、页面外围协议与安全响应
+
+- `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。
+- `PageHead` 覆盖 title、description、canonical、robots 与 Open Graph，完整 HTML 和页面信封共享同一受控结构并执行上下文转义。
+- `PageEnvelope` 新增可选 CSRF token；React `callRust` 与生成命名 action 自动发送 `X-CSRF-Token`，`Session::csrf_token()` 提供受控读取。
+- `Redirect` 验证 Location；`Download` 默认生成 `private, no-store`、`nosniff`、MIME 与双文件名 Content-Disposition，并阻断 CRLF 文件名注入。
+- Rust 26 个相关 crate 测试与 React/SSR/Vite/博客 33 个测试通过；外部真实项目集成由 iOS 证书与应用分发案例持续验证。

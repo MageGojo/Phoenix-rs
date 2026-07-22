@@ -17,11 +17,12 @@ pub mod prelude {
         ResourceRoutes, mount_routes,
     };
     pub use phoenix_http::{
-        BoxFuture, ByteStream, Form, FormRejection, FromMultipart, FromRequest, Handler, Header,
-        HeaderRejection, IntoResponse, Json, JsonRejection, Method, Middleware, Multipart,
-        MultipartData, MultipartField, MultipartRejection, Next, Path, PathRejection, Query,
-        QueryRejection, Request, Response, ResponseBody, RouteManifest, SecurityHeaders,
-        StatusCode, TypedHandler, Uri, middleware_fn, typed,
+        BoxFuture, ByteStream, Download, Form, FormRejection, FromMultipart, FromRequest, Handler,
+        Header, HeaderRejection, IntoResponse, Json, JsonRejection, Method, Middleware, Mime,
+        Multipart, MultipartData, MultipartField, MultipartRejection, Next, Path, PathRejection,
+        Query, QueryRejection, Redirect, Request, Response, ResponseBody, RouteManifest,
+        SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode, TypedHandler, Uri,
+        middleware_fn, typed,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_security::{
@@ -35,8 +36,8 @@ pub mod prelude {
     };
     pub use phoenix_view::{
         ASSET_MANIFEST_SCHEMA, Aes256GcmCodec, AssetEntry, AssetManifest, AssetManifestError,
-        EncryptionError, Island, NodeRenderer, Page, PageEnvelope, PageResponseError, PayloadCodec,
-        RenderContext, RenderFrame, RenderMode, RenderResult, RendererConfig, RendererError,
-        RendererHealth, RendererManifest, RendererStream,
+        EncryptionError, Island, NodeRenderer, OpenGraph, Page, PageEnvelope, PageHead,
+        PageResponseError, PayloadCodec, RenderContext, RenderFrame, RenderMode, RenderResult,
+        RendererConfig, RendererError, RendererHealth, RendererManifest, RendererStream,
     };
 }

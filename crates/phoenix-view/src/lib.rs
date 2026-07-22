@@ -83,6 +83,86 @@ impl Island {
     }
 }
 
+/// Controlled document metadata shared by full documents and page navigation.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct PageHead {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub canonical: Option<String>,
+    pub robots: Option<String>,
+    pub open_graph: Option<OpenGraph>,
+}
+
+impl PageHead {
+    #[must_use]
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    #[must_use]
+    pub fn canonical(mut self, canonical: impl Into<String>) -> Self {
+        self.canonical = Some(canonical.into());
+        self
+    }
+
+    #[must_use]
+    pub fn robots(mut self, robots: impl Into<String>) -> Self {
+        self.robots = Some(robots.into());
+        self
+    }
+
+    #[must_use]
+    pub fn open_graph(mut self, open_graph: OpenGraph) -> Self {
+        self.open_graph = Some(open_graph);
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct OpenGraph {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image: Option<String>,
+    pub kind: Option<String>,
+}
+
+impl OpenGraph {
+    #[must_use]
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    #[must_use]
+    pub fn image(mut self, image: impl Into<String>) -> Self {
+        self.image = Some(image.into());
+        self
+    }
+
+    #[must_use]
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PageEnvelope {
     pub protocol: u8,
@@ -95,6 +175,10 @@ pub struct PageEnvelope {
     pub contract_hash: Option<String>,
     pub asset_version: Option<String>,
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub head: PageHead,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csrf_token: Option<String>,
     pub routes: HashMap<String, String>,
     pub islands: Vec<Island>,
 }
@@ -113,6 +197,8 @@ impl PageEnvelope {
             contract_hash: None,
             asset_version: None,
             request_id: None,
+            head: PageHead::default(),
+            csrf_token: None,
             routes: HashMap::new(),
             islands: Vec::new(),
         }
@@ -142,6 +228,8 @@ impl Page {
                 contract_hash: None,
                 asset_version: None,
                 request_id: None,
+                head: PageHead::default(),
+                csrf_token: None,
                 routes: HashMap::new(),
                 islands: Vec::new(),
             },
@@ -205,6 +293,18 @@ impl Page {
     #[must_use]
     pub fn request_id(mut self, request_id: impl Into<String>) -> Self {
         self.envelope.request_id = Some(request_id.into());
+        self
+    }
+
+    #[must_use]
+    pub fn head(mut self, head: PageHead) -> Self {
+        self.envelope.head = head;
+        self
+    }
+
+    #[must_use]
+    pub fn csrf_token(mut self, csrf_token: impl Into<String>) -> Self {
+        self.envelope.csrf_token = Some(csrf_token.into());
         self
     }
 
@@ -682,10 +782,55 @@ fn document_prefix(envelope: &PageEnvelope, stylesheets: &[String]) -> String {
             );
             styles
         });
+    let head = document_head(&envelope.head);
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{head}{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
         envelope.render_mode.as_str()
     )
+}
+
+fn document_head(head: &PageHead) -> String {
+    let mut output = String::new();
+    if let Some(title) = &head.title {
+        let _ = write!(output, "<title>{}</title>", html_text(title));
+    }
+    if let Some(description) = &head.description {
+        push_meta(&mut output, "name", "description", description);
+    }
+    if let Some(canonical) = &head.canonical {
+        let _ = write!(
+            output,
+            "<link rel=\"canonical\" href=\"{}\">",
+            html_attribute(canonical)
+        );
+    }
+    if let Some(robots) = &head.robots {
+        push_meta(&mut output, "name", "robots", robots);
+    }
+    if let Some(open_graph) = &head.open_graph {
+        if let Some(value) = &open_graph.title {
+            push_meta(&mut output, "property", "og:title", value);
+        }
+        if let Some(value) = &open_graph.description {
+            push_meta(&mut output, "property", "og:description", value);
+        }
+        if let Some(value) = &open_graph.image {
+            push_meta(&mut output, "property", "og:image", value);
+        }
+        if let Some(value) = &open_graph.kind {
+            push_meta(&mut output, "property", "og:type", value);
+        }
+    }
+    output
+}
+
+fn push_meta(output: &mut String, key: &str, name: &str, content: &str) {
+    let _ = write!(
+        output,
+        "<meta {key}=\"{}\" content=\"{}\">",
+        html_attribute(name),
+        html_attribute(content)
+    );
 }
 
 fn document_suffix(envelope: &PageEnvelope, script_src: &str) -> Result<String, PageResponseError> {
@@ -700,6 +845,13 @@ fn html_attribute(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
@@ -735,6 +887,35 @@ mod tests {
         assert!(body.contains("data-render-mode=\"islands\""));
         assert!(!body.contains("</script><b>"));
         assert!(body.contains("\\u003c/script\\u003e\\u003cb\\u003e"));
+    }
+
+    #[test]
+    fn page_head_and_csrf_are_escaped_and_shared_by_the_protocol() {
+        let head = PageHead::new("Apps < trusted")
+            .description("Install \"safely\" & privately")
+            .canonical("https://example.test/apps?kind=ios&view=all")
+            .robots("index,follow")
+            .open_graph(
+                OpenGraph::new("Apps < trusted")
+                    .description("No <script> here")
+                    .image("https://example.test/cover.png?size=large&safe=1")
+                    .kind("website"),
+            );
+        let page = Page::new("apps/index", json!({}))
+            .head(head.clone())
+            .csrf_token("csrf-token");
+        let response = page.clone().into_response();
+        let body = String::from_utf8_lossy(response.body());
+
+        assert!(body.contains("<title>Apps &lt; trusted</title>"));
+        assert!(body.contains("content=\"Install &quot;safely&quot; &amp; privately\""));
+        assert!(body.contains("property=\"og:title\" content=\"Apps &lt; trusted\""));
+        assert!(!body.contains("<script> here"));
+
+        let protocol = page.respond(true, None).expect("protocol response");
+        let envelope: PageEnvelope = serde_json::from_slice(protocol.body()).expect("envelope");
+        assert_eq!(envelope.head, head);
+        assert_eq!(envelope.csrf_token.as_deref(), Some("csrf-token"));
     }
 
     #[test]

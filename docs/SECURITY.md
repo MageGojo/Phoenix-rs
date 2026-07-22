@@ -151,20 +151,10 @@ pub async fn logout(request: Request) -> Response {
 
 ### 浏览器提交 CSRF token
 
-安全方法的响应会包含 `X-CSRF-Token`。浏览器后续 POST/PUT/PATCH/DELETE 必须原样回传：
+安全方法会在服务端 Session 中准备 token。页面控制器通过 `Session::csrf_token()` 读取并交给 `Page::csrf_token(...)` 后，`@phoenix/react` 的 `callRust` 与生成命名 action 会自动用 `X-CSRF-Token` 原样回传：
 
 ```ts
-const csrf = response.headers.get("x-csrf-token");
-
-await fetch("/account", {
-  method: "POST",
-  credentials: "same-origin",
-  headers: {
-    "content-type": "application/json",
-    "x-csrf-token": csrf ?? "",
-  },
-  body: JSON.stringify(input),
-});
+await account.update({ display_name: "Ada" });
 ```
 
 CSRF 依赖 `SessionMiddleware`，所以 Session 必须注册在 Csrf 外层。API token 客户端若不使用浏览器 Session，应放在独立路由组并采用明确的认证策略，而不是全局关闭 CSRF。

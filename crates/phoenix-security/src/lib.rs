@@ -424,6 +424,12 @@ impl Session {
             .flatten()
     }
 
+    #[must_use]
+    pub fn csrf_token(&self) -> Option<String> {
+        self.get("_csrf")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+    }
+
     pub fn put(&self, key: impl Into<String>, value: impl Into<Value>) {
         self.with_record_mut(|record| {
             record.values.insert(key.into(), value.into());

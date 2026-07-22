@@ -87,11 +87,12 @@ describe("Phoenix React client", () => {
   });
 
   it("posts input to a Rust action and returns its JSON result", async () => {
-    installRoutes({ "members.store": "/api/members" });
+    installRoutes({ "members.store": "/api/members" }, "csrf-action-token");
     const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
       expect(url).toBe("/api/members");
       expect(init?.method).toBe("POST");
       expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+      expect(new Headers(init?.headers).get("x-csrf-token")).toBe("csrf-action-token");
       expect(init?.body).toBe(JSON.stringify({ name: "Lin" }));
       return new Response(JSON.stringify({ id: 101, name: "Lin" }), {
         status: 201,
@@ -209,6 +210,6 @@ function base64Url(value: Uint8Array): string {
     .replaceAll("=", "");
 }
 
-function installRoutes(routes: Record<string, string>): void {
-  document.body.innerHTML = `<script id="phoenix-page" type="application/json">${JSON.stringify({ routes })}</script>`;
+function installRoutes(routes: Record<string, string>, csrfToken?: string): void {
+  document.body.innerHTML = `<script id="phoenix-page" type="application/json">${JSON.stringify({ routes, csrf_token: csrfToken })}</script>`;
 }

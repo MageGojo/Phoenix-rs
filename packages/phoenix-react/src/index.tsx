@@ -24,6 +24,21 @@ export interface IslandDescriptor {
   props: unknown;
 }
 
+export interface OpenGraph {
+  title?: string | null;
+  description?: string | null;
+  image?: string | null;
+  kind?: string | null;
+}
+
+export interface PageHead {
+  title?: string | null;
+  description?: string | null;
+  canonical?: string | null;
+  robots?: string | null;
+  open_graph?: OpenGraph | null;
+}
+
 export interface PageEnvelope<Props = unknown> {
   protocol: 1;
   render_mode: RenderMode;
@@ -35,6 +50,8 @@ export interface PageEnvelope<Props = unknown> {
   contract_hash: string | null;
   asset_version: string | null;
   request_id: string | null;
+  head?: PageHead;
+  csrf_token?: string | null;
   routes: Record<string, string>;
   islands: IslandDescriptor[];
 }
@@ -196,10 +213,18 @@ export async function callRust<Output, Input = unknown>(
   input: Input,
   fetcher: typeof fetch = fetch,
 ): Promise<Output> {
-  const url = rustRoute(routeName);
+  const envelope = readPage(document);
+  const url = rustRoute(routeName, envelope);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+  if (envelope.csrf_token) {
+    headers["X-CSRF-Token"] = envelope.csrf_token;
+  }
   const response = await fetcher(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    headers,
     body: JSON.stringify(input),
   });
   const body = await response.json().catch(() => null) as unknown;
@@ -223,8 +248,11 @@ export function createRustAction<Input, Output>(
   return Object.assign(action, { routeName });
 }
 
-function rustRoute(routeName: string, documentRef: Document = document): string {
-  const route = readPage(documentRef).routes[routeName];
+function rustRoute(
+  routeName: string,
+  envelope: PageEnvelope = readPage(document),
+): string {
+  const route = envelope.routes[routeName];
   if (!route) {
     throw new Error(`Phoenix named route is not available: ${routeName}`);
   }
