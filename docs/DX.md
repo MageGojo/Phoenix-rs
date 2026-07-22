@@ -10,6 +10,7 @@ app/
   middleware/
   models/
   requests/
+  resources/
 config/
 database/
   migrations/
@@ -18,6 +19,8 @@ routes/
   web.rs
 views/
   components/
+  generated/       # 自动生成，不手写、不提交
+  islands/
   layouts/
   pages/
 public/
@@ -73,10 +76,11 @@ impl PostController {
 }
 ```
 
-`props!` 仅用于易读的命名映射；每个值仍必须实现 `Serialize`。稳定版应支持使用一个强类型 props struct，以便后续生成 TypeScript 类型：
+`props!` 仅用于快速原型；每个值仍必须实现 `Serialize`。正式页面优先使用实现 `Contract` 的强类型 props struct，构建流程自动生成 TypeScript 类型：
 
 ```rust
-#[derive(Serialize)]
+#[derive(Serialize, Contract)]
+#[contract(namespace = "pages.posts", name = "PostIndexProps", direction = "output")]
 pub struct PostIndexProps {
     posts: Paginated<PostResource>,
     filters: ListPosts,
@@ -89,13 +93,9 @@ render_typed("posts/index", PostIndexProps { posts, filters })
 
 ```tsx
 import { Head, Link, usePage } from "@phoenix/react";
+import type { PostIndexProps } from "#phoenix/contracts/pages/posts";
 
-type Props = {
-  posts: Paginated<Post>;
-  filters: { search?: string };
-};
-
-export default function PostIndex({ posts }: Props) {
+export default function PostIndex({ posts }: PostIndexProps) {
   const { flash } = usePage();
 
   return (
@@ -112,12 +112,13 @@ export default function PostIndex({ posts }: Props) {
 }
 ```
 
-P0 客户端包至少提供启动器、`Link`、表单提交、页面上下文、`Head`、加载状态、错误处理和资源版本刷新。前端包不负责 UI 组件库。
+前端没有重复声明 `PostIndexProps`。P0 客户端包至少提供启动器、`Link`、表单提交、页面上下文、`Head`、加载状态、错误处理和资源/契约版本刷新。前端包不负责 UI 组件库。
 
 ## 5. 请求与验证
 
 ```rust
-#[derive(FromRequest, Validate)]
+#[derive(FromRequest, Validate, Contract)]
+#[contract(namespace = "posts", name = "StorePostInput", direction = "input")]
 pub struct StorePostRequest {
     #[validate(length(min = 3, max = 120))]
     pub title: String,
@@ -140,7 +141,88 @@ impl Authorize for StorePostRequest {
 - 旧输入默认排除密码、token、文件和显式敏感字段。
 - 验证消息允许覆盖字段名和本地化文本，规则标识保持稳定。
 
-## 6. 模型与查询
+### 登录字段只定义一次
+
+```rust
+#[derive(FromRequest, Validate, Contract)]
+#[contract(namespace = "auth", name = "LoginInput", direction = "input")]
+pub struct LoginRequest {
+    #[validate(length(min = 3, max = 120))]
+    pub user: String,
+
+    #[sensitive]
+    #[validate(length(min = 8, max = 128))]
+    pub password: Secret<String>,
+}
+```
+
+React 直接使用生成的类型和运行时契约：
+
+```tsx
+import {
+  LoginInputContract,
+} from "#phoenix/contracts/auth";
+import { useForm } from "@phoenix/react";
+
+export default function Login() {
+  const form = useForm(LoginInputContract);
+
+  return (
+    <form onSubmit={form.submit("auth.login")}>
+      <input {...form.field("user")} autoComplete="username" />
+      <input
+        {...form.field("password")}
+        type="password"
+        autoComplete="current-password"
+      />
+      <button type="submit">Login</button>
+    </form>
+  );
+}
+```
+
+`useForm()` 会从契约推导类型，`form.field("usr")` 会在 TypeScript 检查时报错。`password` 字段名可以正常生成，但敏感标记会阻止用户输入值进入旧输入、日志和输出 Props。完整冲突与类型映射规则见 [CONTRACTS.md](CONTRACTS.md)。
+
+## 6. React 渲染模式
+
+应用设置默认模式，路由可以覆盖：
+
+```rust
+Routes::new()
+    .get("/dashboard", DashboardController::show)
+        .render_mode(RenderMode::Spa)
+    .get("/articles/:article", ArticleController::show)
+        .render_mode(RenderMode::Ssr)
+    .get("/docs/:page", DocsController::show)
+        .render_mode(RenderMode::Islands)
+```
+
+- SPA 渲染完整客户端应用，适合后台和复杂交互。
+- SSR 先在持久 JS renderer 中生成完整 HTML，再 hydrate 整个页面。
+- Islands 生成完整 HTML，只为标记的交互组件加载浏览器代码。
+
+三种模式共用控制器、Props 和页面协议。SSR/Islands 默认需要生产环境运行 renderer，不能被描述为纯单 Rust 二进制部署。完整规则见 [RENDERING.md](RENDERING.md)。
+
+Islands 页面仍是普通 TSX：
+
+```tsx
+import { island } from "@phoenix/react/islands";
+import { SearchBox } from "../../components/search-box";
+import type { DocsPageProps } from "#phoenix/contracts/pages/docs";
+
+const SearchIsland = island(SearchBox);
+
+export default function DocsPage({ article }: DocsPageProps) {
+  return (
+    <main>
+      <article>{article.body}</article>
+      <SearchIsland source="docs" />
+    </main>
+  );
+}
+```
+
+## 7. 模型与查询
 
 下面表达的是目标体验，不保证与 Toasty 当前 derive/API 完全一致：
 
@@ -165,7 +247,7 @@ let post = Post::query(&db)
 
 框架必须优先保留 Toasty 的编译期字段与关系检查。如果 Laravel 风格名称与 Toasty 的可实现 API 冲突，应选择类型安全，并通过短方法、prelude 和文档恢复易用性。
 
-## 7. 迁移
+## 8. 迁移
 
 ```rust
 pub struct CreatePosts;
@@ -191,7 +273,7 @@ impl Migration for CreatePosts {
 
 API 需要在 Toasty migration spike 后调整。迁移执行可以先由项目内 `migrate` 二进制或测试入口调用；“生成迁移文件”的 CLI 明确延后。
 
-## 8. 响应与错误
+## 9. 响应与错误
 
 ```rust
 render("posts/show", props)
@@ -204,7 +286,7 @@ abort(StatusCode::NOT_FOUND)
 
 应用错误映射为稳定的 HTTP 语义。开发环境可显示带请求 ID 的诊断页；生产环境只显示安全错误页，完整错误进入结构化日志。
 
-## 9. 测试体验
+## 10. 测试体验
 
 ```rust
 #[phoenix::test]

@@ -33,6 +33,7 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 4. **一个请求，一条清晰链路**：路由到请求验证、控制器、模型、React props 与响应应可被日志和测试完整观察。
 5. **安全默认开启**：TLS 部署指引、CSRF、会话 Cookie、安全响应头、敏感字段过滤与错误脱敏默认生效。
 6. **稳定门面**：应用代码优先依赖 Phoenix API，底层 Hyper、Toasty 或 Vite 的升级由适配层吸收。
+7. **契约只定义一次**：请求字段、页面 Props 与 Resource 在 Rust 中声明，React 自动获得对应类型和运行时字段描述。
 
 ## 5. 核心用户旅程
 
@@ -59,6 +60,21 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 3. 迁移执行器通过应用二进制或专用示例入口运行，记录已执行版本并使用数据库锁避免并发执行。
 4. Toasty 模型与迁移 schema 的一致性在测试或开发启动检查中验证。
 
+### 5.4 创建登录表单
+
+1. 开发者在 Rust `LoginRequest` 中定义 `user`、`password` 和验证规则。
+2. 构建流程自动生成带命名空间的 `LoginInput` TypeScript 类型与表单契约。
+3. React 通过类型安全的 `form.field("user")` 和 `form.field("password")` 绑定控件，不再重写字段接口。
+4. Rust 字段、Serde wire name 或验证规则变化后，前端类型与运行时描述自动刷新。
+5. 同名契约或最终 wire name 冲突时构建失败，并报告冲突来源。
+
+### 5.5 选择页面渲染方式
+
+1. 应用选择默认 React 渲染模式。
+2. 内容页可以使用 SSR，后台可以使用 SPA，文档页可以使用 Islands。
+3. 控制器、Props、验证错误和路由保持不变，渲染层负责不同的 HTML 与 hydration 策略。
+4. 构建产物记录资源版本与契约 hash，防止 Rust 服务和 React renderer 使用不一致代码。
+
 ## 6. 功能范围
 
 ### P0：首个可用版本必须具备
@@ -70,7 +86,8 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 | 控制器 | 异步处理器、依赖提取、统一响应 | 可返回页面、JSON、重定向、文件和标准错误 |
 | 请求 | Query、Path、Header、Form、JSON、Multipart 基础支持 | 非法内容类型与超限载荷返回明确错误 |
 | 验证 | 规则、嵌套字段、自定义规则、错误消息、已验证 DTO | 失败错误稳定且字段级可序列化 |
-| React 视图 | `.tsx` / `.jsx` 页面发现、props、共享数据、Vite 开发与生产资源 | 刷新、跳转、验证错误和生产构建均可用 |
+| 数据契约 | 从 Rust Request、Props、Resource 自动生成 TypeScript 类型和运行时字段描述 | 登录表单无需重复定义字段，冲突与陈旧契约会使构建失败 |
+| React SPA | `.tsx` / `.jsx` 页面发现、props、共享数据、Vite 开发与生产资源 | 刷新、局部跳转、验证错误和生产构建均可用 |
 | 模型 | Toasty 模型门面、CRUD、查询、关系、分页、事务 | SQLite 与 PostgreSQL 至少通过契约测试 |
 | 迁移 | 创建/删除/修改表的迁移 API、状态表、执行与回滚 | 可在空库升级并在测试库回滚 |
 | 中间件 | 请求 ID、日志、错误捕获、会话、CSRF、安全头 | 默认 Web 栈通过安全集成测试 |
@@ -85,7 +102,8 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 - 限流、可信代理和 CORS 配置。
 - 数据库 seed/factory 基础能力。
 - React 页面懒加载、错误边界与代码分割。
-- 可选服务端渲染（SSR）技术验证；只有达到可运维标准后才进入稳定能力。
+- React SSR：持久 renderer、完整 HTML、hydration、流式响应、超时和故障处理。
+- React Islands：服务端 HTML、独立 island 入口和选择性 hydration。
 
 ### 暂不进入首版
 
@@ -103,12 +121,14 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 ```json
 {
   "protocol": 1,
+  "render_mode": "spa",
   "page": "users/show",
   "props": {},
   "shared": {},
   "errors": {},
   "flash": {},
   "request_id": "...",
+  "contract_hash": "...",
   "asset_version": "..."
 }
 ```
@@ -120,7 +140,7 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 - 页面名采用受约束的逻辑路径，不能访问 `views/` 外文件。
 - 共享数据按请求惰性求值，避免每次导航加载昂贵数据。
 - 协议包含版本与资源版本，客户端检测不兼容时执行完整刷新。
-- 后续可增加 TypeScript 类型生成，但不作为 P0 阻塞项。
+- Rust/TypeScript 契约 hash 必须匹配；不匹配时 SPA 完整刷新，SSR/Islands renderer 拒绝使用陈旧 bundle。
 
 ## 8. 数据传输与“加密”定义
 
@@ -140,6 +160,7 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 
 - 新项目从克隆示例到看到数据库驱动的 React 页面不超过 10 分钟。
 - 常规页面开发只需修改路由、请求对象、控制器、模型和 `views/` 文件。
+- 前端不手写与 Rust 请求或页面 Props 重复的字段接口。
 - 示例应用覆盖列表、详情、创建、验证失败、更新、删除和登录态保护。
 - P0 公共 API 有文档示例与集成测试。
 - 稳定版前不保留未说明的 `unsafe`，依赖漏洞扫描无已知高危问题。
@@ -149,18 +170,20 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 ### 技术预览
 
 - SQLite 示例应用端到端可运行。
-- React 开发服务器与生产资源构建均验证。
+- Rust 契约到 TypeScript 的自动生成、React SPA 开发服务器与生产资源构建均验证。
 - API 可破坏性变更被允许，但必须记录。
 
 ### Alpha
 
 - PostgreSQL 契约测试通过。
 - 迁移、会话、CSRF 与验证错误链路完整。
+- SSR renderer、完整 HTML 和 hydration 链路通过集成测试。
 - 关键模块有公共文档和错误诊断。
 
 ### Beta
 
 - 完成安全审查、性能基线和升级指南。
+- Islands 选择性 hydration 和客户端 bundle 预算通过验证。
 - 公共 API 进入变更控制，示例项目能够完成一次版本升级。
 
 ### 1.0

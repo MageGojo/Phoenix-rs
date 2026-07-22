@@ -58,3 +58,30 @@
 - 状态：待验证
 - 决定：内部暂用 Phoenix；技术预览发布前检查 crates.io、包管理器、域名、商标和与 Elixir Phoenix 的混淆风险。
 - 原因：重名会长期影响发现性和社区沟通，越晚改名成本越高。
+
+## ADR-010：Rust 是前后端数据契约的唯一来源
+
+- 状态：已接受
+- 决定：Request DTO、页面 Props、Shared Props 与 Resource 通过 `Contract` schema 自动生成 TypeScript 类型和运行时字段描述；React 不重复声明相同字段接口。
+- 原因：减少字段漂移，让重命名、可选性、枚举和验证变化在构建阶段暴露。
+- 边界：数据库模型不直接导出；客户端验证不代替服务端验证；页面布局和控件选择不自动生成。
+
+## ADR-011：契约使用命名空间、方向和版本隔离
+
+- 状态：已接受
+- 决定：契约 ID 使用 `namespace + name + version`，并区分 input/output。Serde 处理后的字段名是唯一 wire name；任何命名空间、rename、flatten 或 alias 冲突都会导致构建失败。
+- 原因：允许不同业务模块拥有同名类型，同时防止静默覆盖和敏感输入被误用为输出。
+
+## ADR-012：React 支持 SPA、SSR 与 Islands
+
+- 状态：已接受
+- 决定：三种模式共享 `PageEnvelope`、数据契约和 TSX 页面体系，支持应用默认值与路由/响应覆盖。P0 先交付 SPA，Alpha 交付 SSR，Beta 交付 Islands。
+- 原因：覆盖后台强交互、SEO 内容页和低 JavaScript 内容站，而不复制后端业务接口。
+- 边界：Islands 指独立 hydration roots，不等同于 React Server Components。
+
+## ADR-013：SSR 与 Islands 默认使用持久 JS renderer
+
+- 状态：待验证
+- 决定：优先验证长期运行的 Node.js renderer 池，通过内部版本化协议与 Rust 服务通信；不按请求启动进程。
+- 原因：React 官方服务端能力首先存在于 JavaScript 运行时，持久进程能控制延迟和资源成本。
+- 验证条件：streaming、超时、崩溃恢复、背压、版本握手、CSP、hydration 一致性和部署观测全部通过。

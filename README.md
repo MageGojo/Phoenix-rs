@@ -19,11 +19,9 @@ pub async fn show(user: User) -> Result<Response> {
 ```
 
 ```tsx
-type Props = {
-  user: User;
-};
+import type { UserShowProps } from "#phoenix/contracts/pages/users";
 
-export default function Show({ user }: Props) {
+export default function Show({ user }: UserShowProps) {
   return <h1>{user.name}</h1>;
 }
 ```
@@ -35,6 +33,8 @@ export default function Show({ user }: Props) {
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
 - [开发者体验草案](docs/DX.md)
+- [Rust/TypeScript 数据契约](docs/CONTRACTS.md)
+- [React 渲染模式](docs/RENDERING.md)
 - [安全与数据传输](docs/SECURITY.md)
 - [技术决策](docs/DECISIONS.md)
 - [当前进度](docs/PROGRESS.md)
@@ -43,12 +43,13 @@ export default function Show({ user }: Props) {
 ## 计划中的仓库结构
 
 ```text
-crates/                 Rust 框架组件
+crates/                 Rust 框架组件与数据契约导出器
 packages/phoenix-react/ React 客户端适配层
+packages/phoenix-vite/  Vite 页面、契约与渲染构建插件
 examples/blog/          贯穿开发过程的参考应用
 docs/                   产品、架构与项目记录
 ```
 
 ## 第一版边界
 
-第一版聚焦常规服务端网站应用：控制器、路由、请求、验证、Toasty 模型与迁移、React 页面响应、中间件、会话、CSRF、错误处理和测试工具。CLI 代码生成、管理后台、队列、邮件、WebSocket、SSR 与插件市场不进入首个可用版本。
+第一版聚焦常规服务端网站应用：控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React SPA 页面响应、中间件、会话、CSRF、错误处理和测试工具。SSR 与 Islands 属于首个稳定版目标，但排在 SPA 垂直切片之后；CLI 代码生成、管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。

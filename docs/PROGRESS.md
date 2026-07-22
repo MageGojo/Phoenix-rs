@@ -10,6 +10,14 @@
 - 写出 Laravel 风格 Rust API 草案，所有示例均标记为尚未实现。
 - 创建框架 crates、React 包与博客示例应用的目录骨架。
 
+## 2026-07-22：跨端契约与渲染模式规划
+
+- 确定 Rust 是 Request、页面 Props、Shared Props 与 Resource 的唯一契约来源。
+- 定义 TypeScript 类型、运行时表单描述、自动生成流程、兼容性 hash 和验证同步边界。
+- 定义命名空间、input/output 方向、Serde wire name 与字段碰撞的构建失败规则。
+- 将 SPA、SSR、Islands 纳入统一 React 页面协议，并明确分阶段交付顺序。
+- 明确 SSR/Islands 默认使用持久 JS renderer，Islands 不等同于 React Server Components。
+
 ## 已验证事实
 
 - 当前公开的 `toasty` crate 版本为 `0.8.0`。
