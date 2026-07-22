@@ -15,7 +15,7 @@
 - 明文或可选 AES-256-GCM 页面协议；
 - 业务单元测试和功能测试。
 
-Rust/TypeScript 自动字段契约、Vite 自动页面发现、持久 Node renderer 池、Toasty 模型和数据库迁移尚未提供完整 API。React 章节只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口。
+Vite 自动页面/Island 发现、TypeScript 命名路由树和持久单 worker renderer 已实现。Rust/TypeScript 自动字段契约、多 worker renderer 池、Toasty 模型和数据库迁移尚未提供完整 API。React 章节只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口。
 
 ## 1. 推荐的业务目录
 

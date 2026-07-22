@@ -90,8 +90,6 @@ Rust Request / Props / Resource
   -> React / tsc / SSR renderer 使用同一产物
 ```
 
-命名路由已经先行使用同一生成目录：`phoenix-vite` 从 Rust 的字面量 `.name("members.store")` 生成 `members.store` TypeScript 常量，提供属性补全与重命名检查。这个常量只描述路由身份，不代表输入/输出契约已经完成；当前 `Request -> Response` 处理器仍无法自动推导 action body 与返回 Resource。
-
 设计约束：
 
 - 开发者不手动执行类型生成命令。官方开发流程在 Rust 编译成功后自动刷新契约。
