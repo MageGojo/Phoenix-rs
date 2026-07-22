@@ -212,3 +212,10 @@
 - 决定：应用依赖由 `StateMiddleware<T>` 放入 Request extensions，并通过 `State<T>` extractor 进入控制器。受控页面元数据与 CSRF 分别使用 `PageHead` 和 `PageEnvelope.csrf_token`；React action 自动转发 token。重定向和文件响应使用 `Redirect`、`Download`，不鼓励业务手写敏感响应头。
 - 原因：数据库、配置和客户端需要可测试的显式依赖边界；SEO、CSRF 和下载头同时涉及 HTML/HTTP 上下文，集中在框架能避免每个应用重复实现转义与注入防护。
 - 边界：`State<T>` 是显式类型映射，不是运行时服务定位器；`PageHead` 不允许任意 HTML；`Download` 只负责响应安全，文件授权仍由应用控制器完成。
+
+## ADR-031：授权默认拒绝，refresh token 一次性轮换
+
+- 状态：已接受
+- 决定：RBAC 使用精确权限和启动时编译的角色继承图，ABAC policy 与 RBAC 采用 deny-overrides；没有 allow 时默认拒绝。refresh token 是只持久化 hash 的 opaque secret，每次使用原子轮换；重复使用撤销整个 family，access token 通过 `jti`/`sid` 检查撤销状态。
+- 原因：精确 capability 和失败关闭语义避免通配符或未知角色意外扩权；一次性 refresh rotation 能把并发重放转化为可检测的 family 泄露事件。
+- 边界：`FileTokenStore` 只适合单进程低吞吐持久化。多实例后端必须原子实现 `rotate_refresh`，store 不可用时 stateful 认证失败关闭；审计事件不得包含 token、资源正文或敏感属性。

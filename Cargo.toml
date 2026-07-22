@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/phoenix",
+    "crates/phoenix-auth",
     "crates/phoenix-core",
     "crates/phoenix-crypto",
     "crates/phoenix-cli",

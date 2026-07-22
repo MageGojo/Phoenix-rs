@@ -6,6 +6,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use http::{HeaderValue, header};
 use jsonwebtoken::{
     Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode,
@@ -23,6 +24,9 @@ const MIN_SECRET_BYTES: usize = 32;
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct JwtClaims<T> {
     pub sub: String,
+    pub jti: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     pub exp: u64,
     pub iat: u64,
     pub nbf: u64,
@@ -157,6 +161,12 @@ impl JwtManager {
         self
     }
 
+    /// Lifetime of newly issued access tokens.
+    #[must_use]
+    pub const fn access_token_ttl(&self) -> Duration {
+        self.config.ttl
+    }
+
     /// Issue a signed JWT using the active key and configured TTL.
     ///
     /// # Errors
@@ -176,6 +186,26 @@ impl JwtManager {
         custom: T,
         now: u64,
     ) -> Result<String, JwtError> {
+        self.issue_at_in_family(subject, custom, now, None)
+            .map(|(token, _)| token)
+    }
+
+    pub(crate) fn issue_at_in_family<T: Serialize>(
+        &self,
+        subject: String,
+        custom: T,
+        now: u64,
+        session_id: Option<String>,
+    ) -> Result<(String, JwtClaims<T>), JwtError> {
+        if subject.trim().is_empty() {
+            return Err(JwtError::InvalidSubject);
+        }
+        if session_id
+            .as_ref()
+            .is_some_and(|session_id| session_id.trim().is_empty())
+        {
+            return Err(JwtError::InvalidSessionId);
+        }
         validate_custom_claims(&custom)?;
         let key = self
             .keys
@@ -183,6 +213,8 @@ impl JwtManager {
             .ok_or(JwtError::UnknownKey)?;
         let claims = JwtClaims {
             sub: subject,
+            jti: random_identifier(),
+            sid: session_id,
             exp: now.saturating_add(self.config.ttl.as_secs()),
             iat: now,
             nbf: now,
@@ -192,12 +224,13 @@ impl JwtManager {
         };
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some(key.id.clone());
-        encode(
+        let token = encode(
             &header,
             &claims,
             &EncodingKey::from_secret(key.secret.as_ref()),
         )
-        .map_err(JwtError::Token)
+        .map_err(JwtError::Token)?;
+        Ok((token, claims))
     }
 
     /// Verify signature, algorithm, key ID, time claims, issuer, and audience.
@@ -215,7 +248,7 @@ impl JwtManager {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.leeway = self.config.leeway.as_secs();
         validation.validate_nbf = true;
-        let mut required = vec!["exp", "nbf", "sub"];
+        let mut required = vec!["exp", "iat", "nbf", "sub", "jti"];
         if let Some(issuer) = &self.config.issuer {
             validation.set_issuer(&[issuer]);
             required.push("iss");
@@ -225,18 +258,32 @@ impl JwtManager {
             required.push("aud");
         }
         validation.set_required_spec_claims(&required);
-        decode::<JwtClaims<T>>(
+        let claims = decode::<JwtClaims<T>>(
             token,
             &DecodingKey::from_secret(key.secret.as_ref()),
             &validation,
         )
         .map(|data| data.claims)
-        .map_err(JwtError::Token)
+        .map_err(JwtError::Token)?;
+        if claims.sub.trim().is_empty() {
+            return Err(JwtError::InvalidSubject);
+        }
+        if claims.jti.trim().is_empty() {
+            return Err(JwtError::InvalidTokenId);
+        }
+        if claims
+            .sid
+            .as_ref()
+            .is_some_and(|session_id| session_id.trim().is_empty())
+        {
+            return Err(JwtError::InvalidSessionId);
+        }
+        Ok(claims)
     }
 }
 
 fn validate_custom_claims(custom: &impl Serialize) -> Result<(), JwtError> {
-    const RESERVED: &[&str] = &["sub", "exp", "iat", "nbf", "iss", "aud"];
+    const RESERVED: &[&str] = &["sub", "jti", "sid", "exp", "iat", "nbf", "iss", "aud"];
     let value = serde_json::to_value(custom).map_err(JwtError::CustomClaims)?;
     let object = value
         .as_object()
@@ -267,6 +314,12 @@ fn validate_config(config: &JwtConfig) -> Result<(), JwtError> {
 
 /// Verified JWT claims extracted by [`JwtAuth`].
 pub struct Jwt<T>(Arc<JwtClaims<T>>);
+
+impl<T> Jwt<T> {
+    pub(crate) fn from_verified(claims: JwtClaims<T>) -> Self {
+        Self(Arc::new(claims))
+    }
+}
 
 impl<T> Clone for Jwt<T> {
     fn clone(&self) -> Self {
@@ -338,13 +391,13 @@ where
             let Ok(claims) = manager.verify::<T>(token) else {
                 return JwtRejection.into_response();
             };
-            request.extensions_mut().insert(Jwt(Arc::new(claims)));
+            request.extensions_mut().insert(Jwt::from_verified(claims));
             next.run(request).await
         })
     }
 }
 
-fn bearer_token(value: &str) -> Option<&str> {
+pub(crate) fn bearer_token(value: &str) -> Option<&str> {
     let (scheme, token) = value.split_once(' ')?;
     (scheme.eq_ignore_ascii_case("bearer")
         && !token.is_empty()
@@ -376,6 +429,12 @@ pub enum JwtError {
     InvalidTtl,
     #[error("JWT issuer and audience policies cannot be empty")]
     InvalidClaimPolicy,
+    #[error("JWT subject cannot be empty")]
+    InvalidSubject,
+    #[error("JWT token ID cannot be empty")]
+    InvalidTokenId,
+    #[error("JWT session ID cannot be empty")]
+    InvalidSessionId,
     #[error("JWT header is missing a key ID")]
     MissingKeyId,
     #[error("JWT key ID is not recognized")]
@@ -399,6 +458,14 @@ fn unix_timestamp() -> Result<u64, JwtError> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|_| JwtError::InvalidClock)
+}
+
+pub(crate) fn current_timestamp() -> Result<u64, JwtError> {
+    unix_timestamp()
+}
+
+fn random_identifier() -> String {
+    URL_SAFE_NO_PAD.encode(rand::random::<[u8; 16]>())
 }
 
 #[cfg(test)]
@@ -494,6 +561,26 @@ mod tests {
                 }
             ),
             Err(JwtError::ReservedClaim)
+        ));
+        assert!(matches!(
+            active_manager.issue(
+                " ",
+                UserClaims {
+                    role: "member".to_owned(),
+                }
+            ),
+            Err(JwtError::InvalidSubject)
+        ));
+        assert!(matches!(
+            active_manager.issue_at_in_family(
+                "user-1".to_owned(),
+                UserClaims {
+                    role: "member".to_owned(),
+                },
+                1,
+                Some(String::new()),
+            ),
+            Err(JwtError::InvalidSessionId)
         ));
     }
 

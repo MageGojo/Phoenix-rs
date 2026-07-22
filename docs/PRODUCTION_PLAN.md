@@ -5,8 +5,8 @@
 | 能力 | 状态 | 验收证据 |
 | --- | --- | --- |
 | TLS/HTTPS 与 ALPN | 已完成首版 | rustls PEM 配置、握手 deadline、`h2`/`http/1.1` ALPN、真实 TLS+HTTP/2 测试、可信 scheme、canonical redirect、HTTPS-only HSTS |
-| RBAC/ABAC | 待实现 | 角色/权限、资源属性 policy、deny precedence、typed extractor/middleware、决策审计事件 |
-| JWT refresh/revocation | 待实现 | rotation、reuse detection、hashed refresh secret、family revoke、持久化 store contract、过期清理 |
+| RBAC/ABAC | 已完成首版 | 精确角色/权限与继承图、资源属性 policy、deny precedence、typed principal/middleware、401/403、决策审计测试 |
+| JWT refresh/revocation | 已完成首版 | 原子 rotation、并发/reuse detection、hashed refresh secret、access/family revoke、内存/文件 store contract、重启持久化与过期清理 |
 | 分布式 Session | 待实现 | 原子 load/save/rotate/delete、TTL、冲突语义、共享后端适配器与双实例测试 |
 | 分布式限流 | 待实现 | 原子窗口操作、key policy、Retry-After、共享后端故障策略与双实例测试 |
 | 指标 exporter | 待实现 | 请求/连接/TLS/renderer/数据库/队列指标、Prometheus 文本端点、低基数规则 |

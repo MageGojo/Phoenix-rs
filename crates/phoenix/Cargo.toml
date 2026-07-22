@@ -7,6 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+phoenix-auth = { path = "../phoenix-auth" }
 phoenix-core = { path = "../phoenix-core" }
 phoenix-crypto = { path = "../phoenix-crypto" }
 phoenix-database = { path = "../phoenix-database" }

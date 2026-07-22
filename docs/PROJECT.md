@@ -31,6 +31,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 应用代码
   -> phoenix（统一导出与 prelude）
       -> phoenix-core（应用、配置、错误、生命周期）
+      -> phoenix-auth（RBAC、ABAC、principal 与授权中间件）
       -> phoenix-crypto（JWT、应用数据加密、密码哈希）
       -> phoenix-http（请求、响应、Cookie、上传）
       -> phoenix-routing（路由、命名 URL、参数绑定）
@@ -69,7 +70,11 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 ### `phoenix-crypto`
 
-提供三种不混淆用途的能力：HS256 JWT 签名和严格验证、AES-256-GCM 应用数据认证加密、Argon2id 密码哈希。JWT 和 AES key ring 都用 `key_id` 支持轮换，密钥使用后清零且 Debug 输出脱敏；Bearer 中间件只把签名、算法、时间、issuer 和 audience 均验证通过的强类型 claims 放入 Request extensions。
+提供三种不混淆用途的能力：HS256 JWT 签名和严格验证、AES-256-GCM 应用数据认证加密、Argon2id 密码哈希。JWT 和 AES key ring 都用 `key_id` 支持轮换，密钥使用后清零且 Debug 输出脱敏；Bearer 中间件只把签名、算法、时间、issuer 和 audience 均验证通过的强类型 claims 放入 Request extensions。`TokenService` 在此基础上提供 refresh rotation、reuse detection、access/family 撤销、过期清理和可替换的持久化 `TokenStore`。
+
+### `phoenix-auth`
+
+负责默认拒绝的 RBAC/ABAC：精确权限、角色继承、主体直接 allow/deny、资源属性 policy 和授权审计。角色图在启动时拒绝重复、缺失继承和循环；任意显式 deny 覆盖所有 allow。HTTP 适配层把经过验证的 JWT 映射为 `CurrentPrincipal`，并明确区分未认证 401 与无权限 403。
 
 ### `phoenix-routing`
 
@@ -131,7 +136,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - 中间件核心先围绕 Phoenix 请求/响应实现。Tower 互操作可作为后续适配器，不作为 P0 架构前提。
 - 流式响应已通过框架 `ResponseBody::Stream` 接入 Hyper；升级、流式请求、SSE 和 WebSocket 仍需要受控逃生口。
 
-当前实现检查点使用 Hyper/hyper-util 在同一明文 TCP 监听器自动识别 HTTP/1.1 与 HTTP/2 preface，并允许应用限制为 `Http1Only` 或 `Http2Only`。HTTP/1.1 chunked 流式响应与 HTTP/2 客户端握手/请求均有真实 TCP 测试。生产 TLS、ALPN、升级连接和流式请求仍待实现，不能把协议支持等同于完整 TLS 部署能力。
+当前实现使用 Hyper/hyper-util 在同一监听器自动服务 HTTP/1.1 与 HTTP/2，并允许应用限制为 `Http1Only` 或 `Http2Only`。rustls 接入层提供 PEM/文件证书、TLS 握手 deadline 和与协议策略一致的 `h2`/`http/1.1` ALPN；真实网络测试覆盖 TLS + HTTP/2。HTTP/1.1 chunked 流式响应已经接入，升级连接、流式请求、SSE 和 WebSocket 仍需要受控逃生口。
 
 ### 结构化日志
 

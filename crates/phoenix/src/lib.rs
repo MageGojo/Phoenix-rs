@@ -1,3 +1,4 @@
+pub use phoenix_auth as auth;
 pub use phoenix_core as core;
 pub use phoenix_core::applications;
 pub use phoenix_crypto as crypto;
@@ -14,14 +15,22 @@ pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
 pub mod prelude {
+    pub use phoenix_auth::{
+        AbacPolicy, AuditReason, AuthorizationAudit, AuthorizationAuditEvent,
+        AuthorizationDecision, AuthorizationEngine, AuthorizationError, AuthorizationRequest,
+        CurrentPrincipal, Permission, PolicyFn, Principal, PrincipalFromJwt, Rbac, RbacError,
+        RequirePermission, Role, policy_fn,
+    };
     pub use phoenix_core::applications;
     pub use phoenix_core::{
         Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
         MultiApplicationError, Server, ServerError, ServerHandle, TlsConfig, TlsConfigError,
     };
     pub use phoenix_crypto::{
-        Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, Jwt,
-        JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, Password, PasswordError,
+        Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor,
+        FileTokenStore, Jwt, JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager,
+        MemoryTokenStore, Password, PasswordError, RefreshRecord, RotateRefresh, StatefulJwtAuth,
+        TokenError, TokenPair, TokenService, TokenStore, TokenStoreError,
     };
     pub use phoenix_database::{Backend, Database, DatabaseBuilder, DatabaseError, TestDatabase};
     pub use phoenix_dx::{

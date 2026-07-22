@@ -224,3 +224,11 @@
 - `PageEnvelope` 新增可选 CSRF token；React `callRust` 与生成命名 action 自动发送 `X-CSRF-Token`，`Session::csrf_token()` 提供受控读取。
 - `Redirect` 验证 Location；`Download` 默认生成 `private, no-store`、`nosniff`、MIME 与双文件名 Content-Disposition，并阻断 CRLF 文件名注入。
 - Rust 26 个相关 crate 测试与 React/SSR/Vite/博客 33 个测试通过；外部真实项目集成由 iOS 证书与应用分发案例持续验证。
+
+## 2026-07-22：RBAC/ABAC 与持久化 Token 生命周期
+
+- 新增 `phoenix-auth`，实现精确权限、角色继承图、主体 direct allow/deny、deny-overrides ABAC、默认拒绝和可替换授权审计。
+- 重复角色、缺失父角色和继承环在启动编译阶段失败；HTTP 适配提供 `CurrentPrincipal`、JWT principal 映射和资源无关权限中间件，稳定区分 401 与 403。
+- JWT 增加随机 `jti` 与 refresh family `sid`；`TokenService` 实现 refresh rotation、并发 reuse detection、单 access token 撤销、family 撤销和过期清理。
+- `MemoryTokenStore` 支持测试/开发；`FileTokenStore` 仅保存 refresh hash 和撤销状态，使用同目录临时文件、同步落盘和原子替换，重启后保持状态，持久化失败不会污染内存状态。
+- 测试覆盖角色图、资源属性策略、审计、JWT→principal→permission 链路、并发 refresh、reuse family revoke、access revoke、文件重开与持久化回滚；workspace 全量测试、严格 Clippy 和 Rustfmt 通过。

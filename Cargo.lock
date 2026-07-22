@@ -1543,6 +1543,7 @@ dependencies = [
 name = "phoenix"
 version = "0.1.0"
 dependencies = [
+ "phoenix-auth",
  "phoenix-core",
  "phoenix-crypto",
  "phoenix-database",
@@ -1554,6 +1555,19 @@ dependencies = [
  "phoenix-security",
  "phoenix-validation",
  "phoenix-view",
+]
+
+[[package]]
+name = "phoenix-auth"
+version = "0.1.0"
+dependencies = [
+ "phoenix-crypto",
+ "phoenix-http",
+ "phoenix-routing",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1608,8 +1622,10 @@ dependencies = [
  "jsonwebtoken",
  "phoenix-http",
  "phoenix-routing",
+ "rand 0.10.2",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror",
  "tokio",
  "zeroize",
