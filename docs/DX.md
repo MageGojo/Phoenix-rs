@@ -1,4 +1,4 @@
-# 开发者体验草案
+# 开发者体验
 
 本文同时记录已实现 API 与后续目标。标注“当前已实现”的代码由 crate 测试或 `examples/blog` 功能测试验证。
 
@@ -141,9 +141,11 @@ let routes = aliases.apply(
 `ModelBinding<T>` 在业务 handler 前异步解析路径参数，并以 `Bound<T>` 写入请求 extensions。`Ok(None)` 固定为 404，resolver 错误固定为不泄露内部细节的 500：
 
 ```rust
-let binding = ModelBinding::new("post", |key| Post::find(key));
+let binding = ModelBinding::new("post", |key| load_post(key));
 let post = Bound::<Post>::from_request(&request).expect("binding middleware ran");
 ```
+
+其中应用提供的 `load_post` 返回 `Result<Option<Post>, E>`。把 binding 作为目标路由中间件挂载后再读取 `Bound<Post>`。
 
 ## 2.1 统一开发命令
 
@@ -174,65 +176,49 @@ impl UserController {
 }
 ```
 
-下面是接入 Toasty 和 React 后的目标写法：
+数据库查询使用 Phoenix 的 Toasty 门面。当前可运行 API 见[数据库与迁移](DATABASE.md)，控制器只把显式 Resource 交给 React：
 
 ```rust
-use phoenix::prelude::*;
+let posts = Post::all()
+    .order_by(Post::fields().id().asc())
+    .paginate(20)
+    .exec(database.toasty_mut())
+    .await?;
 
-pub struct PostController;
+let props = PostIndexProps {
+    posts: posts.into_iter().map(PostResource::from).collect(),
+};
 
-impl PostController {
-    pub async fn index(query: ListPosts, db: Database) -> Result<Response> {
-        let posts = Post::query(&db)
-            .latest()
-            .paginate(query.page, 20)
-            .await?;
-
-        render("posts/index", props! {
-            "posts" => PostResource::collection(posts),
-            "filters" => query,
-        })
-    }
-}
+let page = Page::new("posts/index", props);
 ```
 
-`props!` 仅用于快速原型；每个值仍必须实现 `Serialize`。正式页面优先使用实现 `Contract` 的强类型 props struct，构建流程自动生成 TypeScript 类型：
+正式页面使用强类型 props struct，构建流程自动生成 TypeScript 类型：
 
 ```rust
-#[derive(Serialize, Contract)]
-#[contract(namespace = "pages.posts", name = "PostIndexProps", direction = "output")]
+#[phoenix::contract(page, page = "posts/index")]
+#[derive(Serialize)]
 pub struct PostIndexProps {
-    posts: Paginated<PostResource>,
-    filters: ListPosts,
+    pub posts: Vec<PostResource>,
 }
-
-render_typed("posts/index", PostIndexProps { posts, filters })
 ```
 
 ## 4. React 页面
 
 ```tsx
-import { Head, Link, usePage } from "@phoenix/react";
-import type { PostIndexProps } from "#phoenix/contracts/pages/posts";
+import type { PostIndexProps } from "../generated/contracts.js";
 
 export default function PostIndex({ posts }: PostIndexProps) {
-  const { flash } = usePage();
-
   return (
     <main>
-      <Head title="Posts" />
-      {flash.success && <p role="status">{flash.success}</p>}
-      {posts.data.map((post) => (
-        <Link key={post.id} href={`/posts/${post.id}`}>
-          {post.title}
-        </Link>
+      {posts.map((post) => (
+        <article key={post.id}>{post.title}</article>
       ))}
     </main>
   );
 }
 ```
 
-前端没有重复声明 `PostIndexProps`。P0 客户端包至少提供启动器、`Link`、表单提交、页面上下文、`Head`、加载状态、错误处理和资源/契约版本刷新。前端包不负责 UI 组件库。
+前端不重复声明 `PostIndexProps`。生成文件只读且不提交；Vite 启动或构建时重新生成。前端包负责页面启动、hydration、island 和 Rust action 传输，不提供 UI 组件库。
 
 ## 5. 请求与验证
 
@@ -258,74 +244,38 @@ Validator::new(&payload)
 
 JSON 控制器通过 `request.json()` 同时检查 MIME 与 payload：缺少/错误 Content-Type 返回 415，JSON 语法错误返回 400。`application/*+json` 被接受。
 
-下面的 Request derive、契约生成和授权接口仍是后续目标：
+强类型 extractor、验证和契约可以组合，控制器只接收验证成功的 DTO：
 
 ```rust
-#[derive(FromRequest, Validate, Contract)]
-#[contract(namespace = "posts", name = "StorePostInput", direction = "input")]
-pub struct StorePostRequest {
-    #[validate(length(min = 3, max = 120))]
+#[phoenix::contract(input)]
+#[derive(Deserialize)]
+pub struct StorePostInput {
     pub title: String,
-
-    #[validate(length(min = 1))]
     pub body: String,
 }
 
-impl Authorize for StorePostRequest {
-    async fn authorize(&self, user: &CurrentUser) -> bool {
-        user.can("posts.create")
+impl Validate for StorePostInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({
+            "title": self.title,
+            "body": self.body,
+        });
+        Validator::new(&data)
+            .field("title", rules![required(), string(), max_length(120)])
+            .field("body", rules![required(), string()])
+            .validate()
     }
 }
-```
 
-设计要求：
-
-- 解析、授权与验证的执行顺序固定并有文档。
-- 自定义验证规则可以异步访问数据库，但同步规则不应被迫异步。
-- 旧输入默认排除密码、token、文件和显式敏感字段。
-- 验证消息允许覆盖字段名和本地化文本，规则标识保持稳定。
-
-### 登录字段只定义一次
-
-```rust
-#[derive(FromRequest, Validate, Contract)]
-#[contract(namespace = "auth", name = "LoginInput", direction = "input")]
-pub struct LoginRequest {
-    #[validate(length(min = 3, max = 120))]
-    pub user: String,
-
-    #[sensitive]
-    #[validate(length(min = 8, max = 128))]
-    pub password: Secret<String>,
+pub async fn store(
+    Validated(Json(input)): Validated<Json<StorePostInput>>,
+) -> (StatusCode, Json<PostResource>) {
+    let post = create_post(input).await;
+    (StatusCode::CREATED, Json(PostResource::from(post)))
 }
 ```
 
-React 直接使用生成的类型和运行时契约：
-
-```tsx
-import {
-  LoginInputContract,
-} from "#phoenix/contracts/auth";
-import { useForm } from "@phoenix/react";
-
-export default function Login() {
-  const form = useForm(LoginInputContract);
-
-  return (
-    <form onSubmit={form.submit("auth.login")}>
-      <input {...form.field("user")} autoComplete="username" />
-      <input
-        {...form.field("password")}
-        type="password"
-        autoComplete="current-password"
-      />
-      <button type="submit">Login</button>
-    </form>
-  );
-}
-```
-
-`useForm()` 会从契约推导类型，`form.field("usr")` 会在 TypeScript 检查时报错。`password` 字段名可以正常生成，但敏感标记会阻止用户输入值进入旧输入、日志和输出 Props。完整冲突与类型映射规则见 [CONTRACTS.md](CONTRACTS.md)。
+路由用 `typed(store)` 挂载 handler，并可通过 `.action::<StorePostInput, PostResource>()` 生成 TypeScript 调用函数。授权仍由 Session/认证上下文和路由中间件负责，不要把“通过字段验证”等同于“有权限执行”。密码、token 和文件值不得进入输出 Resource、页面 Props 或日志。完整字段映射见 [CONTRACTS.md](CONTRACTS.md)。
 
 ## 6. React 渲染模式
 
@@ -363,67 +313,59 @@ export default function DocsPage({ article }: DocsPageProps) {
 
 ## 7. 模型与查询
 
-下面表达的是目标体验，不保证与 Toasty 当前 derive/API 完全一致：
+模型保持 Toasty 的编译期字段和关系检查：
 
 ```rust
-#[derive(Model)]
+use phoenix::database::{Deferred, Model};
+
+#[derive(Debug, Model)]
 pub struct Post {
     #[key]
-    pub id: Id<Post>,
-    pub user_id: Id<User>,
+    #[auto]
+    pub id: u64,
+    #[index]
+    pub author_id: u64,
+    #[belongs_to]
+    pub author: Deferred<Author>,
     pub title: String,
-    pub body: String,
-    pub created_at: DateTime,
 }
 
-let post = Post::query(&db)
-    .where_user_id(user.id)
-    .where_title_contains(search)
-    .latest()
-    .first()
+let post = Post::filter_by_id(id)
+    .get(database.toasty_mut())
     .await?;
 ```
 
-框架必须优先保留 Toasty 的编译期字段与关系检查。如果 Laravel 风格名称与 Toasty 的可实现 API 冲突，应选择类型安全，并通过短方法、prelude 和文档恢复易用性。
+SQLite 与 PostgreSQL 使用相同模型/CRUD/关系/游标分页接口。Phoenix 不复制 Toasty 查询构建器，只补充连接配置、后端元数据、迁移和测试隔离。完整 CRUD、分页与事务示例见[数据库与迁移](DATABASE.md)。
 
 ## 8. 迁移
 
 ```rust
-pub struct CreatePosts;
+use phoenix::database::{Migration, MigrationRunner};
 
-impl Migration for CreatePosts {
-    const ID: &'static str = "20260722_000001_create_posts";
+let migrations = [
+    Migration::new("202607220001", "create posts")
+        .up("CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+        .down("DROP TABLE posts"),
+];
 
-    async fn up(schema: &mut Schema) -> Result<()> {
-        schema.create_table("posts", |table| {
-            table.id();
-            table.foreign_id("user_id").references("users", "id");
-            table.string("title", 120);
-            table.text("body");
-            table.timestamps();
-        }).await
-    }
-
-    async fn down(schema: &mut Schema) -> Result<()> {
-        schema.drop_table("posts").await
-    }
-}
+let mut runner = MigrationRunner::new(&mut database, migrations)?;
+let plan = runner.plan().await?;
+let applied = runner.up().await?;
+let rolled_back = runner.down(1).await?;
 ```
 
-API 需要在 Toasty migration spike 后调整。迁移执行可以先由项目内 `migrate` 二进制或测试入口调用；“生成迁移文件”的 CLI 明确延后。
+runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。“生成迁移文件”的 CLI 仍明确延后。
 
 ## 9. 响应与错误
 
 ```rust
-render("posts/show", props)
-json(value)
-redirect_to("posts.show", route_params! { "post" => post.id })
-back().with_errors(errors).with_input(input)
-download(path)
-abort(StatusCode::NOT_FOUND)
+Response::text("Not Found").with_status(StatusCode::NOT_FOUND);
+Json(value).into_response();
+(StatusCode::CREATED, Json(resource)).into_response();
+Page::new("posts/show", props).respond_to(&request, None)?;
 ```
 
-应用错误映射为稳定的 HTTP 语义。开发环境可显示带请求 ID 的诊断页；生产环境只显示安全错误页，完整错误进入结构化日志。
+`Response::with_header` 用于经过验证的动态 Header，并返回 `Result`。handler panic 和模型绑定失败只向客户端返回通用 500；业务错误应映射为稳定状态码，把内部原因和 request ID 写入结构化日志。redirect、下载与 `back().with_errors(...)` 便利门面仍待实现。
 
 ## 10. 测试体验
 

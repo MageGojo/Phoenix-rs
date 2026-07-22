@@ -11,11 +11,15 @@
 - 异步控制器；
 - JSON 请求、字段验证和 JSON 响应；
 - 全局、单路由和路由组中间件；
+- Toasty SQLite/PostgreSQL CRUD、关系、游标分页与事务；
+- 带 checksum、锁和回滚的迁移；
+- Session、CSRF、CORS、限流、可信代理、Host allowlist 和安全响应头；
 - React Islands、SPA 与 SSR 页面；
+- 版本化生产资源、renderer worker 池和流式 SSR；
 - 明文或可选 AES-256-GCM 页面协议；
 - 业务单元测试和功能测试。
 
-Vite 自动页面/Island 发现、TypeScript 命名路由树和持久单 worker renderer 已实现。Rust/TypeScript 自动字段契约、多 worker renderer 池、Toasty 模型和数据库迁移尚未提供完整 API。React 章节只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口。
+Vite 自动页面/Island 发现、TypeScript 命名路由树、多 worker renderer 池和生产资源版本校验均已实现。本文只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口；各领域的完整配置分别链接到专项文档。
 
 ## 1. 推荐的业务目录
 
@@ -60,11 +64,8 @@ pub mod controllers;
 pub mod middleware;
 #[path = "../app/requests/mod.rs"]
 pub mod requests;
-#[path = "../routes/web.rs"]
-mod web_routes;
-
 pub fn routes() -> Routes {
-    web_routes::routes()
+    phoenix::mount_routes!()
 }
 
 pub fn application() -> Result<Application, RouteBuildError> {
@@ -118,8 +119,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 运行示例：
 
 ```bash
-cargo run -p phoenix-blog-example
+cargo build -p phoenix-cli
+cd examples/blog
+../../target/debug/phoenix dev
 ```
+
+`phoenix dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
 
 也可以通过环境变量修改监听地址：
 
@@ -221,6 +226,33 @@ Routes::new().group(
 ```
 
 最终路径是 `/admin/dashboard`，完整路由名是 `admin.dashboard`。
+
+### 自动路由文件与 resource routes
+
+`phoenix::mount_routes!()` 按文件名排序挂载 `routes/*.rs`；每个文件统一导出 `pub fn routes() -> Routes`。扫描只覆盖第一层 `.rs` 文件并忽略 `mod.rs`。
+
+常规 CRUD 使用 resource routes：
+
+```rust
+use phoenix::prelude::*;
+
+pub fn routes() -> Routes {
+    Routes::new().resource(
+        "articles",
+        "/articles",
+        Resource::new()
+            .index(ArticleController::index)
+            .create(ArticleController::create)
+            .store(ArticleController::store)
+            .show(ArticleController::show)
+            .edit(ArticleController::edit)
+            .update(ArticleController::update)
+            .destroy(ArticleController::destroy),
+    )
+}
+```
+
+生成的命名路由是 `articles.index/create/store/show/edit/update/destroy`；update 同时注册 PUT 与 PATCH。用 `.only([...])` 或 `.except([...])` 裁剪动作，用 `.parameter("article")` 覆盖路径参数名。只有配置了 handler 的动作才会生成。
 
 ## 5. 编写控制器
 
@@ -561,6 +593,45 @@ pub async fn dashboard(request: Request) -> Response {
 
 不同上下文应定义不同 Rust 类型。即使两个中间件的数据字段同名，类型不同也不会互相覆盖。
 
+### 中间件别名与模型绑定
+
+重复使用的中间件可以注册别名。`apply` 只作用于最近声明的路由，未知别名会在构建应用前返回错误：
+
+```rust
+let mut aliases = MiddlewareAliases::new();
+aliases.register("auth", RequireLogin);
+
+let routes = aliases.apply(
+    Routes::new().get("/account", AccountController::show),
+    &["auth"],
+)?;
+```
+
+路径模型由应用提供异步 resolver：
+
+```rust
+let binding = ModelBinding::new("article", |key| load_article(key));
+
+let routes = Routes::new()
+    .get("/articles/{article}", ArticleController::show)
+    .middleware(binding);
+```
+
+resolver 返回 `Result<Option<Article>, E>`。`Ok(None)` 映射为 404，`Err(_)` 映射为不暴露内部错误的 500。控制器从 request extensions 读取已经解析的模型：
+
+```rust
+pub async fn show(request: Request) -> Response {
+    let Some(article) = Bound::<Article>::from_request(&request) else {
+        return Response::text("Binding unavailable")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
+    Response::text(article.title.clone())
+}
+```
+
+resource 参数名与 binding 的参数名必须一致。数据库错误应在 resolver 内记录 request ID，返回给客户端的响应保持通用。
+
 ## 9. 返回响应
 
 ### 返回文本
@@ -715,7 +786,9 @@ export const members = routes.members;
 
 ### 服务端 React HTML
 
-`@phoenix/react-ssr` 的 `renderPage` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式调用 React `renderToString`。`respond_with_renderer` 会把可信 renderer 返回的 HTML 与 island 描述合并进页面响应；renderer 超时或退出时返回 503，不会静默切换渲染模式。业务代码不接触 `trusted_server_html`。
+`@phoenix/react-ssr` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式使用 React `renderToPipeableStream`。`respond_with_renderer` 返回完整缓冲响应；`respond_streaming_with_renderer` 会把 HTML chunk 直接交给 Hyper，并在完成帧后附加 hydration 信封。renderer 超时或退出时返回 503，不会静默切换渲染模式。业务代码不接触 `trusted_server_html`。
+
+生产环境必须先执行 client build，再执行 SSR build；Rust 启动时加载两个 manifest、校验 contract hash、预热 worker，并在退出时调用 `renderer.shutdown().await`。完整配置、健康指标和静态资源解析见 [React 渲染模式](RENDERING.md#7-构建产物)。
 
 ### 可选加密页面协议
 
@@ -864,8 +937,37 @@ curl -i http://127.0.0.1:3000/register \
   --data '{"user":"phoenix-user","password":"correct-horse"}'
 ```
 
-## 12. 当前上线前必须补充的能力
+## 13. 数据库与迁移
 
-业务应用目前仍需自行处理 TLS 终止，并且框架尚未提供会话、CSRF、可信代理、限流、CORS、CSP 和 HSTS。涉及登录、浏览器 Cookie、跨域访问或公网部署时，不要假设这些能力已经由 Phoenix 自动完成。
+数据库模型、CRUD、关系、游标分页、事务和迁移使用 `phoenix::database`：
 
-当前版本适合继续开发和验证业务 API，不应直接当作完整的生产安全栈。
+```rust
+use phoenix::database::{Database, Model, models};
+
+let mut database = Database::builder(models!(Article))
+    .max_connections(10)
+    .connect(&std::env::var("DATABASE_URL")?)
+    .await?;
+
+let articles = Article::all()
+    .order_by(Article::fields().id().asc())
+    .paginate(20)
+    .exec(database.toasty_mut())
+    .await?;
+```
+
+迁移 runner 提供 `status()`、`plan()`、`up()` 和 `down(steps)`，自动维护状态表并验证 checksum。测试中每个 case 使用独立 `TestDatabase`，不要共享全局 SQLite 文件。完整示例与 SQLite/PostgreSQL 差异见 [数据库与迁移](DATABASE.md)。
+
+## 14. Web 安全与生产边界
+
+公开 Web 应用应按顺序启用可信代理、request ID、访问日志、Host allowlist、CORS、限流、Session、CSRF 和安全策略。具体配置、Cookie 开发/生产差异与控制器用法见 [安全与数据传输](SECURITY.md#32-在应用中启用安全栈)。
+
+Phoenix 已提供这些基础中间件，但业务应用仍需自行完成：
+
+- TLS/HTTPS 终止和可信 scheme 判断；
+- 身份认证与授权策略；
+- 多实例共享 Session store 和限流后端；
+- CSP nonce、上传存储策略和依赖安全 CI；
+- 正式上线前的独立安全评审。
+
+不要因为启用了默认中间件就跳过权限检查、Resource 字段白名单或部署层安全配置。

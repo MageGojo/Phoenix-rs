@@ -127,7 +127,143 @@ export default defineConfig({ plugins: [phoenix()] });
 
 ## 7. 构建产物
 
-Vite 至少生成：
+### 配置 client 与 renderer 构建
+
+浏览器构建使用默认插件：
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { phoenix } from "@phoenix/vite";
+
+export default defineConfig({
+  plugins: [phoenix()],
+});
+```
+
+renderer 使用独立配置：
+
+```ts
+// vite.ssr.config.ts
+import { defineConfig } from "vite";
+import { phoenix } from "@phoenix/vite";
+
+export default defineConfig({
+  plugins: [phoenix({ renderer: true })],
+});
+```
+
+必须先构建 client，再构建 renderer：
+
+```bash
+npm run build:client
+npm run build:ssr
+```
+
+renderer 构建会读取 client manifest；manifest 缺失、schema 非法或 contract hash 不一致时立即失败。不要并行运行这两个构建，也不要混用不同提交生成的产物。
+
+默认产物：
+
+```text
+public/assets/
+  phoenix-[hash].js
+  chunks/*-[hash].js
+  client.css
+  phoenix-manifest.json
+public/ssr/
+  renderer.js
+  phoenix-renderer.json
+```
+
+`phoenix-manifest.json` 记录 schema、构建版本、contract hash、public path、client 入口、CSS 和 imports；renderer manifest 记录 renderer 版本、相同 contract hash 和入口文件。浏览器入口使用内容 hash，Rust 不应硬编码其文件名。
+
+### 启动生产 renderer
+
+应用启动时先加载两个 manifest，并预热所有 worker：
+
+```rust
+use std::time::Duration;
+
+use phoenix::prelude::{
+    AssetManifest, NodeRenderer, RendererConfig, RendererManifest,
+};
+
+let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
+let renderer_manifest = RendererManifest::load(
+    "public/ssr/phoenix-renderer.json",
+)?;
+
+let renderer = NodeRenderer::new(
+    RendererConfig::production(
+        &assets,
+        &renderer_manifest,
+        "public/ssr",
+    )?
+    .with_workers(4)
+    .with_timeout(Duration::from_secs(2)),
+);
+
+renderer.warm_up().await?;
+```
+
+`RendererConfig::production` 同时固定 client asset version 与 contract hash。Rust 发出的 `PageEnvelope`、Node 启动握手和每次渲染都必须一致；漂移时失败关闭，不允许使用旧 renderer 渲染新页面数据。
+
+worker 数量应按 CPU、页面耗时和内存基线压测后设置。deadline 包含等待 worker 容量和 Node 渲染时间，因此不要把它理解为单纯的脚本执行超时。
+
+### 在页面响应中使用生产资源
+
+```rust
+use phoenix::prelude::{AssetManifest, NodeRenderer, Page, Request, Response};
+
+pub fn show(
+    request: &Request,
+    assets: &AssetManifest,
+    renderer: &NodeRenderer,
+) -> Result<Response, phoenix::view::AssetManifestError> {
+    let page = Page::new("articles/show", article_props())
+        .ssr()
+        .production_assets(assets, "client")?;
+
+    Ok(page.respond_streaming_with_renderer(request, renderer))
+}
+```
+
+`production_assets(..., "client")` 从 manifest 注入实际 JS/CSS URL，并把 asset version 与 contract hash 写进页面信封。SSR/Islands 完整页面可以使用 `respond_streaming_with_renderer`；带 `X-Phoenix-Page: 1` 的局部导航仍返回原子的页面 JSON。
+
+需要完整缓冲响应时使用 `respond_with_renderer(...).await`。renderer 失败会返回 503，不会静默改成 SPA。
+
+### 静态资源解析
+
+静态请求只能解析 manifest 明确声明的文件：
+
+```rust
+let file = assets.resolve_static(
+    "public/assets",
+    "/assets/phoenix-a1b2c3.js",
+)?;
+```
+
+不要把 URL 去掉前缀后直接拼到文件系统。`resolve_static` 会拒绝错误 public path、`..`、绝对路径、反斜杠和未在 manifest 中登记的文件。应用可以读取返回路径提供响应，也可以让反向代理/CDN 提供同一目录。
+
+### 健康检查与优雅关闭
+
+```rust
+let health = renderer.health();
+
+let ready = health.ready_workers == health.configured_workers
+    && !health.shutting_down;
+
+// 应用停止接收新请求并等待现有 HTTP 请求后：
+renderer.shutdown().await;
+```
+
+建议导出以下指标：`ready_workers`、`active_requests`、`rendered_requests`、`failures`、`restarts` 和 `timeouts`。ready worker 未达到配置数量时 readiness 应失败；单次失败增长可用于告警，但是否退出进程由部署策略决定。
+
+`shutdown()` 会停止接收 renderer 工作并回收子进程。它应纳入 Rust 服务的 shutdown future，并在容器强制终止期限之前完成。
+
+### 产物边界
+
+Vite 生成：
 
 - SPA 浏览器入口与页面 chunks。
 - SSR 服务端 bundle。

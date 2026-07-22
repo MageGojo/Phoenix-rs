@@ -1,0 +1,256 @@
+# 数据库与迁移
+
+本文面向应用开发者，说明如何使用 Phoenix 的 Toasty 数据库门面、SQLite/PostgreSQL、关系、游标分页、事务、迁移和测试隔离。模型与查询保持 Toasty 原生类型；Phoenix 负责连接配置、后端识别、迁移可靠性和测试数据库生命周期。
+
+## 1. 定义模型与关系
+
+从 `phoenix::prelude` 或 `phoenix::database` 导入数据库类型。关系字段使用 Toasty 的 `Deferred<T>`：
+
+```rust
+use phoenix::database::{Deferred, Model};
+
+#[derive(Debug, Model)]
+pub struct Author {
+    #[key]
+    #[auto]
+    pub id: u64,
+    pub name: String,
+    #[has_many]
+    pub posts: Deferred<Vec<Post>>,
+}
+
+#[derive(Debug, Model)]
+pub struct Post {
+    #[key]
+    #[auto]
+    pub id: u64,
+    #[index]
+    pub author_id: u64,
+    #[belongs_to]
+    pub author: Deferred<Author>,
+    pub title: String,
+}
+```
+
+`models!(Author)` 会形成供连接和 schema 初始化使用的 `ModelSet`；相关模型会通过关系被包含。数据库模型不要直接作为浏览器响应，公开字段应转换成 Resource。
+
+## 2. 连接 SQLite 或 PostgreSQL
+
+开发和单元测试可以使用内存 SQLite：
+
+```rust
+use phoenix::database::{Database, models};
+
+let mut database = Database::sqlite_memory(models!(Author)).await?;
+database.initialize_schema().await?;
+```
+
+文件 SQLite 与 PostgreSQL 使用同一 builder：
+
+```rust
+let database = Database::builder(models!(Author))
+    .max_connections(10)
+    .table_prefix("app_")
+    .connect(&std::env::var("DATABASE_URL")?)
+    .await?;
+```
+
+支持的 URL scheme 是：
+
+```text
+sqlite:...
+postgres://...
+postgresql://...
+```
+
+其他 scheme 会返回 `DatabaseError::UnsupportedBackend`。生产数据库 URL 必须来自环境或密钥服务，不要写进源码、日志或公开文档。
+
+`initialize_schema()` 适用于空数据库、原型和隔离测试。已有生产数据库的版本演进应使用迁移，避免把 Toasty schema push 当作升级工具。
+
+## 3. CRUD 与关系加载
+
+Phoenix 重导出 Toasty 的 `create!`、`Model`、`query`、`update` 和相关执行接口：
+
+```rust
+use phoenix::database::create;
+
+let mut author = create!(Author {
+    name: "Ada",
+    posts: [
+        { title: "First" },
+        { title: "Second" },
+    ],
+})
+.exec(database.toasty_mut())
+.await?;
+
+let loaded = Author::filter_by_id(author.id)
+    .get(database.toasty_mut())
+    .await?;
+
+let posts = loaded.posts().exec(database.toasty_mut()).await?;
+let owner = posts[0].author().exec(database.toasty_mut()).await?;
+
+author
+    .update()
+    .name("Grace")
+    .exec(database.toasty_mut())
+    .await?;
+
+author.delete().exec(database.toasty_mut()).await?;
+```
+
+`Database` 可以直接解引用为 Toasty `Db`，但业务代码优先显式使用 `toasty()`/`toasty_mut()`，让数据库边界在函数签名和审查中更清楚。
+
+## 4. 游标分页
+
+当前分页使用 Toasty 游标页，不使用容易受并发插入影响的页码 offset：
+
+```rust
+let first = Author::all()
+    .order_by(Author::fields().id().asc())
+    .paginate(20)
+    .exec(database.toasty_mut())
+    .await?;
+
+if first.has_next() {
+    let second = first.next(database.toasty_mut()).await?;
+    if let Some(second) = second {
+        // 将 second 转成页面 Resource。
+    }
+}
+```
+
+分页前必须使用稳定且确定的排序字段。对外 API 应把 Toasty 的游标包装进应用自己的响应契约，不要暴露数据库内部结构。
+
+## 5. 事务
+
+事务必须显式 commit；错误路径应 rollback：
+
+```rust
+let mut transaction = database.toasty_mut().transaction().await?;
+
+let result = Author::create()
+    .name("Ada")
+    .exec(&mut transaction)
+    .await;
+
+match result {
+    Ok(_) => transaction.commit().await?,
+    Err(error) => {
+        transaction.rollback().await?;
+        return Err(error.into());
+    }
+}
+```
+
+不要把外部 HTTP 调用或长时间 CPU 工作放在数据库事务中。事务闭包应只覆盖必须保持原子的数据库操作。
+
+## 6. 定义迁移
+
+迁移 ID 必须非空、唯一并严格递增。每条 SQL 使用目标数据库支持的语法：
+
+```rust
+use phoenix::database::Migration;
+
+fn migrations() -> Vec<Migration> {
+    vec![
+        Migration::new("202607220001", "create posts")
+            .up(
+                "CREATE TABLE posts (\
+                 id INTEGER PRIMARY KEY, \
+                 title TEXT NOT NULL)",
+            )
+            .down("DROP TABLE posts"),
+        Migration::new("202607220002", "create post title index")
+            .up("CREATE INDEX posts_title_idx ON posts (title)")
+            .down("DROP INDEX posts_title_idx"),
+    ]
+}
+```
+
+确实无法安全回滚的迁移要显式 `.irreversible()`。这会让 `down()` 失败关闭，而不是假装回滚成功。
+
+迁移 checksum 覆盖 ID、名称和全部 up/down SQL。已经应用的迁移不可原地修改；需要修正时增加一个新迁移。否则 `plan()`/`up()` 会返回 `ChecksumMismatch`。
+
+## 7. 执行、查看与回滚迁移
+
+```rust
+use phoenix::database::MigrationRunner;
+
+let mut runner = MigrationRunner::new(&mut database, migrations())?;
+
+let plan = runner.plan().await?;
+for id in &plan.pending {
+    println!("pending: {id}");
+}
+
+let applied = runner.up().await?;
+println!("applied {applied} migration(s)");
+
+for status in runner.status().await? {
+    println!("{} batch={} checksum={}", status.id, status.batch, status.checksum);
+}
+
+let rolled_back = runner.down(1).await?;
+println!("rolled back {rolled_back} migration(s)");
+```
+
+第一次调用 `status()`、`plan()`、`up()` 或 `down()` 会在空数据库中创建 `phoenix_migrations` 状态表。
+
+并发与原子性规则：
+
+- SQLite 使用 `BEGIN IMMEDIATE` 锁住并原子执行整批迁移；同批任一 SQL 失败会回滚该批全部 DDL 和状态记录。
+- PostgreSQL 使用 session advisory lock 防止多个实例同时迁移；每个迁移在独立事务中提交。
+- `up()` 只执行 pending 项，重复执行返回 `0`。
+- `down(n)` 从最近 batch/ID 开始回滚最多 `n` 个迁移。
+
+应用部署应在新版本接流量前执行迁移，并确保同一数据库只有迁移 runner 负责 schema 变更。
+
+## 8. 测试隔离
+
+每个测试创建自己的 `TestDatabase`：
+
+```rust
+use phoenix::database::{TestDatabase, models};
+
+#[tokio::test]
+async fn creates_an_author() {
+    let mut database = TestDatabase::new(models!(Author)).await?;
+
+    Author::create()
+        .name("Test Author")
+        .exec(database.toasty_mut())
+        .await?;
+
+    assert_eq!(
+        Author::all()
+            .count()
+            .exec(database.toasty_mut())
+            .await?,
+        1,
+    );
+
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+```
+
+`TestDatabase` 使用独占的内存 SQLite，创建时初始化 schema，drop 后全部数据消失。不要在并行测试之间共享全局数据库或依赖测试执行顺序。
+
+PostgreSQL 契约测试需要隔离测试库：
+
+```bash
+PHOENIX_TEST_POSTGRES_URL='postgresql://…/phoenix_test' \
+  cargo test -p phoenix-database postgresql_crud_relations_and_pagination_when_configured
+```
+
+该环境变量未设置时 PostgreSQL 测试会跳过；CI 要验证 PostgreSQL 时必须显式提供一次性测试数据库。
+
+## 9. 常用验证命令
+
+```bash
+cargo test -p phoenix-database
+cargo clippy -p phoenix-database --all-targets -- -D warnings
+```
+
+实现依据和可运行案例位于 `crates/phoenix-database/tests/`。

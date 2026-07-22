@@ -150,3 +150,10 @@
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` 和 `cargo fmt --all -- --check` 通过。
 - React、React SSR、Vite 与博客共 30 个前端测试通过，示例 TypeScript 类型检查通过。
 - 真实 client 构建生成 hash 资源与 `phoenix-manifest.json`；后续 SSR 构建校验相同 contract hash 并生成 renderer manifest。
+
+## 2026-07-22：开发者使用文档归类
+
+- 新增 `docs/DATABASE.md`，集中说明 Toasty 模型、SQLite/PostgreSQL、CRUD、关系、游标分页、事务、迁移与测试隔离。
+- `docs/SECURITY.md` 增加完整中间件装配顺序、Session/CSRF、Cookie、CSP/HSTS 和日志使用示例。
+- `docs/RENDERING.md` 增加 client/SSR 构建顺序、manifest、renderer 预热、流式页面、静态资源、健康指标与关闭流程。
+- `docs/DX.md` 和 `docs/BUSINESS_GUIDE.md` 记录自动路由、resource routes、中间件别名、模型绑定与 `phoenix dev` 的当前公开用法。

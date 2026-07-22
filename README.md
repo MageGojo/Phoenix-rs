@@ -77,7 +77,9 @@ React 页面协议、三种渲染模式、自动页面/island 发现、生产 ma
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
-- [开发者体验草案](docs/DX.md)
+- [业务开发指南](docs/BUSINESS_GUIDE.md)
+- [开发者体验与路由约定](docs/DX.md)
+- [数据库与迁移](docs/DATABASE.md)
 - [Rust/TypeScript 数据契约](docs/CONTRACTS.md)
 - [React 渲染模式](docs/RENDERING.md)
 - [安全与数据传输](docs/SECURITY.md)
@@ -115,8 +117,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 npm run build:react
-npm run build:ssr
 npm run build:client -w phoenix-blog-react-example
+npm run build:ssr -w phoenix-blog-react-example
 npm run typecheck:example
 npm run test:react
 ```
@@ -127,9 +129,12 @@ npm run test:react
 crates/phoenix-http/    请求、响应、Handler 与中间件
 crates/phoenix-routing/ 路由、分组和命名 URL
 crates/phoenix-core/    Hyper 服务与应用生命周期
+crates/phoenix-database/ Toasty、迁移与测试隔离
 crates/phoenix-dx/      resource routes、中间件别名与模型绑定
 crates/phoenix-cli/     Rust + Vite 开发进程监督器
+crates/phoenix-security/ Session、CSRF 与 Web 安全中间件
 crates/phoenix-validation/ 验证规则与错误
+crates/phoenix-view/    页面协议、生产资源与 renderer 池
 crates/phoenix/         应用使用的统一入口
 packages/phoenix-react/ React 客户端适配层
 packages/phoenix-vite/  Vite 页面、契约与渲染构建插件

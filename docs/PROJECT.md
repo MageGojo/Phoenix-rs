@@ -84,6 +84,8 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 封装 Toasty 初始化、连接配置、模型约定、事务、分页、迁移执行与测试隔离。Phoenix 不尝试重新实现 ORM；仅补齐统一配置、错误、Web 集成和 Laravel 风格常用路径。
 
+应用接入、CRUD、关系、事务、迁移与测试示例见[数据库与迁移](DATABASE.md)。
+
 ### `phoenix-security`
 
 负责服务端会话、CSRF、安全 Cookie、CORS、限流、可信代理、Host allowlist、CSP/HSTS、request ID、访问日志脱敏和可选安全信封。所有密码学能力使用成熟库，并由测试向量验证。
