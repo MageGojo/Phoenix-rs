@@ -246,3 +246,10 @@
 - 默认 key 使用可信客户端 IP，`RateLimitKey` 支持应用提供有界租户/API key；响应继续提供准确 `Retry-After`。
 - backend 故障默认失败关闭为 503，可显式选择失败开放；rejection/store error 写入无客户端标识的指标。
 - 双 limiter/双 Router 测试证明共享 backend 跨实例累计，同步覆盖失败关闭和显式失败开放；目标 crate 测试与严格 Clippy 通过。
+
+## 2026-07-22：分布式 Session backend contract
+
+- 新增版本化 `SessionBackend`，原子定义 load/create/CAS save/CAS rotate/CAS delete、ID collision、missing、conflict 与绝对 TTL 语义。
+- `load` 可在不提升版本的前提下延长滑动 TTL，避免并行只读请求相互制造写冲突；业务修改必须携带读取版本。
+- `MemorySessionBackend` 作为共享参考实现；双 handle 测试固定 stale write 冲突、旧 ID 原子失效、删除和过期清理。
+- 下一检查点把 Cookie `SessionMiddleware` 的本地记录实现切换到该 contract，并固定冲突 HTTP 语义和指标。

@@ -1,5 +1,11 @@
 //! Security middleware with production-safe defaults for Phoenix applications.
 
+mod session_backend;
+
+pub use session_backend::{
+    MemorySessionBackend, SessionBackend, SessionBackendError, SessionSnapshot, SessionWrite,
+};
+
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},

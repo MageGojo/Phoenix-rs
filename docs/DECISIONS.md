@@ -233,3 +233,10 @@
 - 决定：`RateLimitBackend::hit` 必须在单个原子操作中完成窗口初始化/过期、递增和 allow/retry 决策；middleware 默认使用可信客户端 IP key，backend 故障返回 503，只有显式配置才失败开放。
 - 原因：应用层“读取计数再写回”在多实例并发下会丢失递增；静默失败开放会在存储故障时移除安全边界。
 - 边界：内置 memory backend 只验证共享语义，不跨进程。生产 Redis/数据库适配器必须使用脚本、事务或等价原子原语，并限制 key 长度/基数和 TTL。
+
+## ADR-034：分布式 Session 使用版本化 CAS 与原子 ID 旋转
+
+- 状态：已接受
+- 决定：共享 Session backend 对 create/save/rotate/delete 返回明确 collision/conflict/missing 结果；业务写入携带读取版本，登录/权限变化把旧 ID 到新 ID 的迁移作为单个原子操作。只读 load 可延长 TTL 而不提升版本。
+- 原因：最后写入者覆盖会在并行请求中静默丢失 Session/CSRF/权限状态；分步删除旧 ID、创建新 ID 会产生 fixation 或双 ID 窗口。
+- 边界：memory backend 是 contract reference，不跨进程。HTTP middleware 遇到冲突或 backend 故障必须失败关闭且不得发送未持久化的新 Cookie；业务外部副作用仍需应用自行保证幂等或事务一致性。
