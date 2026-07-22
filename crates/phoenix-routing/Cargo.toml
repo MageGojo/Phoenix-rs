@@ -8,6 +8,7 @@ version.workspace = true
 
 [dependencies]
 bytes.workspace = true
+futures-util.workspace = true
 http.workspace = true
 matchit.workspace = true
 percent-encoding.workspace = true

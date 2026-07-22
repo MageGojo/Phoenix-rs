@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use phoenix::prelude::{Rule, RuleContext, Validator, min_length, required, string};
+use phoenix::prelude::{Rule, RuleContext, Validator, min_length, required, rules, string};
 use serde_json::Value;
 
 pub struct NotReservedUser;
@@ -27,10 +27,6 @@ impl Rule for NotReservedUser {
 #[must_use]
 pub fn registration_validator(data: &Value) -> Validator<'_> {
     Validator::new(data)
-        .rule("user", required())
-        .rule("user", string())
-        .rule("user", NotReservedUser)
-        .rule("password", required())
-        .rule("password", string())
-        .rule("password", min_length(8))
+        .field("user", rules![required(), string(), NotReservedUser])
+        .field("password", rules![required(), string(), min_length(8)])
 }

@@ -1,4 +1,4 @@
-use phoenix::prelude::{Validator, custom_rule, required};
+use phoenix::prelude::{Validator, custom_rule, required, rules};
 use serde_json::json;
 
 #[test]
@@ -20,8 +20,7 @@ fn closure_based_custom_rules_receive_the_field_and_full_payload() {
     });
 
     let errors = Validator::new(&payload)
-        .rule("password", required())
-        .rule("password", confirmed)
+        .field("password", rules![required(), confirmed])
         .validate()
         .expect_err("mismatched values should fail");
 

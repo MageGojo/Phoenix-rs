@@ -3,6 +3,7 @@ use std::{convert::Infallible, future::Future, pin::Pin, sync::Arc};
 pub use bytes::Bytes;
 pub use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use serde::{Serialize, de::DeserializeOwned};
+use thiserror::Error;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
@@ -72,9 +73,25 @@ impl Request {
     ///
     /// # Errors
     ///
-    /// Returns an error when the body is not valid JSON for `T`.
-    pub fn json<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
-        serde_json::from_slice(&self.body)
+    /// Returns an error when `Content-Type` is not JSON or the body is not
+    /// valid JSON for `T`.
+    pub fn json<T: DeserializeOwned>(&self) -> Result<T, JsonRejection> {
+        let content_type = self
+            .headers
+            .get(header::CONTENT_TYPE)
+            .ok_or(JsonRejection::MissingContentType)?
+            .to_str()
+            .map_err(|_| JsonRejection::UnsupportedContentType)?
+            .parse::<mime::Mime>()
+            .map_err(|_| JsonRejection::UnsupportedContentType)?;
+
+        let is_json = content_type.type_() == mime::APPLICATION
+            && (content_type.subtype() == mime::JSON || content_type.suffix() == Some(mime::JSON));
+        if !is_json {
+            return Err(JsonRejection::UnsupportedContentType);
+        }
+
+        serde_json::from_slice(&self.body).map_err(JsonRejection::InvalidJson)
     }
 
     #[must_use]
@@ -98,9 +115,32 @@ impl Request {
         &mut self.extensions
     }
 
+    #[doc(hidden)]
     pub fn set_route(&mut self, name: Option<String>, params: Vec<(String, String)>) {
         self.route_name = name;
         self.params = params;
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum JsonRejection {
+    #[error("The Content-Type header must be application/json.")]
+    MissingContentType,
+    #[error("The Content-Type header must be application/json.")]
+    UnsupportedContentType,
+    #[error("The request body contains invalid JSON.")]
+    InvalidJson(#[source] serde_json::Error),
+}
+
+impl JsonRejection {
+    #[must_use]
+    pub const fn status(&self) -> StatusCode {
+        match self {
+            Self::MissingContentType | Self::UnsupportedContentType => {
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            }
+            Self::InvalidJson(_) => StatusCode::BAD_REQUEST,
+        }
     }
 }
 
@@ -131,12 +171,7 @@ impl Response {
         response
     }
 
-    /// Create an `application/json` response.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `value` cannot be serialized as JSON.
-    pub fn json<T: Serialize>(value: &T) -> Result<Self, serde_json::Error> {
+    fn json<T: Serialize>(value: &T) -> Result<Self, serde_json::Error> {
         let mut response = Self::new(StatusCode::OK, serde_json::to_vec(value)?);
         response.headers.insert(
             http::header::CONTENT_TYPE,
@@ -187,6 +222,7 @@ impl Response {
         Ok(self)
     }
 
+    #[doc(hidden)]
     pub fn into_parts(self) -> (StatusCode, HeaderMap, Bytes) {
         (self.status, self.headers, self.body)
     }
@@ -279,6 +315,13 @@ impl IntoResponse for Infallible {
     }
 }
 
+impl IntoResponse for JsonRejection {
+    fn into_response(self) -> Response {
+        let status = self.status();
+        Response::text(self.to_string()).with_status(status)
+    }
+}
+
 pub trait Handler: Send + Sync + 'static {
     fn call(&self, request: Request) -> BoxFuture<Response>;
 }
@@ -302,7 +345,7 @@ pub struct Next {
 
 impl Next {
     #[must_use]
-    pub fn new(handler: Arc<dyn Handler>) -> Self {
+    fn new(handler: Arc<dyn Handler>) -> Self {
         Self { handler }
     }
 
@@ -334,6 +377,37 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SecurityHeaders;
+
+impl Middleware for SecurityHeaders {
+    fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+        Box::pin(async move {
+            let mut response = next.run(request).await;
+            insert_default_header(
+                response.headers_mut(),
+                HeaderName::from_static("x-content-type-options"),
+                HeaderValue::from_static("nosniff"),
+            );
+            insert_default_header(
+                response.headers_mut(),
+                HeaderName::from_static("x-frame-options"),
+                HeaderValue::from_static("DENY"),
+            );
+            insert_default_header(
+                response.headers_mut(),
+                header::REFERRER_POLICY,
+                HeaderValue::from_static("strict-origin-when-cross-origin"),
+            );
+            response
+        })
+    }
+}
+
+fn insert_default_header(headers: &mut HeaderMap, name: HeaderName, value: HeaderValue) {
+    headers.entry(name).or_insert(value);
+}
+
 struct MiddlewareHandler {
     middleware: Arc<dyn Middleware>,
     next: Arc<dyn Handler>,
@@ -347,6 +421,7 @@ impl Handler for MiddlewareHandler {
 }
 
 #[must_use]
+#[doc(hidden)]
 pub fn apply_middleware(
     handler: Arc<dyn Handler>,
     middleware: &[Arc<dyn Middleware>],

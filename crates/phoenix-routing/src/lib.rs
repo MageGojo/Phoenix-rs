@@ -1,6 +1,7 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, panic::AssertUnwindSafe, sync::Arc};
 
 use bytes::Bytes;
+use futures_util::FutureExt;
 use http::{HeaderValue, Method, StatusCode};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use phoenix_http::{Handler, IntoResponse, Middleware, Request, Response, apply_middleware};
@@ -11,6 +12,11 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
+
+type MatchedRoute = (usize, Vec<(String, String)>);
+
+#[derive(Clone, Copy, Debug)]
+struct InvalidPathParameter;
 
 struct RouteDefinition {
     method: Method,
@@ -197,9 +203,11 @@ impl Routes {
         let dispatch: Arc<dyn Handler> = Arc::new(DispatchHandler {
             inner: Arc::clone(&inner),
         });
+        let dispatch: Arc<dyn Handler> = Arc::new(PanicBoundary { next: dispatch });
+        let handler = apply_middleware(dispatch, &self.global_middleware);
 
         Ok(Router {
-            handler: apply_middleware(dispatch, &self.global_middleware),
+            handler: Arc::new(PanicBoundary { next: handler }),
             named_routes,
         })
     }
@@ -317,6 +325,25 @@ struct DispatchHandler {
     inner: Arc<RouterInner>,
 }
 
+struct PanicBoundary {
+    next: Arc<dyn Handler>,
+}
+
+impl Handler for PanicBoundary {
+    fn call(&self, request: Request) -> phoenix_http::BoxFuture<Response> {
+        let next = Arc::clone(&self.next);
+        Box::pin(async move {
+            let result = AssertUnwindSafe(async move { next.call(request).await })
+                .catch_unwind()
+                .await;
+            result.unwrap_or_else(|_| {
+                Response::text("Internal Server Error")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            })
+        })
+    }
+}
+
 impl Handler for DispatchHandler {
     fn call(&self, request: Request) -> phoenix_http::BoxFuture<Response> {
         let inner = Arc::clone(&self.inner);
@@ -333,18 +360,25 @@ impl RouterInner {
             request.method()
         };
 
-        if let Some((index, params)) = self.find_match(lookup_method, request.uri().path()) {
-            let route = &self.routes[index];
-            request.set_route(route.name.clone(), params);
-            let response = route.handler.call(request).await;
-            return if is_head {
-                let (status, headers, _) = response.into_parts();
-                let mut response = Response::new(status, Bytes::new());
-                *response.headers_mut() = headers;
-                response
-            } else {
-                response
-            };
+        match self.find_match(lookup_method, request.uri().path()) {
+            Ok(Some((index, params))) => {
+                let route = &self.routes[index];
+                request.set_route(route.name.clone(), params);
+                let response = route.handler.call(request).await;
+                return if is_head {
+                    let (status, headers, _) = response.into_parts();
+                    let mut response = Response::new(status, Bytes::new());
+                    *response.headers_mut() = headers;
+                    response
+                } else {
+                    response
+                };
+            }
+            Err(InvalidPathParameter) => {
+                return (StatusCode::BAD_REQUEST, "Invalid path parameter encoding")
+                    .into_response();
+            }
+            Ok(None) => {}
         }
 
         let allowed = self.allowed_methods(request.uri().path());
@@ -364,19 +398,23 @@ impl RouterInner {
             .is_some_and(|router| router.at(path).is_ok())
     }
 
-    fn find_match(&self, method: &Method, path: &str) -> Option<(usize, Vec<(String, String)>)> {
-        let matched = self.method_routers.get(method)?.at(path).ok()?;
+    fn find_match(
+        &self,
+        method: &Method,
+        path: &str,
+    ) -> Result<Option<MatchedRoute>, InvalidPathParameter> {
+        let Some(router) = self.method_routers.get(method) else {
+            return Ok(None);
+        };
+        let Ok(matched) = router.at(path) else {
+            return Ok(None);
+        };
         let params = matched
             .params
             .iter()
-            .map(|(key, value)| {
-                (
-                    key.to_owned(),
-                    percent_decode_str(value).decode_utf8_lossy().into_owned(),
-                )
-            })
-            .collect();
-        Some((*matched.value, params))
+            .map(|(key, value)| decode_path_parameter(value).map(|value| (key.to_owned(), value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some((*matched.value, params)))
     }
 
     fn allowed_methods(&self, path: &str) -> Vec<Method> {
@@ -392,6 +430,29 @@ impl RouterInner {
         methods.sort_by(|left, right| left.as_str().cmp(right.as_str()));
         methods
     }
+}
+
+fn decode_path_parameter(value: &str) -> Result<String, InvalidPathParameter> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let Some(encoded) = bytes.get(index + 1..index + 3) else {
+                return Err(InvalidPathParameter);
+            };
+            if !encoded.iter().all(u8::is_ascii_hexdigit) {
+                return Err(InvalidPathParameter);
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+
+    percent_decode_str(value)
+        .decode_utf8()
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|_| InvalidPathParameter)
 }
 
 fn response_with_allow(status: StatusCode, methods: &[Method]) -> Response {

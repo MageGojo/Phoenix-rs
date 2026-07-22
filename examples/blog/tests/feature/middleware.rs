@@ -1,6 +1,8 @@
 use phoenix::{
     http::HeaderValue,
-    prelude::{Method, Next, Request, Routes, StatusCode, Uri, middleware_fn},
+    prelude::{
+        Method, Next, Request, Response, Routes, SecurityHeaders, StatusCode, Uri, middleware_fn,
+    },
 };
 
 #[tokio::test]
@@ -18,6 +20,7 @@ async fn global_and_group_middleware_wrap_controller_responses() {
         response.headers().get("x-powered-by"),
         Some(&HeaderValue::from_static("Phoenix"))
     );
+    assert_security_headers(&response);
 
     let mut request = Request::new(Method::GET, Uri::from_static("/admin/dashboard"));
     request
@@ -31,6 +34,7 @@ async fn global_and_group_middleware_wrap_controller_responses() {
         response.headers().get("x-powered-by"),
         Some(&HeaderValue::from_static("Phoenix"))
     );
+    assert_security_headers(&response);
 }
 
 #[tokio::test]
@@ -60,4 +64,42 @@ async fn middleware_can_be_attached_to_one_route() {
         .handle(Request::new(Method::GET, Uri::from_static("/plain")))
         .await;
     assert!(plain.headers().get("x-route-middleware").is_none());
+}
+
+fn assert_security_headers(response: &Response) {
+    assert_eq!(
+        response.headers().get("x-content-type-options"),
+        Some(&HeaderValue::from_static("nosniff"))
+    );
+    assert_eq!(
+        response.headers().get("x-frame-options"),
+        Some(&HeaderValue::from_static("DENY"))
+    );
+    assert_eq!(
+        response.headers().get("referrer-policy"),
+        Some(&HeaderValue::from_static("strict-origin-when-cross-origin"))
+    );
+}
+
+#[tokio::test]
+async fn security_headers_do_not_override_explicit_application_policy() {
+    let router = Routes::new()
+        .with_middleware(SecurityHeaders)
+        .get("/embedded", |_request| {
+            std::future::ready(
+                Response::text("embedded")
+                    .with_header("x-frame-options", "SAMEORIGIN")
+                    .expect("static header should be valid"),
+            )
+        })
+        .build()
+        .expect("routes should build");
+
+    let response = router
+        .handle(Request::new(Method::GET, Uri::from_static("/embedded")))
+        .await;
+    assert_eq!(
+        response.headers().get("x-frame-options"),
+        Some(&HeaderValue::from_static("SAMEORIGIN"))
+    );
 }

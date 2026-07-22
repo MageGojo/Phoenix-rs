@@ -1,11 +1,11 @@
-use std::{convert::Infallible, future::Future, net::SocketAddr, sync::Arc};
+use std::{convert::Infallible, future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::{
     Request as HyperRequest, Response as HyperResponse, body::Incoming, service::service_fn,
 };
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use phoenix_http::{Request, Response};
 use phoenix_routing::{RouteBuildError, Router, Routes};
 use thiserror::Error;
@@ -16,11 +16,17 @@ use tokio::{
 };
 
 const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
+const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct Application {
     router: Router,
     max_body_size: usize,
+    header_read_timeout: Duration,
+    body_read_timeout: Duration,
+    graceful_shutdown_timeout: Duration,
 }
 
 impl Application {
@@ -33,12 +39,33 @@ impl Application {
         Ok(Self {
             router: routes.build()?,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
+            graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
         })
     }
 
     #[must_use]
     pub fn max_body_size(mut self, bytes: usize) -> Self {
         self.max_body_size = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn header_read_timeout(mut self, timeout: Duration) -> Self {
+        self.header_read_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn body_read_timeout(mut self, timeout: Duration) -> Self {
+        self.body_read_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub fn graceful_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.graceful_shutdown_timeout = timeout;
         self
     }
 
@@ -148,7 +175,15 @@ impl Server {
             }
         }
 
-        while connections.join_next().await.is_some() {}
+        let graceful_shutdown_timeout = self.application.graceful_shutdown_timeout;
+        let drained = tokio::time::timeout(graceful_shutdown_timeout, async {
+            while connections.join_next().await.is_some() {}
+        })
+        .await;
+        if drained.is_err() {
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+        }
         Ok(())
     }
 }
@@ -184,12 +219,16 @@ async fn serve_connection(
     application: Arc<Application>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let header_read_timeout = application.header_read_timeout;
     let service = service_fn(move |request| {
         let application = Arc::clone(&application);
         async move { handle_hyper_request(application, request).await }
     });
     let io = TokioIo::new(stream);
-    let builder = hyper::server::conn::http1::Builder::new();
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_read_timeout);
     let connection = builder.serve_connection(io, service);
     tokio::pin!(connection);
 
@@ -209,17 +248,23 @@ async fn handle_hyper_request(
     request: HyperRequest<Incoming>,
 ) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
     let (parts, body) = request.into_parts();
-    let body = Limited::new(body, application.max_body_size)
-        .collect()
-        .await;
+    let body = tokio::time::timeout(
+        application.body_read_timeout,
+        Limited::new(body, application.max_body_size).collect(),
+    )
+    .await;
 
     let response = match body {
-        Ok(body) => {
+        Ok(Ok(body)) => {
             let request =
                 Request::from_parts(parts.method, parts.uri, parts.headers, body.to_bytes());
             application.handle(request).await
         }
-        Err(_) => Response::new(http::StatusCode::PAYLOAD_TOO_LARGE, "Payload Too Large"),
+        Ok(Err(error)) if error.is::<LengthLimitError>() => {
+            Response::text("Payload Too Large").with_status(http::StatusCode::PAYLOAD_TOO_LARGE)
+        }
+        Ok(Err(_)) => Response::text("Bad Request").with_status(http::StatusCode::BAD_REQUEST),
+        Err(_) => Response::text("Request Timeout").with_status(http::StatusCode::REQUEST_TIMEOUT),
     };
 
     Ok(into_hyper_response(response))

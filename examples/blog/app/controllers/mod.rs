@@ -4,7 +4,7 @@
 use phoenix::prelude::{IntoResponse, Json, Request, Response, StatusCode};
 use serde_json::json;
 
-use crate::requests::registration_validator;
+use crate::{middleware::AuthorizedAdmin, requests::registration_validator};
 
 pub struct HealthController;
 
@@ -35,12 +35,15 @@ pub struct RegistrationController;
 
 impl RegistrationController {
     pub async fn store(request: Request) -> Response {
-        let Ok(payload) = request.json() else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "message": "Invalid JSON body." })),
-            )
-                .into_response();
+        let payload = match request.json() {
+            Ok(payload) => payload,
+            Err(rejection) => {
+                return (
+                    rejection.status(),
+                    Json(json!({ "message": rejection.to_string() })),
+                )
+                    .into_response();
+            }
         };
 
         match registration_validator(&payload).validate() {
@@ -57,7 +60,11 @@ impl RegistrationController {
 pub struct AdminController;
 
 impl AdminController {
-    pub async fn dashboard(_request: Request) -> &'static str {
-        "admin dashboard"
+    pub async fn dashboard(request: Request) -> &'static str {
+        if request.extensions().get::<AuthorizedAdmin>().is_some() {
+            "admin dashboard"
+        } else {
+            "missing authorization context"
+        }
     }
 }

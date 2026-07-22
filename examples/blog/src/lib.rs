@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 #[path = "../app/controllers/mod.rs"]
 pub mod controllers;
 #[path = "../app/middleware/mod.rs"]
@@ -20,5 +22,11 @@ pub fn routes() -> Routes {
 ///
 /// Returns a route build error when the example route table is invalid.
 pub fn application() -> Result<Application, RouteBuildError> {
-    Application::new(routes())
+    Application::new(routes()).map(|application| {
+        application
+            .max_body_size(64 * 1024)
+            .header_read_timeout(Duration::from_secs(5))
+            .body_read_timeout(Duration::from_secs(10))
+            .graceful_shutdown_timeout(Duration::from_secs(5))
+    })
 }

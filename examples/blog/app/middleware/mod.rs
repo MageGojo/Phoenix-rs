@@ -20,14 +20,18 @@ impl Middleware for PoweredByPhoenix {
 
 pub struct RequireExampleToken;
 
+#[derive(Clone, Copy, Debug)]
+pub struct AuthorizedAdmin;
+
 impl Middleware for RequireExampleToken {
-    fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+    fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
         Box::pin(async move {
             let authorized = request
                 .headers()
                 .get("x-example-token")
                 .is_some_and(|value| value == "secret");
             if authorized {
+                request.extensions_mut().insert(AuthorizedAdmin);
                 next.run(request).await
             } else {
                 Response::text("Unauthorized").with_status(StatusCode::UNAUTHORIZED)

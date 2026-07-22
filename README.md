@@ -44,10 +44,12 @@ export default function Show({ user }: UserShowProps) {
 - GET、POST、PUT、PATCH、DELETE、HEAD/OPTIONS、路径参数和 404/405。
 - Laravel 风格 `.name()`、名称前缀、路径前缀、命名 URL 生成和重复名称检查。
 - 全局、单路由和路由组中间件。
-- `required`、`string`、`min_length` 和 trait/闭包两种自定义验证规则。
+- `field("user", rules![...])`、内置规则和 trait/闭包两种自定义验证规则。
+- JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
+- 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-Toasty、React 契约、SPA/SSR/Islands 和迁移尚未实现。
+Toasty、React 契约、SPA/SSR/Islands、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)

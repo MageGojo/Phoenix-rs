@@ -68,6 +68,33 @@ pub fn routes() -> Routes {
 - 重复路由名或冲突模式在 `Routes::build()` 阶段失败，不静默覆盖。
 - 模型绑定、正则参数约束和类型安全命名参数仍待实现。
 
+### 中间件与请求上下文
+
+可复用中间件使用 `Middleware` trait；一次性中间件使用 `middleware_fn`。认证等中间件可以把强类型、请求局部状态写入 extensions，控制器无需再次解析 Header：
+
+```rust
+pub struct AuthorizedAdmin;
+
+impl Middleware for RequireExampleToken {
+    fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
+        Box::pin(async move {
+            let authorized = request
+                .headers()
+                .get("x-example-token")
+                .is_some_and(|value| value == "secret");
+            if authorized {
+                request.extensions_mut().insert(AuthorizedAdmin);
+                next.run(request).await
+            } else {
+                Response::text("Unauthorized").with_status(StatusCode::UNAUTHORIZED)
+            }
+        })
+    }
+}
+```
+
+`examples/blog` 同时使用全局安全头、全局响应中间件、管理路由组中间件和单路由闭包中间件。
+
 ## 3. 控制器与 React 页面
 
 当前控制器使用 `async fn(Request)`，静态关联函数可以直接注册为处理器：
@@ -161,12 +188,15 @@ let confirmed = custom_rule("confirmed", |context| {
 });
 
 Validator::new(&payload)
-    .rule("user", required())
-    .rule("user", string())
-    .rule("password", min_length(8))
-    .rule("password", confirmed)
+    .field("user", rules![required(), string(), NotReservedUser])
+    .field(
+        "password",
+        rules![required(), string(), min_length(8), confirmed],
+    )
     .validate()?;
 ```
+
+JSON 控制器通过 `request.json()` 同时检查 MIME 与 payload：缺少/错误 Content-Type 返回 415，JSON 语法错误返回 400。`application/*+json` 被接受。
 
 下面的 Request derive、契约生成和授权接口仍是后续目标：
 
@@ -348,7 +378,7 @@ abort(StatusCode::NOT_FOUND)
 cargo test -p phoenix-blog-example
 ```
 
-测试覆盖真实 TCP 启动和关闭、控制器、HTTP 方法、路径参数、404/405、全局/组中间件、命名 URL、重复路由名以及 trait/闭包自定义规则。
+测试覆盖真实 TCP 启动和关闭、body 上限、慢请求头超时、控制器、JSON MIME、HTTP 方法、严格路径参数、panic 隔离、404/405、全局/组中间件、安全头、命名 URL、重复路由名以及 trait/闭包自定义规则。
 
 下面的 `TestApp` 断言 DSL 是后续目标：
 

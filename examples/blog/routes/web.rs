@@ -1,4 +1,4 @@
-use phoenix::prelude::{RouteGroup, Routes};
+use phoenix::prelude::{RouteGroup, Routes, SecurityHeaders};
 
 use crate::{
     controllers::{AdminController, HealthController, RegistrationController, UserController},
@@ -8,6 +8,7 @@ use crate::{
 #[must_use]
 pub fn routes() -> Routes {
     Routes::new()
+        .with_middleware(SecurityHeaders)
         .with_middleware(PoweredByPhoenix)
         .get("/health", HealthController::show)
         .name("health")

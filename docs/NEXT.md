@@ -36,7 +36,7 @@ Request body/query/path
 
 ## 建议执行顺序
 
-1. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并区分 400、413、415 和 422。
+1. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并复用现有 400、413、415 和 422 语义。
 2. 让验证器支持异步自定义规则、嵌套数组路径、bail 和自定义消息。
 3. 建立 `phoenix-testing` 测试客户端，替代案例中的手工 Request/TCP 辅助代码。
 4. 为路由增加参数约束、模型绑定接口、fallback 和资源路由。
@@ -52,7 +52,7 @@ Request body/query/path
 - 错误响应能稳定区分格式错误、内容类型错误、超限和字段验证失败。
 - 自定义异步规则可以访问应用状态，但不会迫使纯同步规则产生额外任务。
 - 请求测试不需要绑定真实端口；启动测试仍保留真实 TCP 覆盖。
-- 已有 11 个案例测试继续通过，新增 extractor 与错误路径测试。
+- 已有 18 个案例测试继续通过，新增 extractor 与错误路径测试。
 - `cargo test`、严格 Clippy 和格式检查全部通过。
 
 ## 待验证决策

@@ -22,6 +22,17 @@ pub trait Rule: Send + Sync + 'static {
     fn validate(&self, context: RuleContext<'_>) -> Result<(), String>;
 }
 
+pub type BoxedRule = Box<dyn Rule>;
+
+#[macro_export]
+macro_rules! rules {
+    ($($rule:expr),* $(,)?) => {{
+        let rules: ::std::vec::Vec<$crate::BoxedRule> =
+            ::std::vec![$(::std::boxed::Box::new($rule)),*];
+        rules
+    }};
+}
+
 pub struct CustomRule<F> {
     name: Cow<'static, str>,
     validate: F,
@@ -66,14 +77,11 @@ impl<'a> Validator<'a> {
     }
 
     #[must_use]
-    pub fn rule<R>(mut self, field: impl Into<String>, rule: R) -> Self
+    pub fn field<I>(mut self, field: impl Into<String>, rules: I) -> Self
     where
-        R: Rule,
+        I: IntoIterator<Item = BoxedRule>,
     {
-        self.rules
-            .entry(field.into())
-            .or_default()
-            .push(Box::new(rule));
+        self.rules.entry(field.into()).or_default().extend(rules);
         self
     }
 
@@ -125,11 +133,6 @@ pub struct ValidationErrors {
 }
 
 impl ValidationErrors {
-    #[must_use]
-    pub fn has(&self, field: &str) -> bool {
-        self.fields.contains_key(field)
-    }
-
     #[must_use]
     pub fn get(&self, field: &str) -> Option<&[ValidationError]> {
         self.fields.get(field).map(Vec::as_slice)

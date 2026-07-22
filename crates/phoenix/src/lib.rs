@@ -6,12 +6,12 @@ pub use phoenix_validation as validation;
 pub mod prelude {
     pub use phoenix_core::{Application, Server, ServerError, ServerHandle};
     pub use phoenix_http::{
-        BoxFuture, Handler, IntoResponse, Json, Method, Middleware, Next, Request, Response,
-        StatusCode, Uri, middleware_fn,
+        BoxFuture, Handler, IntoResponse, Json, JsonRejection, Method, Middleware, Next, Request,
+        Response, SecurityHeaders, StatusCode, Uri, middleware_fn,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_validation::{
-        Rule, RuleContext, ValidationError, ValidationErrors, Validator, custom_rule, min_length,
-        required, string,
+        BoxedRule, Rule, RuleContext, ValidationError, ValidationErrors, Validator, custom_rule,
+        min_length, required, rules, string,
     };
 }

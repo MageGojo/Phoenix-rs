@@ -38,3 +38,16 @@
 - 11 个案例测试通过，其中 1 个通过真实 TCP socket 验证服务启动。
 - `cargo clippy --workspace --all-targets -- -D warnings` 通过。
 - 实际启动案例并验证 `/health`、`/users/{user}`、`/admin/dashboard` 和 `/register` 响应。
+
+## 2026-07-22：基础层安全与易用性强化
+
+- 验证声明收敛为 `field("user", rules![...])`，trait 与闭包自定义规则继续可组合。
+- JSON 请求强制检查标准或 vendor `+json` MIME，并区分 415 与 400。
+- 增加业务 panic 双层隔离，通用 500 不暴露 panic 内容，安全头仍可应用到业务 panic 响应。
+- 路径参数改为严格百分号和 UTF-8 解码，拒绝有损转换。
+- 增加请求头/body 读取超时、优雅关闭硬超时和案例级 64 KiB body 上限。
+- 官方案例默认启用 `SecurityHeaders`，同时保留全局、组和单路由中间件用法。
+- 管理中间件通过 Request extensions 向控制器传递强类型认证上下文，避免业务层重复读取 Header。
+- 删除验证器冗余 `.rule()` 写法，只保留组合式 `.field(..., rules![...])` 公共路径。
+- 案例测试增加到 18 个，覆盖超限/慢速 body、慢请求头、MIME、非法路径、panic 与安全头。
+- `cargo test --workspace` 与严格 Clippy 通过。
