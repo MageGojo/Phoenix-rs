@@ -147,7 +147,39 @@ let post = Bound::<Post>::from_request(&request).expect("binding middleware ran"
 
 其中应用提供的 `load_post` 返回 `Result<Option<Post>, E>`。把 binding 作为目标路由中间件挂载后再读取 `Bound<Post>`。
 
-## 2.1 统一开发命令
+## 2.1 项目与业务代码生成
+
+安装 CLI 后创建新项目：
+
+```bash
+cargo install --path crates/phoenix-cli
+phoenix new my-app
+cd my-app
+phoenix dev
+```
+
+`phoenix new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。默认执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
+
+业务生成命令：
+
+```bash
+phoenix make:controller ReportController --route
+phoenix make:controller Admin/PostController --resource
+phoenix make:model Post --migration
+phoenix make:model Post --all
+phoenix make:migration add_status_to_posts
+phoenix make:request StorePostRequest
+phoenix make:resource PostResource
+phoenix make:middleware RequireLoginMiddleware
+phoenix make:page posts/index
+phoenix make:island LikeButton
+```
+
+`make:model Post --all` 生成并连接一条可编译的业务切片：Toasty 模型、迁移、验证 Request、公开 Resource、控制器、七条命名 resource 路由、类型化 `store` action、Rust Page Props 和 React index 页面。生成后会自动刷新 Rust→TypeScript contracts/routes；浏览器可以直接调用生成的 `posts.store({ name })`。
+
+生成器自动维护 `mod.rs`、模型 `ModelSet`、迁移 `all()` 和 `routes/*.rs`。嵌套名称支持 `/` 或 `::`，例如 `Admin/Post`。托管内容位于明确的 `<phoenix:...>` 标记内，标记外业务代码不改动；同名目标默认拒绝覆盖，确需重建时显式使用 `--force`。迁移中的 SQL 是安全可编译的基础骨架，提交前仍应按真实 schema 调整。
+
+## 2.2 统一开发命令
 
 安装/构建 `phoenix-cli` 后，在应用目录运行：
 
@@ -354,7 +386,7 @@ let applied = runner.up().await?;
 let rolled_back = runner.down(1).await?;
 ```
 
-runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。“生成迁移文件”的 CLI 仍明确延后。
+runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。迁移骨架可以通过 `phoenix make:migration` 或 `phoenix make:model --migration` 生成并自动注册。
 
 ## 9. 响应与错误
 

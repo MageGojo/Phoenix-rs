@@ -52,6 +52,17 @@ use phoenix::prelude::{
 };
 ```
 
+新业务优先从 CLI 生成，避免手动创建目录、`mod.rs`、模型/迁移注册表和前端契约入口：
+
+```bash
+phoenix new my-app
+cd my-app
+phoenix make:model Post --all
+phoenix dev
+```
+
+`--all` 会生成模型、迁移、验证 Request、Resource、控制器、命名路由、Page Props 和 React 页面，并刷新 TypeScript action/类型。单项命令和覆盖规则见[项目与业务代码生成](DX.md#21-项目与业务代码生成)。生成的是可运行业务骨架，字段、数据库查询和迁移 SQL 仍应按实际业务修改。
+
 ## 2. 创建应用
 
 在 `src/lib.rs` 中集中创建应用，并设置请求限制和超时：

@@ -153,6 +153,14 @@
 - 新增 `phoenix dev` 进程监督器，同时运行 Rust 与 strict-port Vite；Ctrl-C 或任一子进程退出时终止并回收两个 Unix 进程组。
 - DX/CLI 单元测试、博客自动路由功能测试和真实双进程启动/退出验证通过；退出后 Rust 与 Vite 监听端口均已释放。
 
+## 2026-07-22：Laravel 风格项目与业务生成 CLI
+
+- `phoenix new` 生成独立 Cargo/npm/Vite/TypeScript 项目、标准业务目录、SPA 首页、Page Props 契约和本地 Git；默认安装依赖并刷新生成类型。
+- 新增 controller、model、migration、request、resource、middleware、page、island 生成命令，支持嵌套命名、冲突拒绝和显式 `--force`。
+- 生成器只维护 `<phoenix:...>` 区块，自动注册 Rust modules、多个 Toasty 模型、迁移集合、命名路由和 TypeScript contracts/routes。
+- `make:model Post --all` 生成模型、迁移、验证 Request、Resource、控制器、七条 resource 路由、类型化 store action、Page Props 与 React 页面。
+- 独立临时项目通过 Cargo check、TypeScript、client/SSR 生产构建；实际 HTTP 验证 index 页面、201 JSON action、422 验证错误和运行时命名路由表。
+
 ## 2026-07-22：五个功能域全量验收
 
 - `cargo test --workspace --locked` 通过，覆盖数据库、迁移、安全、流式 HTTP、renderer 池、DX/CLI 与博客案例。

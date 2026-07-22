@@ -8,6 +8,13 @@ use std::{
 use thiserror::Error;
 use tokio::process::{Child, Command};
 
+mod scaffold;
+
+pub use scaffold::{
+    ControllerOptions, DependencySource, GenerateOptions, ModelOptions, NewProjectOptions,
+    ProjectGenerator, ScaffoldError, create_project,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandSpec {
     pub program: PathBuf,

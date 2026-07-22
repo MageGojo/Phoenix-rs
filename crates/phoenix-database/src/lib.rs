@@ -6,15 +6,15 @@
 use std::ops::{Deref, DerefMut};
 
 use thiserror::Error;
-use toasty::{Db, ModelSet};
+use toasty::Db;
 
 mod migration;
 
 pub use migration::{Migration, MigrationError, MigrationPlan, MigrationRunner, MigrationStatus};
 
 pub use toasty::{
-    Deferred, Embed, Executor, Model, Statement, Transaction, TransactionBuilder, batch, create,
-    models, query, sql, stmt, update,
+    Deferred, Embed, Executor, Model, ModelSet, Statement, Transaction, TransactionBuilder, batch,
+    create, models, query, sql, stmt, update,
 };
 
 /// SQL backend selected for this database handle.

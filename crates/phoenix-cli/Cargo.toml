@@ -1,6 +1,6 @@
 [package]
 name = "phoenix-cli"
-description = "Development process supervisor for Phoenix Rust and Vite applications"
+description = "Project scaffolding, business code generation, and development supervision for Phoenix"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ name = "phoenix"
 path = "src/main.rs"
 
 [dependencies]
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 

@@ -78,6 +78,7 @@ const member = await members.store({ name });
 - HS256 JWT 签发/校验与 Bearer 中间件、AES-256-GCM 应用数据加密和 Argon2id 密码哈希。
 - 单进程多应用：官网、用户前台、管理后台可按 Host/路径独立挂载，拥有路由命名空间与强类型 State。
 - `routes!` 与 `applications!` 声明宏减少路由和多应用组装样板，同时完整保留 builder API。
+- Laravel 风格 `phoenix new` 与控制器、模型、迁移、Request、Resource、中间件、页面和 Island 生成器。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
 React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供服务端 Session、JWT Bearer 认证、自动 action CSRF、精确 CORS、可信代理、Host allowlist、限流、安全头、request ID、日志脱敏以及安全重定向/下载响应。TLS 终止、完整 RBAC/ABAC 与 refresh/revocation 流程、分布式 Session、CSP nonce 和独立安全评审仍是生产发布前置条件。
@@ -97,12 +98,23 @@ React 页面协议、三种渲染模式、自动页面/island 发现、Rust/Type
 
 ## 快速运行
 
+安装本地 CLI 后，可以直接创建一套已经连接 Rust、React、Vite、Toasty 和类型契约的新应用：
+
 ```bash
-cargo build -p phoenix-cli
-cd examples/blog
-../../target/debug/phoenix dev
+cargo install --path crates/phoenix-cli
+phoenix new my-app
+cd my-app
+phoenix dev
 ```
 
+`phoenix new` 默认安装 npm 依赖并初始化本地 Git 仓库；从当前源码构建的 CLI 会自动使用本地 Phoenix crates/packages。生成业务切片可以运行 `phoenix make:model Post --all`，完整命令见[开发者体验与 CLI](docs/DX.md#21-项目与业务代码生成)。
+
+运行仓库内参考应用：
+
+```bash
+cd examples/blog
+phoenix dev
+```
 服务默认监听 `http://127.0.0.1:3000`：
 
 ```bash
@@ -141,7 +153,7 @@ crates/phoenix-core/    Hyper 服务与应用生命周期
 crates/phoenix-crypto/  JWT、AES-GCM 与 Argon2id 密码学门面
 crates/phoenix-database/ Toasty、迁移与测试隔离
 crates/phoenix-dx/      resource routes、中间件别名与模型绑定
-crates/phoenix-cli/     Rust + Vite 开发进程监督器
+crates/phoenix-cli/     项目/业务代码生成与 Rust + Vite 开发进程监督
 crates/phoenix-security/ Session、CSRF 与 Web 安全中间件
 crates/phoenix-validation/ 验证规则与错误
 crates/phoenix-view/    页面协议、生产资源与 renderer 池
@@ -155,4 +167,4 @@ docs/                   产品、架构与项目记录
 
 ## 第一版边界
 
-第一版聚焦常规服务端网站应用：控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React 页面响应、中间件、会话、CSRF、错误处理和测试工具。React 默认采用 Islands，并允许页面显式切换 SPA 或 SSR；CLI 代码生成、管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。
+第一版聚焦常规服务端网站应用：CLI 项目/业务代码生成、控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React 页面响应、中间件、会话、CSRF、错误处理和测试工具。React 默认采用 Islands，并允许页面显式切换 SPA 或 SSR；管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。
