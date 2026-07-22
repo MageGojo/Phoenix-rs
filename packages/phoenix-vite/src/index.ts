@@ -85,7 +85,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
             output: {
               entryFileNames: "phoenix-[hash].js",
               chunkFileNames: "chunks/[name]-[hash].js",
-              assetFileNames: "[name][extname]",
+              assetFileNames: "[name]-[hash][extname]",
             },
           },
         },
@@ -194,7 +194,14 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
         .filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
         .map((item) => item.fileName)
         .sort();
-      const imports = [...new Set(entry.imports)].sort();
+      // Vite keeps lazy page and island modules in dynamic chunks that are not
+      // necessarily listed in the entry chunk's static `imports`. The Rust
+      // asset server treats this manifest as its complete allowlist, so own
+      // every emitted JavaScript chunk from this build, not only eager imports.
+      const imports = Object.values(bundle)
+        .filter((item) => item.type === "chunk" && item.fileName !== entry.fileName)
+        .map((item) => item.fileName)
+        .sort();
       this.emitFile({
         type: "asset",
         fileName: options.manifest ?? "phoenix-manifest.json",

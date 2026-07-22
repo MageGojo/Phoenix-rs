@@ -16,6 +16,15 @@ afterEach(() => {
 });
 
 describe("Phoenix Vite plugin", () => {
+  it("hashes every production asset so immutable caching is safe", () => {
+    const plugin = phoenix();
+    const config = invokeHook(plugin.config) as {
+      build: { rollupOptions: { output: { assetFileNames: string } } };
+    };
+
+    expect(config.build.rollupOptions.output.assetFileNames).toBe("[name]-[hash][extname]");
+  });
+
   it("generates lazy browser loaders from page and island conventions", () => {
     const root = fixture();
     const plugin = configuredPlugin(root);
@@ -84,6 +93,13 @@ describe("Phoenix Vite plugin", () => {
         isEntry: false,
         type: "chunk",
       },
+      "chunks/island-d4.js": {
+        code: "island",
+        fileName: "chunks/island-d4.js",
+        imports: [],
+        isEntry: false,
+        type: "chunk",
+      },
       "client-b2.css": {
         fileName: "client-b2.css",
         source: "body{}",
@@ -105,7 +121,7 @@ describe("Phoenix Vite plugin", () => {
     expect(parsed.entries.client).toEqual({
       file: "phoenix-a1.js",
       css: ["client-b2.css"],
-      imports: ["chunks/page-c3.js"],
+      imports: ["chunks/island-d4.js", "chunks/page-c3.js"],
     });
   });
 
