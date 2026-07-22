@@ -143,7 +143,7 @@
 - `Page::production_assets` 从 manifest 注入真实脚本、样式、asset version 和 contract hash；renderer worker 握手同时校验 client asset version 与 contract hash。
 - `NodeRenderer` 支持可配置 worker 池、预热、健康快照、超时淘汰、故障替换和显式优雅关闭；两 worker 并发测试固定容量行为。
 - React `renderToPipeableStream` 通过分帧协议连接 `ResponseBody::Stream` 与 Hyper，真实 TCP 测试验证无 Content-Length 的 chunked 响应，hydration 信封在完成帧后安全写入。
-- Rust 15 个 view 测试、真实 Hyper 流测试、严格 Clippy、Vite 7 个测试、SSR 包测试和真实 client/SSR 生产构建通过。
+- Rust 15 个 view 测试、真实 Hyper 流测试、严格 Clippy、Vite 9 个测试、SSR 包测试和真实 client/SSR 生产构建通过。
 
 ## 2026-07-22：Laravel 风格开发体验
 
