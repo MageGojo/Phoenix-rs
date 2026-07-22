@@ -136,7 +136,7 @@ impl Page {
                 islands: Vec::new(),
             },
             server_html: None,
-            script_src: "/assets/phoenix.js".to_owned(),
+            script_src: default_script_src(),
         }
     }
 
@@ -223,6 +223,34 @@ impl Page {
         self
     }
 
+    /// Apply HTML and island descriptors returned by the trusted SSR renderer.
+    #[must_use]
+    pub fn rendered(mut self, result: RenderResult) -> Self {
+        self.server_html = Some(result.html);
+        self.envelope.islands = result.islands;
+        self
+    }
+
+    /// Render an SSR or Islands page and select the document or page-protocol response.
+    pub async fn respond_with_renderer(
+        self,
+        request: &Request,
+        renderer: &NodeRenderer,
+    ) -> Response {
+        let context = RenderContext::new(request.uri().to_string());
+        match renderer.render(self.envelope(), &context).await {
+            Ok(result) => self
+                .rendered(result)
+                .respond_to(request, None)
+                .into_response(),
+            Err(error) => {
+                eprintln!("SSR renderer failed: {error}");
+                Response::text("SSR renderer unavailable")
+                    .with_status(StatusCode::SERVICE_UNAVAILABLE)
+            }
+        }
+    }
+
     /// Override the browser entrypoint, for example when using a Vite dev server.
     #[must_use]
     pub fn script_src(mut self, source: impl Into<String>) -> Self {
@@ -283,6 +311,18 @@ impl Page {
             .get(PAGE_REQUEST_HEADER)
             .is_some_and(|value| value == "1")
     }
+}
+
+fn default_script_src() -> String {
+    if cfg!(debug_assertions) {
+        let vite_url =
+            std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+        return format!(
+            "{}/@id/__x00__virtual:phoenix/client",
+            vite_url.trim_end_matches('/')
+        );
+    }
+    "/assets/phoenix.js".to_owned()
 }
 
 impl IntoResponse for Page {

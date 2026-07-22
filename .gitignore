@@ -2,6 +2,7 @@
 **/node_modules/
 **/dist/
 examples/blog/public/ssr/
+examples/blog/public/assets/
 **/.vite/
 **/views/generated/*
 !**/views/generated/.gitkeep

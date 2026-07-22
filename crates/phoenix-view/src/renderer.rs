@@ -17,7 +17,7 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::PageEnvelope;
+use crate::{Island, PageEnvelope};
 
 const RENDERER_PROTOCOL: u8 = 1;
 
@@ -153,10 +153,11 @@ impl RenderContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderResult {
     pub html: String,
     pub head: Vec<String>,
+    pub islands: Vec<Island>,
 }
 
 struct RendererProcess {
@@ -260,6 +261,8 @@ struct RendererResponse {
     html: String,
     #[serde(default)]
     head: Vec<String>,
+    #[serde(default)]
+    islands: Vec<Island>,
     error: Option<String>,
 }
 
@@ -281,6 +284,7 @@ impl RendererResponse {
         Ok(RenderResult {
             html: self.html,
             head: self.head,
+            islands: self.islands,
         })
     }
 }

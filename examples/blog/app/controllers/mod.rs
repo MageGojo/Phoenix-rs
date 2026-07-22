@@ -4,8 +4,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use phoenix::prelude::{
-    IntoResponse, Json, NodeRenderer, Page, RenderContext, RenderMode, Request, Response,
-    StatusCode,
+    IntoResponse, Json, NodeRenderer, Page, RenderMode, Request, Response, StatusCode,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -125,8 +124,10 @@ impl MemberController {
 }
 
 impl ReactController {
-    pub async fn islands(request: Request) -> Response {
-        article_page().respond_to(&request, None).into_response()
+    pub async fn islands(request: Request, renderer: NodeRenderer) -> Response {
+        article_page()
+            .respond_with_renderer(&request, &renderer)
+            .await
     }
 
     pub async fn spa(request: Request) -> Response {
@@ -137,15 +138,14 @@ impl ReactController {
     }
 
     pub async fn ssr(request: Request, renderer: NodeRenderer) -> Response {
-        render_server_page(article_page().mode(RenderMode::Ssr), &request, &renderer).await
+        article_page()
+            .mode(RenderMode::Ssr)
+            .respond_with_renderer(&request, &renderer)
+            .await
     }
 
     pub async fn members(request: Request, renderer: NodeRenderer) -> Response {
         let members = fake_members();
-        let island_props = json!({
-            "initialMembers": &members,
-            "initialTotal": 100
-        });
         let page = Page::new(
             "members/index",
             json!({
@@ -154,44 +154,9 @@ impl ReactController {
                 "total": 100
             }),
         )
-        .islands()
-        .island("member-directory", island_props)
-        .script_src(members_islands_entry());
-        render_server_page(page, &request, &renderer).await
+        .islands();
+        page.respond_with_renderer(&request, &renderer).await
     }
-}
-
-async fn render_server_page(page: Page, request: &Request, renderer: &NodeRenderer) -> Response {
-    if Page::is_page_request(request.headers()) {
-        return page.respond_to(request, None).into_response();
-    }
-
-    let context = RenderContext::new(request.uri().to_string()).locale("zh-CN");
-    match renderer.render(page.envelope(), &context).await {
-        Ok(result) => page
-            .trusted_server_html(result.html)
-            .respond_to(request, None)
-            .into_response(),
-        Err(error) => {
-            eprintln!("SSR renderer failed: {error}");
-            Response::text("SSR renderer unavailable").with_status(StatusCode::SERVICE_UNAVAILABLE)
-        }
-    }
-}
-
-fn frontend_entry() -> String {
-    let vite_url =
-        std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
-    format!("{}/views/entry.tsx", vite_url.trim_end_matches('/'))
-}
-
-fn members_islands_entry() -> String {
-    let vite_url =
-        std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
-    format!(
-        "{}/views/members-islands-entry.tsx",
-        vite_url.trim_end_matches('/')
-    )
 }
 
 fn fake_members() -> Vec<serde_json::Value> {
@@ -240,10 +205,5 @@ fn article_page() -> Page {
             "title": "React meets Phoenix",
             "summary": "One controller contract, three rendering modes."
         }),
-    )
-    .script_src(frontend_entry())
-    .island("like-button", json!({ "initialLikes": 7 }))
-    .trusted_server_html(
-        "<main><article><h1>React meets Phoenix</h1><p>One controller contract, three rendering modes.</p></article><div data-phoenix-island=\"like-button\" data-component=\"like-button\"><button>7 likes</button></div></main>",
     )
 }

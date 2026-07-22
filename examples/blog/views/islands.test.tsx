@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { startPhoenix, type PageEnvelope } from "@phoenix/react";
 import { renderPage } from "@phoenix/react-ssr";
 
-import MemberDirectory, { type Member } from "./islands/member-directory.js";
+import MemberCreator from "./islands/member-creator.js";
 import MembersIndex from "./pages/members/index.js";
+import type { Member } from "./types/member.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,12 +24,12 @@ const members: Member[] = [{
   lastActiveMinutes: 2,
 }];
 
-describe("member directory island", () => {
+describe("member creator island", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("hydrates only its root and adds a member through Rust", async () => {
+  it("hydrates the discovered form boundary and leaves the directory server-rendered", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: 101,
       name: "岛屿测试成员",
@@ -58,26 +59,35 @@ describe("member directory island", () => {
       asset_version: null,
       request_id: null,
       routes: { "members.store": "/api/members" },
-      islands: [{
-        id: "member-directory",
-        component: "member-directory",
-        props: { initialMembers: members, initialTotal: 1 },
-      }],
+      islands: [],
     };
-    const serverHtml = renderPage(envelope, { "members/index": MembersIndex }).html;
+    const rendered = renderPage(envelope, { "members/index": MembersIndex });
+    const hydratedEnvelope = { ...envelope, islands: rendered.islands };
     document.body.innerHTML = [
-      `<div id="phoenix-root">${serverHtml}</div>`,
-      `<script id="phoenix-page" type="application/json">${JSON.stringify(envelope)}</script>`,
+      `<div id="phoenix-root">${rendered.html}</div>`,
+      `<script id="phoenix-page" type="application/json">${JSON.stringify(hydratedEnvelope)}</script>`,
     ].join("");
 
+    const loadMemberCreator = vi.fn(async () => ({ default: MemberCreator }));
+    const loadUnused = vi.fn(async () => ({ default: MemberCreator }));
     await act(async () => {
-      startPhoenix({
-        islands: [MemberDirectory],
+      await startPhoenix({
+        islands: {
+          "member-creator": { load: loadMemberCreator },
+          "unused-island": { load: loadUnused },
+        },
       });
     });
 
+    expect(rendered.islands).toEqual([{
+      id: "member-creator",
+      component: "member-creator",
+      props: { initialTotal: 1 },
+    }]);
+    expect(loadMemberCreator).toHaveBeenCalledOnce();
+    expect(loadUnused).not.toHaveBeenCalled();
     expect(document.querySelectorAll("[data-phoenix-island]")).toHaveLength(1);
-    expect(document.body.textContent).toContain("member001@example.test");
+    expect(document.querySelector("#member-table")?.textContent).toContain("member001@example.test");
 
     const input = document.querySelector<HTMLInputElement>("#new-member-name");
     const form = document.querySelector<HTMLFormElement>(".member-composer");

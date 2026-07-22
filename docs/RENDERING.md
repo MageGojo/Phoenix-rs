@@ -68,31 +68,38 @@ Renderer 接口保持可替换，后续可以评估嵌入式 JavaScript runtime 
 
 ## 5. Islands
 
-页面仍是 `.tsx`，普通组件只输出服务端 HTML；只有通过 Phoenix API 标记的组件会生成浏览器入口和 hydration 描述：
+页面仍是普通 `.tsx`。普通组件只输出服务端 HTML；需要浏览器交互的组件加 `client:load`：
 
 ```tsx
-import { island } from "@phoenix/react/islands";
-import { SearchBox } from "../components/search-box";
-
-const SearchIsland = island(SearchBox);
+import SearchBox from "../../islands/search-box";
 
 export default function DocsPage({ article }: DocsPageProps) {
   return (
     <main>
       <article>{article.body}</article>
-      <SearchIsland source="docs" />
+      <SearchBox client:load source="docs" />
     </main>
   );
 }
 ```
 
-Vite 插件为每个 island 生成稳定 ID 和独立入口。服务端 renderer 返回页面 HTML 与 island 描述；浏览器只下载并激活页面实际使用的 islands。
+`@phoenix/vite` 在编译期把指令转换为 island 边界，并按 `views/pages/`、`views/islands/` 生成虚拟注册表和入口。服务端 renderer 渲染页面时自动收集组件名、稳定 ID 与 props；Rust 将结果写入 `PageEnvelope.islands`。浏览器入口读取信封后，只动态 import 实际出现的 island。
+
+应用不需要维护 `entry.tsx`、island 注册表或 `renderer.tsx`。Vite 配置只启用插件：
+
+```ts
+export default defineConfig({ plugins: [phoenix()] });
+```
+
+服务端构建配置使用 `phoenix({ renderer: true })`。SSR 模式下 `client:load` 组件和普通组件一样参与整页 `hydrateRoot`，不会产生嵌套 island root；Islands 模式才生成独立 root。
 
 要求：
 
 - island props 必须实现独立契约并安全序列化。
+- `client:load` 必须标记 `views/islands/` 中的 React 组件，不能直接标记原生 DOM 元素。
 - island 不能依赖未显式声明的父级 React Context；跨 island 状态通过 URL、服务端、事件或显式共享 store 处理。
 - 相同 island 在一页出现多次时，每个实例有稳定且不冲突的 hydration key。
+- island 不允许嵌套；需要共享状态的交互区域应作为一个边界。
 - 没有交互的组件不进入客户端 bundle。
 - island 内部可使用 hooks，服务端专用代码不能被打入浏览器。
 
@@ -139,8 +146,8 @@ Vite 至少生成：
 
 ## 9. 分阶段交付
 
-1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器、持久单 worker renderer、超时、崩溃恢复，以及成员目录逐岛 hydration 验证。
-2. 下一步：Vite 页面发现、生产 manifest、多 worker renderer 池、Head 和结构化错误处理。
+1. 当前：统一 `PageEnvelope`、三种渲染语义、`client:load`、Vite 自动发现与按需加载、持久单 worker renderer、超时和崩溃恢复。
+2. 下一步：版本化生产 manifest、多 worker renderer 池、Head 和结构化错误处理。
 3. 稳定前：独立 island 入口、bundle 预算、缓存、CSP nonce 和部署验证。
 4. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 

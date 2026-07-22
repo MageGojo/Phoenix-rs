@@ -157,14 +157,14 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - 页面逻辑名 `users/show` 映射到 `views/pages/users/show.tsx` 或 `.jsx`。
 - 大小写、扩展名冲突和重复页面在构建时失败。
 - `views/components/` 与 `views/layouts/` 由页面正常 import，不作为服务端可寻址页面。
-- `views/islands/` 包含可选择性激活的组件，Vite 为其生成独立浏览器入口。
+- `views/islands/` 包含可选择性激活的组件；页面通过 `client:load` 标记边界，Vite 自动生成动态加载器与服务端注册表。
 - `views/generated/` 是只读构建产物，不进入版本控制。
 
 ### 渲染模式
 
 - SPA：Rust 返回 shell 与 `PageEnvelope`，浏览器渲染完整 React 应用并进行局部导航。
 - SSR：持久 JS renderer 生成完整 HTML，浏览器 hydrate 完整页面。
-- Islands：renderer 生成页面 HTML，浏览器只 hydrate 标记的交互岛。
+- Islands：renderer 生成页面 HTML并自动收集 `client:load` 边界，浏览器只 hydrate 信封中实际出现的交互岛。
 
 渲染模式支持应用默认值、路由配置和响应覆盖。三种模式必须使用相同契约、状态码、验证错误和 props 序列化。详细设计见 [RENDERING.md](RENDERING.md)。
 

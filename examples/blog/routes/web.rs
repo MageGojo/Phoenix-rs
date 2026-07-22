@@ -18,6 +18,7 @@ pub fn routes() -> Routes {
 #[must_use]
 pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
     let article_renderer = renderer.clone();
+    let article_islands_renderer = renderer.clone();
     let member_renderer = renderer.clone();
 
     Routes::new()
@@ -31,7 +32,9 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
         .name("register.store")
         .post("/api/members", MemberController::store)
         .name("members.store")
-        .get("/react", ReactController::islands)
+        .get("/react", move |request| {
+            ReactController::islands(request, article_islands_renderer.clone())
+        })
         .name("react.islands")
         .get("/react/spa", ReactController::spa)
         .name("react.spa")

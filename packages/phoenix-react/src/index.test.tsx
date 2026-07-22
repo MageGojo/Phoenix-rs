@@ -1,17 +1,22 @@
 // @vitest-environment jsdom
-import { createElement } from "react";
+import { act, createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createAes256GcmDecryptor,
   callRust,
   fetchPage,
+  Island,
   island,
   RustCallError,
+  startPhoenix,
   type EncryptedPayload,
   type PageEnvelope,
 } from "./index.js";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("Phoenix React client", () => {
   it("marks an island with its stable backend id", () => {
@@ -30,6 +35,54 @@ describe("Phoenix React client", () => {
 
     expect(renderToString(createElement(MemberDirectoryIsland, { count: 7 })))
       .toContain('data-phoenix-island="member-directory"');
+  });
+
+  it("marks one unchanged React component with the declarative Island boundary", () => {
+    function SaveButton({ label }: { label: string }) {
+      return createElement("button", null, label);
+    }
+
+    expect(renderToString(
+      createElement(Island, null, createElement(SaveButton, { label: "Save" })),
+    )).toContain('data-phoenix-island="save-button"');
+  });
+
+  it("loads only the current SSR page before hydrating it", async () => {
+    function ArticlePage({ title }: { title: string }) {
+      return createElement("main", null, createElement("h1", null, title));
+    }
+    const envelope: PageEnvelope = {
+      protocol: 1,
+      render_mode: "ssr",
+      page: "articles/show",
+      props: { title: "Server article" },
+      shared: {},
+      errors: {},
+      flash: {},
+      contract_hash: null,
+      asset_version: null,
+      request_id: null,
+      routes: {},
+      islands: [],
+    };
+    document.body.innerHTML = [
+      '<div id="phoenix-root"><main><h1>Server article</h1></main></div>',
+      `<script id="phoenix-page" type="application/json">${JSON.stringify(envelope)}</script>`,
+    ].join("");
+    const loadArticle = vi.fn(async () => ({ default: ArticlePage }));
+    const loadOther = vi.fn(async () => ({ default: ArticlePage }));
+
+    await act(async () => {
+      await startPhoenix({
+        pages: {
+          "articles/show": { load: loadArticle },
+          "members/index": { load: loadOther },
+        },
+      });
+    });
+
+    expect(loadArticle).toHaveBeenCalledOnce();
+    expect(loadOther).not.toHaveBeenCalled();
   });
 
   it("posts input to a Rust action and returns its JSON result", async () => {

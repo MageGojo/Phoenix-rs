@@ -1,5 +1,20 @@
-import { createElement, type ComponentType, type ReactNode } from "react";
+import {
+  Children,
+  createContext,
+  createElement,
+  isValidElement,
+  type ComponentType,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+} from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
+
+declare module "react" {
+  interface Attributes {
+    "client:load"?: true;
+  }
+}
 
 export type RenderMode = "spa" | "ssr" | "islands";
 
@@ -38,12 +53,79 @@ export interface EncryptedPayload {
 
 export type ComponentRegistry = Record<string, ComponentType<any>>;
 export type ComponentList = readonly ComponentType<any>[];
+export interface ComponentLoader {
+  load: () => Promise<{ default: ComponentType<any> }>;
+}
+export type ComponentSource = ComponentRegistry | Record<string, ComponentType<any> | ComponentLoader>;
 export type DecryptPage = (payload: EncryptedPayload) => Promise<PageEnvelope>;
 
 export interface PhoenixOptions {
-  pages?: ComponentRegistry;
-  islands?: ComponentRegistry | ComponentList;
+  pages?: ComponentSource;
+  islands?: ComponentSource | ComponentList;
   document?: Document;
+}
+
+interface IslandRenderContext {
+  mode: RenderMode;
+  insideIsland: boolean;
+  collect?: (component: string, props: unknown, requestedId?: string) => string;
+}
+
+const islandRenderContext = createContext<IslandRenderContext>({
+  mode: "islands",
+  insideIsland: false,
+});
+const registeredIslandNames = new WeakMap<object, string>();
+
+export interface IslandProps {
+  children?: ReactElement;
+  id?: string;
+}
+
+export function Island({ children, id }: IslandProps): ReactElement {
+  const context = useContext(islandRenderContext);
+  const child = Children.only(children);
+  if (!isValidElement(child) || typeof child.type === "string") {
+    throw new Error("Phoenix Island requires one React component child");
+  }
+  if (context.mode !== "islands") {
+    return child;
+  }
+  if (context.insideIsland) {
+    throw new Error("Phoenix islands cannot be nested");
+  }
+
+  const name = componentName(child.type as ComponentType<any>);
+  const islandId = context.collect?.(name, child.props, id) ?? id ?? name;
+  return createElement(
+    "div",
+    { "data-phoenix-island": islandId, "data-component": name },
+    createElement(
+      islandRenderContext.Provider,
+      { value: { ...context, insideIsland: true } },
+      child,
+    ),
+  );
+}
+
+export function PhoenixRenderProvider({
+  mode,
+  collect,
+  children,
+}: {
+  mode: RenderMode;
+  collect?: IslandRenderContext["collect"];
+  children?: ReactNode;
+}): ReactElement {
+  return createElement(
+    islandRenderContext.Provider,
+    { value: { mode, insideIsland: false, collect } },
+    children,
+  );
+}
+
+export function registerIsland(name: string, Component: ComponentType<any>): void {
+  registeredIslandNames.set(Component, name);
 }
 
 export function island<Props extends object>(
@@ -65,26 +147,31 @@ export function island<Props extends object>(
     ? nameOrComponent
     : componentName(Component);
   return function PhoenixIsland({ islandId = name, ...props }) {
+    registerIsland(name, Component);
     return createElement(
-      "div",
-      { "data-phoenix-island": islandId, "data-component": name },
+      Island,
+      { id: islandId },
       createElement(Component, props as Props),
     );
   };
 }
 
-export function startPhoenix(options: PhoenixOptions = {}): PageEnvelope {
+export async function startPhoenix(options: PhoenixOptions = {}): Promise<PageEnvelope> {
   const documentRef = options.document ?? document;
   const envelope = readPage(documentRef);
   const root = requiredElement(documentRef, "phoenix-root");
 
   if (envelope.render_mode === "islands") {
-    hydrateIslands(documentRef, envelope, componentRegistry(options.islands));
+    await hydrateIslands(documentRef, envelope, componentRegistry(options.islands));
     return envelope;
   }
 
-  const Page = requiredComponent(options.pages ?? {}, envelope.page, "page");
-  const element = createElement(Page, pageProps(envelope));
+  const Page = await requiredComponent(options.pages ?? {}, envelope.page, "page");
+  const element = createElement(
+    PhoenixRenderProvider,
+    { mode: envelope.render_mode },
+    createElement(Page, pageProps(envelope)),
+  );
   if (envelope.render_mode === "ssr") {
     hydrateRoot(root, element);
   } else {
@@ -192,17 +279,17 @@ function readPage(documentRef: Document): PageEnvelope {
 function hydrateIslands(
   documentRef: Document,
   envelope: PageEnvelope,
-  registry: ComponentRegistry,
-): void {
-  for (const descriptor of envelope.islands) {
+  registry: ComponentSource,
+): Promise<void> {
+  return Promise.all(envelope.islands.map(async (descriptor) => {
     const root = Array.from(documentRef.querySelectorAll("[data-phoenix-island]"))
       .find((element) => element.getAttribute("data-phoenix-island") === descriptor.id);
     if (!root) {
       throw new Error(`Phoenix island root not found: ${descriptor.id}`);
     }
-    const Component = requiredComponent(registry, descriptor.component, "island");
+    const Component = await requiredComponent(registry, descriptor.component, "island");
     hydrateRoot(root, createElement(Component, descriptor.props));
-  }
+  })).then(() => undefined);
 }
 
 function pageProps(envelope: PageEnvelope): Record<string, unknown> {
@@ -224,21 +311,25 @@ function requiredElement(documentRef: Document, id: string): HTMLElement {
   return element;
 }
 
-function requiredComponent(
-  registry: ComponentRegistry,
+async function requiredComponent(
+  registry: ComponentSource,
   name: string,
   kind: string,
-): ComponentType<any> {
-  const component = registry[name];
-  if (!component) {
+): Promise<ComponentType<any>> {
+  const entry = registry[name];
+  if (!entry) {
     throw new Error(`Phoenix ${kind} is not registered: ${name}`);
   }
-  return component;
+  if (typeof entry === "object" && "load" in entry) {
+    const module = await entry.load();
+    return module.default;
+  }
+  return entry;
 }
 
 function componentRegistry(
-  components: ComponentRegistry | ComponentList | undefined,
-): ComponentRegistry {
+  components: ComponentSource | ComponentList | undefined,
+): ComponentSource {
   if (!components) return {};
   if (!Array.isArray(components)) return components as ComponentRegistry;
   return Object.fromEntries(
@@ -247,6 +338,8 @@ function componentRegistry(
 }
 
 function componentName(Component: ComponentType<any>): string {
+  const registered = registeredIslandNames.get(Component);
+  if (registered) return registered;
   const named = Component as ComponentType<any> & { displayName?: string; name?: string };
   const name = named.displayName || named.name;
   if (!name) {

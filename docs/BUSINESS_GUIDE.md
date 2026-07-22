@@ -617,10 +617,10 @@ let response = Response::text("created")
 后端只传页面名和业务 props，不为三种渲染模式分别设计 API：
 
 ```rust
-use phoenix::prelude::{Page, Request, Response};
+use phoenix::prelude::{NodeRenderer, Page, Request, Response};
 use serde_json::json;
 
-pub async fn show(request: Request) -> Response {
+pub async fn show(request: Request, renderer: NodeRenderer) -> Response {
     Page::new(
         "articles/show",
         json!({
@@ -628,9 +628,8 @@ pub async fn show(request: Request) -> Response {
             "summary": "One controller contract, three rendering modes."
         }),
     )
-    .island("like-button", json!({ "initialLikes": 7 }))
-    .respond_to(&request, None)
-    .into_response()
+    .respond_with_renderer(&request, &renderer)
+    .await
 }
 ```
 
@@ -646,13 +645,10 @@ Page::new("docs/show", props); // Islands
 
 ### 编写 TSX 页面和 Island
 
-页面放在 `views/pages`，交互岛放在 `views/islands`。`island` 包装器给服务端 HTML 和浏览器 hydration 提供稳定 ID：
+页面放在 `views/pages`，交互组件放在 `views/islands`。业务页面只在需要浏览器交互的组件上添加 `client:load`：
 
 ```tsx
-import { island } from "@phoenix/react";
 import LikeButton from "../../islands/like-button.js";
-
-const LikeButtonIsland = island(LikeButton);
 
 export default function ArticleShow({ title, summary }: ArticleShowProps) {
   return (
@@ -661,23 +657,22 @@ export default function ArticleShow({ title, summary }: ArticleShowProps) {
         <h1>{title}</h1>
         <p>{summary}</p>
       </article>
-      <LikeButtonIsland initialLikes={7} />
+      <LikeButton client:load initialLikes={7} />
     </main>
   );
 }
 ```
 
-浏览器入口注册页面和 islands：
+Vite 配置只启用 Phoenix 插件：
 
-```tsx
-import { startPhoenix } from "@phoenix/react";
+```ts
+import { defineConfig } from "vite";
+import { phoenix } from "@phoenix/vite";
 
-startPhoenix({
-  islands: [LikeButton],
-});
+export default defineConfig({ plugins: [phoenix()] });
 ```
 
-组件名会自动从 `LikeButton` 转换为 `like-button`。只有同一组件需要多个实例 ID 时，才使用 Rust 的 `.island_with_id(...)` 和 React 的 `islandId`。启动器按 `render_mode` 执行：SPA 使用 `createRoot`，SSR 使用整页 `hydrateRoot`，Islands 只对 `PageEnvelope.islands` 中的节点调用 `hydrateRoot`。当前组件列表仍需导入；后续由 `phoenix-vite` 根据目录自动发现。
+`phoenix-vite` 自动生成页面/island 注册表、浏览器动态入口和服务端 renderer 入口。SSR renderer 从实际渲染树收集组件名、props 和多实例 ID，控制器不再重复声明 island。启动器按 `render_mode` 执行：SPA 使用 `createRoot`，SSR 使用整页 `hydrateRoot`，Islands 只对 `PageEnvelope.islands` 中的节点调用 `hydrateRoot`。
 
 ### 从 React 调用 Rust action
 
@@ -699,9 +694,7 @@ const member = await callRust<Member>("members.store", { name });
 
 ### 服务端 React HTML
 
-`@phoenix/react-ssr` 的 `renderPage` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式调用 React `renderToString`。Rust 的 `trusted_server_html` 只接受可信 renderer 的输出，业务代码不能把未转义的用户输入拼进该字符串。
-
-博客控制器当前使用固定 HTML 验证 Rust 到 React 的接口，React 侧测试验证同一页面可以生成对应输出。持久 Node renderer 接入后，应把 renderer 返回值直接交给 `trusted_server_html`，并删除固定演示 HTML。
+`@phoenix/react-ssr` 的 `renderPage` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式调用 React `renderToString`。`respond_with_renderer` 会把可信 renderer 返回的 HTML 与 island 描述合并进页面响应；renderer 超时或退出时返回 503，不会静默切换渲染模式。业务代码不接触 `trusted_server_html`。
 
 ### 可选加密页面协议
 

@@ -1,0 +1,25 @@
+{
+  "name": "@phoenix/vite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "vite": "^7.0.0"
+  },
+  "dependencies": {
+    "typescript": "^5.8.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6",
+    "vitest": "^3.2.0"
+  }
+}

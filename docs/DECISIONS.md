@@ -125,3 +125,10 @@
 - 决定：Rust 路由器自动将命名路由映射加入页面协议；React 的 `callRust` 接收路由名和输入数据，并发送 JSON POST。
 - 原因：React 不应依赖容易变化的后端 URL。路由路径调整时，只要稳定名称不变，前端调用无需修改。
 - 边界：`callRust` 是浏览器到 Rust 服务的 HTTP 传输封装，不是在浏览器内直接执行 Rust。当前切片只覆盖无路径参数的 POST action；参数化 URL 与其他 HTTP 方法需单独设计。
+
+## ADR-020：Islands 使用编译期客户端指令与 SSR 自动收集
+
+- 状态：已接受
+- 决定：业务页面使用 `<Component client:load />` 标记交互边界。`phoenix-vite` 编译该指令，按目录生成页面/island 注册表和入口；SSR renderer 自动收集实际边界的组件名、ID 与 props，Rust 控制器不重复声明 island。
+- 原因：让组件保持普通 React 代码，把打包、注册和页面协议元数据收回框架，同时保证 Islands 页面只加载实际使用的交互代码。
+- 边界：island props 必须可 JSON 序列化，island 不允许嵌套。共享同一 React 状态的交互必须处于同一边界；SSR 模式继续整页 hydration，不创建局部 root。

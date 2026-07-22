@@ -28,12 +28,19 @@ Routes::new()
 React 页面通过同一个后端协议支持 Islands、SPA 与 SSR；默认使用 Islands：
 
 ```tsx
-import type { UserShowProps } from "#phoenix/contracts/pages/users";
+import MemberCreator from "../../islands/member-creator";
 
-export default function Show({ user }: UserShowProps) {
-  return <h1>{user.name}</h1>;
+export default function Members({ members }: MembersProps) {
+  return (
+    <main>
+      <MemberTable members={members} />
+      <MemberCreator client:load initialTotal={members.length} />
+    </main>
+  );
 }
 ```
+
+`MemberTable` 只输出 SSR HTML；Vite 在编译期识别 `client:load`，SSR renderer 自动收集 `MemberCreator` 的 props，浏览器只动态加载页面实际出现的 island。业务代码不写 island 注册表、浏览器入口或 renderer 入口。
 
 React 调用 Rust action 时使用后端路由名，不写死 URL。框架会把 Rust 命名路由表自动注入页面协议：
 
@@ -61,7 +68,7 @@ const member = await callRust<Member>("members.store", { name });
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、浏览器启动器、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；多 worker 池、Vite 自动发现/生产清单、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
+React 页面协议、三种渲染模式、自动页面/island 发现、按需浏览器入口、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；多 worker 池、版本化生产 manifest、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
@@ -94,7 +101,7 @@ npm run dev -w phoenix-blog-react-example
 cargo run -p phoenix-blog-example
 ```
 
-`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条初始数据由 Rust 生成；常驻 Node renderer 输出完整首屏 HTML，浏览器只加载成员目录 island。新增成员通过命名路由 `members.store` 调用 Rust 接口，搜索、筛选、排序和分页继续在 island 内交互。
+`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条初始数据由 Rust 生成；常驻 Node renderer 输出概览与成员表格，浏览器只加载带 `client:load` 的新增成员表单。新增成员通过命名路由 `members.store` 调用 Rust 接口。
 
 运行完整检查：
 
@@ -104,6 +111,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 npm run build:react
 npm run build:ssr
+npm run build:client -w phoenix-blog-react-example
 npm run typecheck:example
 npm run test:react
 ```

@@ -20,20 +20,31 @@ const envelope: PageEnvelope = {
   asset_version: null,
   request_id: null,
   routes: {},
-  islands: [
-    { id: "like-button", component: "like-button", props: { initialLikes: 7 } },
-  ],
+  islands: [],
 };
 
 describe("blog React case", () => {
-  it.each(["ssr", "islands"] as const)("renders the article in %s mode", (mode) => {
+  it("discovers article islands while rendering server HTML", () => {
+    const result = renderPage(envelope, { "articles/show": ArticleShow });
+
+    expect(result.html).toContain("React meets Phoenix");
+    expect(result.html).toContain('data-phoenix-island="like-button"');
+    expect(result.islands).toEqual([{
+      id: "like-button",
+      component: "like-button",
+      props: { initialLikes: 7 },
+    }]);
+  });
+
+  it("renders SSR without island wrappers because the full page hydrates", () => {
     const result = renderPage(
-      { ...envelope, render_mode: mode },
+      { ...envelope, render_mode: "ssr" },
       { "articles/show": ArticleShow },
     );
 
     expect(result.html).toContain("React meets Phoenix");
-    expect(result.html).toContain('data-phoenix-island="like-button"');
+    expect(result.html).not.toContain("data-phoenix-island");
+    expect(result.islands).toEqual([]);
   });
 
   it("keeps the SPA server shell empty", () => {
@@ -44,7 +55,7 @@ describe("blog React case", () => {
     expect(result.html).toBe("");
   });
 
-  it("renders one page from a 100-record Rust-shaped payload", () => {
+  it("keeps the member table in SSR and isolates only the creator", () => {
     const members = Array.from({ length: 100 }, (_, index) => ({
       id: index + 1,
       name: `成员${String(index + 1).padStart(3, "0")}`,
@@ -57,26 +68,25 @@ describe("blog React case", () => {
       lastActiveMinutes: index,
     }));
 
-    const html = renderPage(
+    const result = renderPage(
       {
         ...envelope,
-        render_mode: "islands",
         page: "members/index",
         props: { members, generatedBy: "Rust", total: 100 },
-        islands: [{
-          id: "member-directory",
-          component: "member-directory",
-          props: { initialMembers: members, initialTotal: 100 },
-        }],
       },
       { "members/index": MembersIndex },
-    ).html;
+    );
 
-    expect(html).toContain("团队成员目录");
-    expect(html).toContain('data-phoenix-island="member-directory"');
-    expect(html).toContain("动态添加成员");
-    expect(html.match(/@example\.test/g)).toHaveLength(10);
-    expect(html).toContain("member001@example.test");
-    expect(html).not.toContain("member011@example.test");
+    expect(result.html).toContain("团队成员目录");
+    expect(result.html).toContain('data-phoenix-island="member-creator"');
+    expect(result.html).toContain("新增成员");
+    expect(result.html.match(/@example\.test/g)).toHaveLength(10);
+    expect(result.html).toContain("member001@example.test");
+    expect(result.html).not.toContain("member011@example.test");
+    expect(result.islands).toEqual([{
+      id: "member-creator",
+      component: "member-creator",
+      props: { initialTotal: 100 },
+    }]);
   });
 });

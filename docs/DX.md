@@ -283,24 +283,23 @@ Page::new("docs/show", props) // 默认 Islands
 
 三种模式共用控制器、Props 和页面协议。SSR/Islands 默认需要生产环境运行 renderer，不能被描述为纯单 Rust 二进制部署。完整规则见 [RENDERING.md](RENDERING.md)。
 
-Islands 页面仍是普通 TSX：
+Islands 页面仍是普通 TSX，组件本身不需要 Phoenix 包装：
 
 ```tsx
-import { island } from "@phoenix/react/islands";
-import { SearchBox } from "../../components/search-box";
+import SearchBox from "../../islands/search-box";
 import type { DocsPageProps } from "#phoenix/contracts/pages/docs";
-
-const SearchIsland = island(SearchBox);
 
 export default function DocsPage({ article }: DocsPageProps) {
   return (
     <main>
       <article>{article.body}</article>
-      <SearchIsland source="docs" />
+      <SearchBox client:load source="docs" />
     </main>
   );
 }
 ```
+
+`phoenix-vite` 自动发现页面和 islands、生成浏览器动态加载器与服务端 renderer 入口。开发者不维护注册表；没有 `client:load` 的组件只参与 SSR。
 
 ## 7. 模型与查询
 

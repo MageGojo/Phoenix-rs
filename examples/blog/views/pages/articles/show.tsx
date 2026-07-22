@@ -1,8 +1,4 @@
-import { island } from "@phoenix/react";
-
 import LikeButton from "../../islands/like-button.js";
-
-const LikeButtonIsland = island(LikeButton);
 
 export interface ArticleShowProps {
   title: string;
@@ -16,7 +12,7 @@ export default function ArticleShow({ title, summary }: ArticleShowProps) {
         <h1>{title}</h1>
         <p>{summary}</p>
       </article>
-      <LikeButtonIsland initialLikes={7} />
+      <LikeButton client:load initialLikes={7} />
     </main>
   );
 }

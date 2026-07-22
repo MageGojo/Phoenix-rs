@@ -6,9 +6,9 @@
     "examples/blog"
   ],
   "scripts": {
-    "build:react": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr",
+    "build:react": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr && npm run build -w @phoenix/vite",
     "build:ssr": "npm run build:react && npm run build:ssr -w phoenix-blog-react-example",
-    "test:react": "npm run test -w @phoenix/react && npm run test -w @phoenix/react-ssr && npm run test -w phoenix-blog-react-example",
+    "test:react": "npm run test -w @phoenix/react && npm run test -w @phoenix/react-ssr && npm run test -w @phoenix/vite && npm run test -w phoenix-blog-react-example",
     "typecheck:example": "npm run typecheck -w phoenix-blog-react-example"
   },
   "devDependencies": {

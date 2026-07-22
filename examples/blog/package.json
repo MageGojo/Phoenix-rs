@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "build:client": "vite build",
     "build:ssr": "vite build --config vite.ssr.config.ts",
     "test": "vitest run views/rendering.test.tsx views/islands.test.tsx",
     "typecheck": "tsc --noEmit"
@@ -12,6 +13,7 @@
   "dependencies": {
     "@phoenix/react": "0.1.0",
     "@phoenix/react-ssr": "0.1.0",
+    "@phoenix/vite": "0.1.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
