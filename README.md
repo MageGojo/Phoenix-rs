@@ -25,7 +25,7 @@ Routes::new()
     .name("users.show")
 ```
 
-下面的 React 契约仍是后续目标：
+React 页面通过同一个后端协议支持 Islands、SPA 与 SSR；默认使用 Islands：
 
 ```tsx
 import type { UserShowProps } from "#phoenix/contracts/pages/users";
@@ -49,7 +49,7 @@ export default function Show({ user }: UserShowProps) {
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-Toasty、React 契约、SPA/SSR/Islands、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
+React 页面协议、三种渲染模式、浏览器启动器、React 服务端 renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。Vite 自动发现/生产清单、持久 renderer 进程池、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
@@ -80,6 +80,9 @@ curl http://127.0.0.1:3000/users/Ada
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+npm run build:react
+npm run typecheck:example
+npm run test:react
 ```
 
 ## 仓库结构
@@ -98,4 +101,4 @@ docs/                   产品、架构与项目记录
 
 ## 第一版边界
 
-第一版聚焦常规服务端网站应用：控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React SPA 页面响应、中间件、会话、CSRF、错误处理和测试工具。SSR 与 Islands 属于首个稳定版目标，但排在 SPA 垂直切片之后；CLI 代码生成、管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。
+第一版聚焦常规服务端网站应用：控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React 页面响应、中间件、会话、CSRF、错误处理和测试工具。React 默认采用 Islands，并允许页面显式切换 SPA 或 SSR；CLI 代码生成、管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。

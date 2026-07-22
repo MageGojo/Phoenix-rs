@@ -75,9 +75,16 @@
 ## ADR-012：React 支持 SPA、SSR 与 Islands
 
 - 状态：已接受
-- 决定：三种模式共享 `PageEnvelope`、数据契约和 TSX 页面体系，支持应用默认值与路由/响应覆盖。P0 先交付 SPA，Alpha 交付 SSR，Beta 交付 Islands。
+- 决定：三种模式共享 `PageEnvelope`、数据契约和 TSX 页面体系；默认使用 Islands，页面可以显式切换 SPA 或 SSR。第一版协议和参考 renderer 同时覆盖三种模式，生产 renderer 池与 Vite 自动构建继续独立验证。
 - 原因：覆盖后台强交互、SEO 内容页和低 JavaScript 内容站，而不复制后端业务接口。
 - 边界：Islands 指独立 hydration roots，不等同于 React Server Components。
+
+## ADR-018：页面协议加密是显式可选适配器
+
+- 状态：已接受
+- 决定：普通页面协议默认使用明文 JSON 并依赖 TLS。需要保护可信中间链路时，可以显式注入 `PayloadCodec`；内置实现使用 AES-256-GCM、随机 nonce、用途绑定、短时效和 `key_id`。初始 HTML 不加密。
+- 原因：大多数应用只需要 TLS；把密钥管理和额外密文层设为默认会增加复杂度，也会制造“浏览器用户看不到 props”的错误预期。
+- 边界：密钥不得硬编码或嵌入公开前端。最终浏览器需要明文才能渲染，应用层信封不能对最终用户保密。
 
 ## ADR-013：SSR 与 Islands 默认使用持久 JS renderer
 

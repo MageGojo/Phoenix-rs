@@ -272,13 +272,9 @@ export default function Login() {
 应用设置默认模式，路由可以覆盖：
 
 ```rust
-Routes::new()
-    .get("/dashboard", DashboardController::show)
-        .render_mode(RenderMode::Spa)
-    .get("/articles/{article}", ArticleController::show)
-        .render_mode(RenderMode::Ssr)
-    .get("/docs/{page}", DocsController::show)
-        .render_mode(RenderMode::Islands)
+Page::new("dashboard/show", props).spa();
+Page::new("articles/show", props).ssr();
+Page::new("docs/show", props) // 默认 Islands
 ```
 
 - SPA 渲染完整客户端应用，适合后台和复杂交互。

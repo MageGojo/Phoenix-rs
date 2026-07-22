@@ -4,19 +4,15 @@
 
 Phoenix 的 React 层支持 SPA、SSR 和 Islands。三种模式共享页面查找、Rust/TypeScript 契约、路由、控制器、验证错误、资源清单和安全序列化，开发者不需要为每种模式重新编写一套后端接口。
 
-模式可以设置应用默认值，并允许按路由或单次响应覆盖：
+默认模式是 Islands，单次页面响应可以显式覆盖：
 
 ```rust
-Routes::new()
-    .get("/dashboard", DashboardController::show)
-        .render_mode(RenderMode::Spa)
-    .get("/articles/{article}", ArticleController::show)
-        .render_mode(RenderMode::Ssr)
-    .get("/docs/{page}", DocsController::show)
-        .render_mode(RenderMode::Islands);
+Page::new("dashboard/show", props).spa();
+Page::new("articles/show", props).ssr();
+Page::new("docs/show", props); // 默认 Islands
 ```
 
-优先级为：响应显式覆盖 > 路由配置 > 应用默认值。生产环境不允许因为 renderer 故障静默改变语义；是否降级必须由应用显式配置。
+当前实现由页面响应显式覆盖默认值。路由级和应用配置级覆盖留给后续配置层；生产环境不允许因为 renderer 故障静默改变语义。
 
 ## 2. 模式对比
 
@@ -42,7 +38,7 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> HTML shell + props
 
 - 浏览器禁用 JavaScript 时可以显示明确的降级内容，但不承诺 SPA 功能可用。
 - History、滚动恢复、加载状态、错误边界和资源版本刷新由 `phoenix-react` 管理。
-- SPA 是第一个垂直切片和默认开发模式，因为它不要求生产环境运行 Node.js。
+- SPA 不要求生产环境运行 Node.js，适合显式选择为强交互页面模式。
 
 ## 4. SSR
 
@@ -141,9 +137,9 @@ Vite 至少生成：
 
 ## 9. 分阶段交付
 
-1. P0：统一 `PageEnvelope`、SPA、局部导航、契约 hash 和生产 manifest。
-2. Alpha：SSR renderer 池、完整 HTML、hydration、Head、错误与超时处理。
-3. Beta：Islands 标记、独立入口、选择性 hydration、bundle 预算和缓存验证。
+1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器和参考服务端 renderer。
+2. 下一步：Vite 页面发现、生产 manifest、持久 renderer 池、Head、错误与超时处理。
+3. 稳定前：独立 island 入口、bundle 预算、缓存、CSP nonce 和部署验证。
 4. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 
 ## 10. 验收标准

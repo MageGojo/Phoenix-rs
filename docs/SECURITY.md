@@ -72,6 +72,8 @@ version | key_id | purpose | issued_at | expires_at | nonce | ciphertext | tag
 
 实现前必须决定威胁模型并采用成熟密码学库。禁止自行设计算法、复用 nonce、使用无认证加密或把长期解密密钥嵌入前端。
 
+当前页面协议已提供显式可选的 `Aes256GcmCodec`：使用操作系统随机 nonce、60 秒默认有效期、`page-navigation` 用途绑定，并认证版本、`key_id`、用途和时间元数据。浏览器端通过调用方提供的 `CryptoKey` 解密，Phoenix 不负责把密钥送到浏览器。普通配置保持明文 JSON 并依赖 TLS；初始 HTML 始终是可读 hydration 数据。
+
 ## 5. 数据分类
 
 | 类型 | 是否可进入 React props | 处理要求 |

@@ -11,9 +11,11 @@
 - 异步控制器；
 - JSON 请求、字段验证和 JSON 响应；
 - 全局、单路由和路由组中间件；
+- React Islands、SPA 与 SSR 页面；
+- 明文或可选 AES-256-GCM 页面协议；
 - 业务单元测试和功能测试。
 
-React 页面、Rust/TypeScript 自动字段契约、SPA、SSR、Islands、Toasty 模型和数据库迁移尚未提供可用 API，因此本文不提供这些功能的伪代码。
+Rust/TypeScript 自动字段契约、Vite 自动页面发现、持久 Node renderer 池、Toasty 模型和数据库迁移尚未提供完整 API。React 章节只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口。
 
 ## 1. 推荐的业务目录
 
@@ -610,7 +612,100 @@ let response = Response::text("created")
 
 动态响应头名称和值可能无效，因此 `with_header` 返回 `Result`，业务代码必须处理错误。
 
-## 10. 编写业务测试
+## 10. 返回 React 页面
+
+后端只传页面名和业务 props，不为三种渲染模式分别设计 API：
+
+```rust
+use phoenix::prelude::{Island, Page, Request, Response};
+use serde_json::json;
+
+pub async fn show(request: Request) -> Response {
+    Page::new(
+        "articles/show",
+        json!({
+            "title": "React meets Phoenix",
+            "summary": "One controller contract, three rendering modes."
+        }),
+    )
+    .island(Island::new(
+        "article-like",
+        "like-button",
+        json!({ "initialLikes": 7 }),
+    ))
+    .respond_to(&request, None)
+    .into_response()
+}
+```
+
+`Page::new` 默认使用 Islands。强交互后台页面可调用 `.spa()`，需要整页 hydration 的内容页可调用 `.ssr()`：
+
+```rust
+Page::new("dashboard/show", props).spa();
+Page::new("articles/show", props).ssr();
+Page::new("docs/show", props); // Islands
+```
+
+三种模式共享 `PageEnvelope`。完整浏览器请求返回 HTML；带 `X-Phoenix-Page: 1` 的局部导航请求返回 `application/vnd.phoenix.page+json`。状态、页面名、props、共享数据、错误和 flash 不因模式改变。
+
+### 编写 TSX 页面和 Island
+
+页面放在 `views/pages`，交互岛放在 `views/islands`。`island` 包装器给服务端 HTML 和浏览器 hydration 提供稳定 ID：
+
+```tsx
+import { island } from "@phoenix/react";
+import LikeButton from "../../islands/like-button.js";
+
+const LikeButtonIsland = island("like-button", LikeButton);
+
+export default function ArticleShow({ title, summary }: ArticleShowProps) {
+  return (
+    <main>
+      <article>
+        <h1>{title}</h1>
+        <p>{summary}</p>
+      </article>
+      <LikeButtonIsland islandId="article-like" initialLikes={7} />
+    </main>
+  );
+}
+```
+
+浏览器入口注册页面和 islands：
+
+```tsx
+import { startPhoenix } from "@phoenix/react";
+
+startPhoenix({
+  pages: { "articles/show": ArticleShow },
+  islands: { "like-button": LikeButton },
+});
+```
+
+启动器按 `render_mode` 执行：SPA 使用 `createRoot`，SSR 使用整页 `hydrateRoot`，Islands 只对 `PageEnvelope.islands` 中的节点调用 `hydrateRoot`。当前注册表需要手写；后续由 `phoenix-vite` 根据目录自动生成。
+
+### 服务端 React HTML
+
+`@phoenix/react-ssr` 的 `renderPage` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式调用 React `renderToString`。Rust 的 `trusted_server_html` 只接受可信 renderer 的输出，业务代码不能把未转义的用户输入拼进该字符串。
+
+博客控制器当前使用固定 HTML 验证 Rust 到 React 的接口，React 侧测试验证同一页面可以生成对应输出。持久 Node renderer 接入后，应把 renderer 返回值直接交给 `trusted_server_html`，并删除固定演示 HTML。
+
+### 可选加密页面协议
+
+普通业务应使用 HTTPS 和默认明文页面 JSON。只有可信中间链路还需要额外密文层时，才显式注入 codec：
+
+```rust
+use phoenix::prelude::Aes256GcmCodec;
+
+let codec = Aes256GcmCodec::new(key_id, key_from_secret_store);
+let response = page.respond_to(&request, Some(&codec))?;
+```
+
+内置 codec 使用 AES-256-GCM，默认 60 秒有效，信封包含版本、算法、`key_id`、用途、签发/过期时间、随机 nonce、密文和 tag。密钥必须来自环境或密钥服务，不能写进仓库。浏览器端只有在调用方已经安全获得 `CryptoKey` 时，才使用 `createAes256GcmDecryptor`。
+
+加密只作用于带 `X-Phoenix-Page: 1` 的协议响应。初始 HTML 必须包含浏览器可读的 hydration 数据；因此这项能力不能对最终用户隐藏 props，也不能替代 TLS、权限检查或字段白名单。
+
+## 11. 编写业务测试
 
 业务测试可以直接调用应用，不需要占用真实端口。
 
@@ -685,7 +780,7 @@ fn reserved_user_is_rejected() {
 cargo test -p phoenix-blog-example
 ```
 
-## 11. 完整的注册控制器
+## 12. 完整的注册控制器
 
 下面是一个包含 JSON 解析、验证、错误响应和成功响应的完整业务动作：
 
