@@ -1,0 +1,21 @@
+[package]
+name = "phoenix-security"
+description = "Secure web defaults and middleware for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+http.workspace = true
+phoenix-http = { path = "../phoenix-http" }
+rand.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+phoenix-routing = { path = "../phoenix-routing" }
+tokio.workspace = true
+
+[lints]
+workspace = true

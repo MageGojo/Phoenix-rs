@@ -124,8 +124,15 @@
 ## ADR-017：安全响应头由显式中间件提供
 
 - 状态：已接受
-- 决定：提供不覆盖应用显式值的 `SecurityHeaders` 基线中间件，并在官方案例默认启用。CSP、HSTS、CORS 与代理策略在获得环境配置模型后单独实现。
+- 决定：保留轻量 `SecurityHeaders` 基线，并由 `phoenix-security::SecurityPolicy` 提供可配置 CSP、HSTS 与浏览器权限策略。CORS、Host、代理、限流、Session 和 CSRF 保持独立中间件，应用按文档顺序组合。
 - 原因：部分安全头依赖 HTTPS、Vite 开发模式和嵌入策略，过早硬编码会破坏正确应用。
+
+## ADR-024：会话状态留在服务端，代理信任从 TCP peer 开始
+
+- 状态：已接受
+- 决定：默认 Session Cookie 只携带高熵随机 ID，业务值保存在 `SessionStore`；登录或权限变化使用 `regenerate()`，注销使用 `invalidate()`。转发 IP 只有在 Hyper 写入的直连 TCP peer 被显式信任时才解析。
+- 原因：服务端 Session 便于撤销和敏感数据隔离；从不可伪造的连接元数据开始逐 hop 验证，避免直接相信客户端提供的 XFF。
+- 边界：内置 store 是单进程内存实现，适合开发和单实例服务。多实例部署必须接入共享持久化 store；TLS 终止与可信 scheme 仍由部署层和后续中间件负责。
 
 ## ADR-019：浏览器调用 Rust action 使用命名路由
 

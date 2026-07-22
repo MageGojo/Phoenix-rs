@@ -1043,6 +1043,7 @@ dependencies = [
  "phoenix-database",
  "phoenix-http",
  "phoenix-routing",
+ "phoenix-security",
  "phoenix-validation",
  "phoenix-view",
 ]
@@ -1105,6 +1106,19 @@ dependencies = [
  "percent-encoding",
  "phoenix-http",
  "thiserror",
+]
+
+[[package]]
+name = "phoenix-security"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "phoenix-http",
+ "phoenix-routing",
+ "rand",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

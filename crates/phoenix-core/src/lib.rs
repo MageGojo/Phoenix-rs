@@ -219,10 +219,11 @@ async fn serve_connection(
     application: Arc<Application>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let peer_addr = stream.peer_addr().ok();
     let header_read_timeout = application.header_read_timeout;
     let service = service_fn(move |request| {
         let application = Arc::clone(&application);
-        async move { handle_hyper_request(application, request).await }
+        async move { handle_hyper_request(application, request, peer_addr).await }
     });
     let io = TokioIo::new(stream);
     let mut builder = hyper::server::conn::http1::Builder::new();
@@ -246,6 +247,7 @@ async fn serve_connection(
 async fn handle_hyper_request(
     application: Arc<Application>,
     request: HyperRequest<Incoming>,
+    peer_addr: Option<SocketAddr>,
 ) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
     let (parts, body) = request.into_parts();
     let body = tokio::time::timeout(
@@ -256,8 +258,11 @@ async fn handle_hyper_request(
 
     let response = match body {
         Ok(Ok(body)) => {
-            let request =
+            let mut request =
                 Request::from_parts(parts.method, parts.uri, parts.headers, body.to_bytes());
+            if let Some(peer_addr) = peer_addr {
+                request.extensions_mut().insert(peer_addr);
+            }
             application.handle(request).await
         }
         Ok(Err(error)) if error.is::<LengthLimitError>() => {

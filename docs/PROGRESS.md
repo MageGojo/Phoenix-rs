@@ -118,3 +118,11 @@
 - SQLite 使用 `BEGIN IMMEDIATE` 同时实现迁移锁和整批原子回滚；PostgreSQL 使用 advisory lock，并逐迁移事务提交。
 - 空数据库会自动创建 `phoenix_migrations`；失败 SQL 测试验证同批已执行 DDL 与状态记录均被回滚。
 - PostgreSQL 复用同一 CRUD/关系/分页契约测试，设置 `PHOENIX_TEST_POSTGRES_URL` 时连接真实实例执行。
+
+## 2026-07-22：Web 安全基础栈
+
+- 新增 `phoenix-security`，实现服务端 Session、安全 Cookie、会话 ID 轮换/注销、Session CSRF、精确 CORS、固定窗口限流、可信代理和 Host allowlist。
+- Hyper 接入层把真实 TCP peer 写入 Request extensions；代理解析只有在直连 peer 明确信任时才消费 XFF，并按从右到左的 hop 链解析客户端地址。
+- 新增可配置 CSP/HSTS 安全策略、随机 request ID、无 query/无 Header 值的结构化访问日志和敏感 Header 脱敏辅助函数。
+- 5 个路由级测试覆盖 Cookie 属性与 CSRF 往返、会话轮换、代理欺骗边界、Host/CORS/限流拒绝、安全头、request ID 唯一性和日志脱敏。
+- `cargo test -p phoenix-security`、严格 Clippy 和 `phoenix-core` 测试通过。

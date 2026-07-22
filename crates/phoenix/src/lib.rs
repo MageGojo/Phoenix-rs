@@ -2,6 +2,7 @@ pub use phoenix_core as core;
 pub use phoenix_database as database;
 pub use phoenix_http as http;
 pub use phoenix_routing as routing;
+pub use phoenix_security as security;
 pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
@@ -13,6 +14,11 @@ pub mod prelude {
         Response, RouteManifest, SecurityHeaders, StatusCode, Uri, middleware_fn,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
+    pub use phoenix_security::{
+        AccessLog, ClientIp, Cors, CorsConfig, Csrf, HostAllowlist, RateLimit, RateLimitConfig,
+        RequestId, RequestIdValue, SameSite, SecurityPolicy, Session, SessionConfig,
+        SessionMiddleware, SessionStore, TrustedProxies,
+    };
     pub use phoenix_validation::{
         BoxedRule, Rule, RuleContext, ValidationError, ValidationErrors, Validator, custom_rule,
         min_length, required, rules, string,
