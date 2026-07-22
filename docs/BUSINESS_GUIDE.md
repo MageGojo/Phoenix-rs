@@ -1,0 +1,749 @@
+# Phoenix 业务开发指南
+
+本文只说明如何使用 Phoenix 编写网站业务代码。示例均来自仓库中的
+`examples/blog`，并且只使用当前已经实现的公开接口。
+
+当前可以编写：
+
+- 应用配置与服务启动；
+- GET、POST、PUT、PATCH、DELETE 路由；
+- 路径参数、命名路由和路由分组；
+- 异步控制器；
+- JSON 请求、字段验证和 JSON 响应；
+- 全局、单路由和路由组中间件；
+- 业务单元测试和功能测试。
+
+React 页面、Rust/TypeScript 自动字段契约、SPA、SSR、Islands、Toasty 模型和数据库迁移尚未提供可用 API，因此本文不提供这些功能的伪代码。
+
+## 1. 推荐的业务目录
+
+当前示例采用下面的目录组织业务代码：
+
+```text
+examples/blog/
+├── app/
+│   ├── controllers/mod.rs   # 控制器
+│   ├── middleware/mod.rs    # 业务中间件
+│   └── requests/mod.rs      # 请求验证规则
+├── routes/
+│   └── web.rs               # Web 路由
+├── src/
+│   ├── lib.rs               # 组装应用
+│   └── main.rs              # 启动服务
+└── tests/
+    ├── feature/             # HTTP 业务流程测试
+    └── unit/                # 验证规则等单元测试
+```
+
+业务代码通常从 `phoenix::prelude` 导入常用类型：
+
+```rust
+use phoenix::prelude::{
+    Application, IntoResponse, Json, Request, Response, Routes, StatusCode,
+};
+```
+
+## 2. 创建应用
+
+在 `src/lib.rs` 中集中创建应用，并设置请求限制和超时：
+
+```rust
+use std::time::Duration;
+
+use phoenix::prelude::{Application, RouteBuildError, Routes};
+
+#[path = "../app/controllers/mod.rs"]
+pub mod controllers;
+#[path = "../app/middleware/mod.rs"]
+pub mod middleware;
+#[path = "../app/requests/mod.rs"]
+pub mod requests;
+#[path = "../routes/web.rs"]
+mod web_routes;
+
+pub fn routes() -> Routes {
+    web_routes::routes()
+}
+
+pub fn application() -> Result<Application, RouteBuildError> {
+    Application::new(routes()).map(|application| {
+        application
+            .max_body_size(64 * 1024)
+            .header_read_timeout(Duration::from_secs(5))
+            .body_read_timeout(Duration::from_secs(10))
+            .graceful_shutdown_timeout(Duration::from_secs(5))
+    })
+}
+```
+
+这些限制应根据业务调整：
+
+- `max_body_size`：单次请求 body 的最大字节数；
+- `header_read_timeout`：等待客户端发送完整请求头的最长时间；
+- `body_read_timeout`：读取请求 body 的最长时间；
+- `graceful_shutdown_timeout`：停止服务时等待现有请求完成的最长时间。
+
+不要在公开服务中移除这些限制。文件上传等大请求应使用单独且明确的限制策略。
+
+## 3. 启动服务
+
+在 `src/main.rs` 中绑定监听地址并处理 Ctrl+C：
+
+```rust
+use std::error::Error;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let address = std::env::var("APP_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
+
+    let server = phoenix_blog_example::application()?
+        .bind(&address)
+        .await?;
+
+    println!("Listening on http://{}", server.local_addr());
+
+    server
+        .run_with_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+
+    Ok(())
+}
+```
+
+运行示例：
+
+```bash
+cargo run -p phoenix-blog-example
+```
+
+也可以通过环境变量修改监听地址：
+
+```bash
+APP_ADDR=0.0.0.0:8080 cargo run -p phoenix-blog-example
+```
+
+## 4. 定义路由
+
+控制器方法可以直接注册为路由处理器：
+
+```rust
+use phoenix::prelude::Routes;
+
+use crate::controllers::{RegistrationController, UserController};
+
+pub fn routes() -> Routes {
+    Routes::new()
+        .get("/users/{user}", UserController::show)
+        .name("users.show")
+        .post("/register", RegistrationController::store)
+        .name("register.store")
+}
+```
+
+当前支持：
+
+```rust
+Routes::new()
+    .get("/articles", ArticleController::index)
+    .post("/articles", ArticleController::store)
+    .put("/articles/{article}", ArticleController::replace)
+    .patch("/articles/{article}", ArticleController::update)
+    .delete("/articles/{article}", ArticleController::destroy)
+```
+
+框架会自动处理以下情况：
+
+- GET 路由自动支持 HEAD，并返回空 body；
+- OPTIONS 返回该路径允许的方法；
+- 路径不存在时返回 404；
+- 路径存在但请求方法不匹配时返回 405 和 `Allow` 响应头。
+
+### 路径参数
+
+使用 `{参数名}` 声明动态路径：
+
+```rust
+.get("/users/{user}", UserController::show)
+```
+
+在控制器中读取：
+
+```rust
+pub async fn show(request: Request) -> Response {
+    let user = request.param("user").unwrap_or("unknown");
+    Json(serde_json::json!({ "user": user })).into_response()
+}
+```
+
+参数会进行严格的 URL 解码。例如 `/users/Ada%20Lovelace` 中的 `user` 是
+`Ada Lovelace`。无效编码会被拒绝，不应由业务控制器自行猜测或修复。
+
+### 命名路由和 URL 生成
+
+路由名用于稳定地生成 URL，业务代码不必重复拼接路径：
+
+```rust
+let router = routes().build()?;
+
+let url = router.url(
+    "users.show",
+    &[("user", "Ada Lovelace")],
+)?;
+
+assert_eq!(url, "/users/Ada%20Lovelace");
+```
+
+缺少路径参数或使用不存在的路由名时，`url` 会返回错误。重复的路由名会在构建路由时返回错误。
+
+### 路由分组
+
+相关业务路由可以共享路径前缀、名称前缀和中间件：
+
+```rust
+use phoenix::prelude::{RouteGroup, Routes};
+
+Routes::new().group(
+    RouteGroup::new()
+        .prefix("/admin")
+        .name("admin.")
+        .middleware(RequireExampleToken),
+    |routes| {
+        routes
+            .get("/dashboard", AdminController::dashboard)
+            .name("dashboard")
+    },
+)
+```
+
+最终路径是 `/admin/dashboard`，完整路由名是 `admin.dashboard`。
+
+## 5. 编写控制器
+
+控制器可以使用结构体组织，每个动作是接收 `Request` 的异步关联函数：
+
+```rust
+use phoenix::prelude::{IntoResponse, Json, Request, Response};
+use serde_json::json;
+
+pub struct UserController;
+
+impl UserController {
+    pub async fn show(request: Request) -> Response {
+        let user = request.param("user").unwrap_or("unknown");
+
+        Json(json!({
+            "user": user,
+            "route": request.route_name(),
+        }))
+        .into_response()
+    }
+}
+```
+
+控制器目前可以读取：
+
+```rust
+let method = request.method();
+let uri = request.uri();
+let headers = request.headers();
+let raw_body = request.body();
+let user = request.param("user");
+let route_name = request.route_name();
+```
+
+请求头读取示例：
+
+```rust
+let request_id = request
+    .headers()
+    .get("x-request-id")
+    .and_then(|value| value.to_str().ok());
+```
+
+不要在 panic 信息或公开响应中写入密码、令牌、数据库连接信息等敏感数据。
+
+## 6. 接收 JSON 请求
+
+`request.json()` 会把 body 反序列化为指定 Rust 类型。当前的验证器直接处理
+`serde_json::Value`：
+
+```rust
+use serde_json::Value;
+
+let payload: Value = match request.json() {
+    Ok(payload) => payload,
+    Err(rejection) => {
+        return (
+            rejection.status(),
+            Json(serde_json::json!({
+                "message": rejection.to_string(),
+            })),
+        )
+            .into_response();
+    }
+};
+```
+
+客户端必须发送下列 JSON Content-Type 之一：
+
+```text
+application/json
+application/json; charset=utf-8
+application/vnd.example+json
+```
+
+错误映射如下：
+
+| 情况 | 状态码 |
+| --- | ---: |
+| 缺少 Content-Type | 415 Unsupported Media Type |
+| Content-Type 不是 JSON | 415 Unsupported Media Type |
+| JSON 格式错误或无法反序列化 | 400 Bad Request |
+
+业务代码应先处理 JSON 解析错误，再进行字段验证。
+
+## 7. 验证业务字段
+
+将验证规则放在 `app/requests`，避免控制器同时承担输入规则和业务流程：
+
+```rust
+use phoenix::prelude::{Validator, min_length, required, rules, string};
+use serde_json::Value;
+
+pub fn registration_validator(data: &Value) -> Validator<'_> {
+    Validator::new(data)
+        .field("user", rules![required(), string()])
+        .field("password", rules![required(), string(), min_length(8)])
+}
+```
+
+在控制器中执行验证并返回 422：
+
+```rust
+match registration_validator(&payload).validate() {
+    Ok(()) => (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "created": true })),
+    )
+        .into_response(),
+    Err(errors) => (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(serde_json::json!({ "errors": errors.fields() })),
+    )
+        .into_response(),
+}
+```
+
+一次验证会收集所有字段错误。错误 JSON 按字段分组，每项包含规则名和消息：
+
+```json
+{
+  "errors": {
+    "password": [
+      {
+        "rule": "min_length",
+        "message": "The password field must be at least 8 characters."
+      }
+    ]
+  }
+}
+```
+
+服务端验证是最终依据。即使前端已经验证，也必须保留服务端验证。
+
+### 使用 trait 编写可复用规则
+
+```rust
+use std::borrow::Cow;
+
+use phoenix::prelude::{Rule, RuleContext};
+use serde_json::Value;
+
+pub struct NotReservedUser;
+
+impl Rule for NotReservedUser {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("not_reserved")
+    }
+
+    fn validate(&self, context: RuleContext<'_>) -> Result<(), String> {
+        let reserved = context
+            .value
+            .and_then(Value::as_str)
+            .is_some_and(|user| {
+                ["admin", "root"]
+                    .contains(&user.to_ascii_lowercase().as_str())
+            });
+
+        if reserved {
+            Err("The user field contains a reserved name.".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+}
+```
+
+然后像内置规则一样使用：
+
+```rust
+.field(
+    "user",
+    rules![required(), string(), NotReservedUser],
+)
+```
+
+### 使用闭包编写一次性规则
+
+闭包规则可以同时读取当前字段和完整请求数据，适合确认密码等跨字段验证：
+
+```rust
+use phoenix::prelude::{custom_rule, required, rules, Validator};
+
+let confirmed = custom_rule("confirmed", |context| {
+    let confirmation = context.data.get("password_confirmation");
+
+    if context.value == confirmation {
+        Ok(())
+    } else {
+        Err(format!(
+            "The {} confirmation does not match.",
+            context.field,
+        ))
+    }
+});
+
+let validator = Validator::new(&payload)
+    .field("password", rules![required(), confirmed]);
+```
+
+## 8. 编写中间件
+
+中间件适合处理鉴权、请求上下文和统一响应头。可复用中间件实现
+`Middleware`：
+
+```rust
+use phoenix::{
+    http::{BoxFuture, HeaderName, HeaderValue},
+    prelude::{Middleware, Next, Request, Response},
+};
+
+pub struct PoweredByPhoenix;
+
+impl Middleware for PoweredByPhoenix {
+    fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+        Box::pin(async move {
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                HeaderName::from_static("x-powered-by"),
+                HeaderValue::from_static("Phoenix"),
+            );
+            response
+        })
+    }
+}
+```
+
+调用 `next.run(request).await` 才会继续执行后续中间件和控制器。鉴权失败时可以直接返回响应：
+
+```rust
+impl Middleware for RequireExampleToken {
+    fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+        Box::pin(async move {
+            let authorized = request
+                .headers()
+                .get("x-example-token")
+                .is_some_and(|value| value == "secret");
+
+            if authorized {
+                next.run(request).await
+            } else {
+                Response::text("Unauthorized")
+                    .with_status(StatusCode::UNAUTHORIZED)
+            }
+        })
+    }
+}
+```
+
+示例中的硬编码令牌只用于演示。真实业务不能硬编码凭证，也不能把这种检查当作完整的登录或会话方案。
+
+### 挂载中间件
+
+全局中间件作用于所有路由：
+
+```rust
+Routes::new()
+    .with_middleware(SecurityHeaders)
+    .with_middleware(PoweredByPhoenix)
+```
+
+单路由中间件只作用于紧邻的那条路由：
+
+```rust
+Routes::new()
+    .get("/profile", ProfileController::show)
+    .middleware(RequireLogin)
+```
+
+路由组中间件作用于组内全部路由：
+
+```rust
+RouteGroup::new()
+    .prefix("/admin")
+    .middleware(RequireAdmin)
+```
+
+一次性中间件可以使用 `middleware_fn`：
+
+```rust
+use phoenix::prelude::{middleware_fn, Next, Request};
+
+Routes::new()
+    .get("/reports", ReportController::index)
+    .middleware(middleware_fn(|request: Request, next: Next| async move {
+        let mut response = next.run(request).await;
+        response.headers_mut().insert(
+            "x-report-page",
+            phoenix::http::HeaderValue::from_static("true"),
+        );
+        response
+    }))
+```
+
+建议为所有公开路由启用 `SecurityHeaders`。它提供基础安全响应头，但不会代替业务所需的身份认证和授权。
+
+### 在中间件和控制器之间传递类型化数据
+
+中间件可以把已经认证的用户或权限上下文放入请求 extensions：
+
+```rust
+#[derive(Clone, Copy, Debug)]
+pub struct AuthorizedAdmin;
+
+impl Middleware for RequireExampleToken {
+    fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
+        Box::pin(async move {
+            let authorized = request
+                .headers()
+                .get("x-example-token")
+                .is_some_and(|value| value == "secret");
+
+            if !authorized {
+                return Response::text("Unauthorized")
+                    .with_status(StatusCode::UNAUTHORIZED);
+            }
+
+            request.extensions_mut().insert(AuthorizedAdmin);
+            next.run(request).await
+        })
+    }
+}
+```
+
+控制器按类型读取，不需要使用易冲突的字符串键：
+
+```rust
+pub async fn dashboard(request: Request) -> Response {
+    if request.extensions().get::<AuthorizedAdmin>().is_none() {
+        return Response::text("Missing authorization context")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    Response::text("admin dashboard")
+}
+```
+
+不同上下文应定义不同 Rust 类型。即使两个中间件的数据字段同名，类型不同也不会互相覆盖。
+
+## 9. 返回响应
+
+### 返回文本
+
+返回值实现 `IntoResponse` 时，控制器可以直接返回它：
+
+```rust
+pub async fn index(_request: Request) -> &'static str {
+    "Hello, Phoenix"
+}
+```
+
+需要明确状态码时使用 `Response`：
+
+```rust
+Response::text("Unauthorized")
+    .with_status(StatusCode::UNAUTHORIZED)
+```
+
+### 返回 JSON
+
+```rust
+Json(serde_json::json!({
+    "id": 42,
+    "name": "Ada",
+}))
+.into_response()
+```
+
+### 同时设置状态码和 JSON
+
+```rust
+(
+    StatusCode::CREATED,
+    Json(serde_json::json!({ "created": true })),
+)
+    .into_response()
+```
+
+### 添加响应头
+
+静态或已经验证的响应头可以使用 `with_header`：
+
+```rust
+let response = Response::text("created")
+    .with_status(StatusCode::CREATED)
+    .with_header("location", "/articles/42")?;
+```
+
+动态响应头名称和值可能无效，因此 `with_header` 返回 `Result`，业务代码必须处理错误。
+
+## 10. 编写业务测试
+
+业务测试可以直接调用应用，不需要占用真实端口。
+
+### 功能测试
+
+下面的测试模拟带 JSON body 的注册请求：
+
+```rust
+use phoenix::{
+    http::{Bytes, HeaderMap, HeaderValue, header},
+    prelude::{Method, Request, StatusCode, Uri},
+};
+
+#[tokio::test]
+async fn registration_accepts_valid_data() {
+    let application = phoenix_blog_example::application()
+        .expect("routes should build");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let request = Request::from_parts(
+        Method::POST,
+        Uri::from_static("/register"),
+        headers,
+        Bytes::from_static(
+            br#"{"user":"phoenix-user","password":"correct-horse"}"#,
+        ),
+    );
+
+    let response = application.handle(request).await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+```
+
+读取并断言 JSON 响应：
+
+```rust
+let json: serde_json::Value = serde_json::from_slice(response.body())
+    .expect("response should be JSON");
+
+assert_eq!(json["errors"]["user"][0]["rule"], "not_reserved");
+```
+
+### 验证规则单元测试
+
+```rust
+use serde_json::json;
+
+#[test]
+fn reserved_user_is_rejected() {
+    let payload = json!({
+        "user": "admin",
+        "password": "correct-horse"
+    });
+
+    let errors = registration_validator(&payload)
+        .validate()
+        .expect_err("reserved user should fail");
+
+    assert_eq!(errors.get("user").unwrap()[0].rule, "not_reserved");
+}
+```
+
+运行示例应用的全部业务测试：
+
+```bash
+cargo test -p phoenix-blog-example
+```
+
+## 11. 完整的注册控制器
+
+下面是一个包含 JSON 解析、验证、错误响应和成功响应的完整业务动作：
+
+```rust
+use phoenix::prelude::{IntoResponse, Json, Request, Response, StatusCode};
+use serde_json::{Value, json};
+
+use crate::requests::registration_validator;
+
+pub struct RegistrationController;
+
+impl RegistrationController {
+    pub async fn store(request: Request) -> Response {
+        let payload: Value = match request.json() {
+            Ok(payload) => payload,
+            Err(rejection) => {
+                return (
+                    rejection.status(),
+                    Json(json!({ "message": rejection.to_string() })),
+                )
+                    .into_response();
+            }
+        };
+
+        match registration_validator(&payload).validate() {
+            Ok(()) => (
+                StatusCode::CREATED,
+                Json(json!({ "created": true })),
+            )
+                .into_response(),
+            Err(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "errors": errors.fields() })),
+            )
+                .into_response(),
+        }
+    }
+}
+```
+
+对应路由：
+
+```rust
+Routes::new()
+    .post("/register", RegistrationController::store)
+    .name("register.store")
+```
+
+请求示例：
+
+```bash
+curl -i http://127.0.0.1:3000/register \
+  -H 'content-type: application/json' \
+  --data '{"user":"phoenix-user","password":"correct-horse"}'
+```
+
+## 12. 当前上线前必须补充的能力
+
+业务应用目前仍需自行处理 TLS 终止，并且框架尚未提供会话、CSRF、可信代理、限流、CORS、CSP 和 HSTS。涉及登录、浏览器 Cookie、跨域访问或公网部署时，不要假设这些能力已经由 Phoenix 自动完成。
+
+当前版本适合继续开发和验证业务 API，不应直接当作完整的生产安全栈。
