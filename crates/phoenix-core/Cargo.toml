@@ -15,11 +15,16 @@ hyper.workspace = true
 hyper-util.workspace = true
 phoenix-http = { path = "../phoenix-http" }
 phoenix-routing = { path = "../phoenix-routing" }
+rustls.workspace = true
+rustls-pemfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["client"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [lints]
 workspace = true

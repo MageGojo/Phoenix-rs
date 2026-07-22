@@ -1,4 +1,7 @@
-use std::{convert::Infallible, future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible, future::Future, io::Cursor, net::SocketAddr, path::Path, sync::Arc,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use futures_util::TryStreamExt;
@@ -14,19 +17,27 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto,
 };
-use phoenix_http::{Middleware, Request, Response, ResponseBody, StateMiddleware};
+use phoenix_http::{
+    ConnectionInfo, Middleware, Request, Response, ResponseBody, StateMiddleware, TransportScheme,
+};
 use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
+use rustls::ServerConfig;
 use thiserror::Error;
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
+use tokio_rustls::TlsAcceptor;
 
 const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const ALPN_HTTP_2: &[u8] = b"h2";
+const ALPN_HTTP_1_1: &[u8] = b"http/1.1";
 
 /// HTTP protocol versions accepted by the built-in TCP server.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -38,6 +49,118 @@ pub enum HttpProtocol {
     Http1Only,
     /// Accept only HTTP/2 connections.
     Http2Only,
+}
+
+/// Rustls server configuration with Phoenix ALPN and handshake policy.
+#[derive(Clone)]
+pub struct TlsConfig {
+    server_config: Arc<ServerConfig>,
+    handshake_timeout: Duration,
+}
+
+impl TlsConfig {
+    /// Load a certificate chain and private key from PEM bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unreadable PEM, missing material, or an invalid key/certificate pair.
+    pub fn from_pem(
+        certificate_pem: &[u8],
+        private_key_pem: &[u8],
+    ) -> Result<Self, TlsConfigError> {
+        let certificates = rustls_pemfile::certs(&mut Cursor::new(certificate_pem))
+            .collect::<Result<Vec<_>, _>>()?;
+        if certificates.is_empty() {
+            return Err(TlsConfigError::MissingCertificate);
+        }
+        let private_key = rustls_pemfile::private_key(&mut Cursor::new(private_key_pem))?
+            .ok_or(TlsConfigError::MissingPrivateKey)?;
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certificates, private_key)?;
+        Ok(Self::from_server_config(server_config))
+    }
+
+    /// Load PEM material from local files during application startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either file cannot be read or parsed.
+    pub fn from_files(
+        certificate_path: impl AsRef<Path>,
+        private_key_path: impl AsRef<Path>,
+    ) -> Result<Self, TlsConfigError> {
+        let certificate_pem = std::fs::read(certificate_path)?;
+        let private_key_pem = std::fs::read(private_key_path)?;
+        Self::from_pem(&certificate_pem, &private_key_pem)
+    }
+
+    /// Wrap an advanced rustls configuration. Phoenix supplies HTTP ALPN defaults when absent.
+    #[must_use]
+    pub fn from_server_config(mut server_config: ServerConfig) -> Self {
+        if server_config.alpn_protocols.is_empty() {
+            server_config.alpn_protocols = vec![ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()];
+        }
+        Self {
+            server_config: Arc::new(server_config),
+            handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+        }
+    }
+
+    /// Set a hard deadline for completing the TLS handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the timeout is zero.
+    pub fn handshake_timeout(mut self, timeout: Duration) -> Result<Self, TlsConfigError> {
+        if timeout.is_zero() {
+            return Err(TlsConfigError::InvalidHandshakeTimeout);
+        }
+        self.handshake_timeout = timeout;
+        Ok(self)
+    }
+
+    #[must_use]
+    pub fn alpn_protocols(&self) -> &[Vec<u8>] {
+        &self.server_config.alpn_protocols
+    }
+
+    fn for_http_protocol(&self, protocol: HttpProtocol) -> Self {
+        let mut server_config = (*self.server_config).clone();
+        server_config.alpn_protocols = match protocol {
+            HttpProtocol::Auto => vec![ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()],
+            HttpProtocol::Http1Only => vec![ALPN_HTTP_1_1.to_vec()],
+            HttpProtocol::Http2Only => vec![ALPN_HTTP_2.to_vec()],
+        };
+        Self {
+            server_config: Arc::new(server_config),
+            handshake_timeout: self.handshake_timeout,
+        }
+    }
+}
+
+impl std::fmt::Debug for TlsConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TlsConfig")
+            .field("alpn_protocols", &self.server_config.alpn_protocols)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TlsConfigError {
+    #[error("TLS PEM I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("TLS certificate PEM does not contain a certificate")]
+    MissingCertificate,
+    #[error("TLS private-key PEM does not contain a supported private key")]
+    MissingPrivateKey,
+    #[error("TLS certificate or private key is invalid: {0}")]
+    Rustls(#[from] rustls::Error),
+    #[error("TLS handshake timeout must be greater than zero")]
+    InvalidHandshakeTimeout,
 }
 
 #[derive(Clone)]
@@ -126,12 +249,39 @@ impl Application {
     where
         A: ToSocketAddrs,
     {
+        self.bind_with_transport(address, ServerTransport::Plain)
+            .await
+    }
+
+    /// Bind an HTTPS listener using rustls and ALPN.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the address cannot be resolved or bound.
+    pub async fn bind_tls<A>(self, address: A, tls: TlsConfig) -> Result<Server, ServerError>
+    where
+        A: ToSocketAddrs,
+    {
+        let tls = tls.for_http_protocol(self.http_protocol);
+        self.bind_with_transport(address, ServerTransport::Tls(tls))
+            .await
+    }
+
+    async fn bind_with_transport<A>(
+        self,
+        address: A,
+        transport: ServerTransport,
+    ) -> Result<Server, ServerError>
+    where
+        A: ToSocketAddrs,
+    {
         let listener = TcpListener::bind(address).await?;
         let local_addr = listener.local_addr()?;
         Ok(Server {
             application: Arc::new(self),
             listener,
             local_addr,
+            transport,
         })
     }
 
@@ -145,21 +295,37 @@ impl Application {
         A: ToSocketAddrs,
     {
         let server = self.bind(address).await?;
-        let local_addr = server.local_addr();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            server
-                .run_with_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-        });
+        Ok(spawn_server(server))
+    }
 
-        Ok(ServerHandle {
-            local_addr,
-            shutdown_tx: Some(shutdown_tx),
-            task,
-        })
+    /// Bind and run an HTTPS application in a Tokio task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the listener cannot be created.
+    pub async fn spawn_tls<A>(self, address: A, tls: TlsConfig) -> Result<ServerHandle, ServerError>
+    where
+        A: ToSocketAddrs,
+    {
+        let server = self.bind_tls(address, tls).await?;
+        Ok(spawn_server(server))
+    }
+}
+
+fn spawn_server(server: Server) -> ServerHandle {
+    let local_addr = server.local_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        server
+            .run_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    ServerHandle {
+        local_addr,
+        shutdown_tx: Some(shutdown_tx),
+        task,
     }
 }
 
@@ -292,6 +458,13 @@ pub struct Server {
     application: Arc<Application>,
     listener: TcpListener,
     local_addr: SocketAddr,
+    transport: ServerTransport,
+}
+
+#[derive(Clone)]
+enum ServerTransport {
+    Plain,
+    Tls(TlsConfig),
 }
 
 impl Server {
@@ -332,8 +505,9 @@ impl Server {
                     let (stream, _) = accepted?;
                     let application = Arc::clone(&self.application);
                     let connection_shutdown = connection_shutdown_tx.subscribe();
+                    let transport = self.transport.clone();
                     connections.spawn(async move {
-                        serve_connection(stream, application, connection_shutdown).await;
+                        serve_transport(stream, application, connection_shutdown, transport).await;
                     });
                 }
             }
@@ -349,6 +523,42 @@ impl Server {
             while connections.join_next().await.is_some() {}
         }
         Ok(())
+    }
+}
+
+async fn serve_transport(
+    stream: TcpStream,
+    application: Arc<Application>,
+    shutdown: watch::Receiver<bool>,
+    transport: ServerTransport,
+) {
+    let peer_addr = stream.peer_addr().ok();
+    match transport {
+        ServerTransport::Plain => {
+            let connection_info = ConnectionInfo::new(peer_addr, TransportScheme::Http, None);
+            serve_connection(stream, application, shutdown, connection_info).await;
+        }
+        ServerTransport::Tls(config) => {
+            let acceptor = TlsAcceptor::from(Arc::clone(&config.server_config));
+            match tokio::time::timeout(config.handshake_timeout, acceptor.accept(stream)).await {
+                Ok(Ok(tls_stream)) => {
+                    let alpn = tls_stream
+                        .get_ref()
+                        .1
+                        .alpn_protocol()
+                        .map(|protocol| String::from_utf8_lossy(protocol).into_owned());
+                    let connection_info =
+                        ConnectionInfo::new(peer_addr, TransportScheme::Https, alpn);
+                    serve_connection(tls_stream, application, shutdown, connection_info).await;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(peer = ?peer_addr, error = %error, "TLS handshake failed");
+                }
+                Err(_) => {
+                    tracing::warn!(peer = ?peer_addr, "TLS handshake timed out");
+                }
+            }
+        }
     }
 }
 
@@ -378,17 +588,20 @@ impl ServerHandle {
     }
 }
 
-async fn serve_connection(
-    stream: TcpStream,
+async fn serve_connection<I>(
+    stream: I,
     application: Arc<Application>,
     mut shutdown: watch::Receiver<bool>,
-) {
-    let peer_addr = stream.peer_addr().ok();
+    connection_info: ConnectionInfo,
+) where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let header_read_timeout = application.header_read_timeout;
     let http_protocol = application.http_protocol;
     let service = service_fn(move |request| {
         let application = Arc::clone(&application);
-        async move { handle_hyper_request(application, request, peer_addr).await }
+        let connection_info = connection_info.clone();
+        async move { handle_hyper_request(application, request, connection_info).await }
     });
     let io = TokioIo::new(stream);
     let mut builder = auto::Builder::new(TokioExecutor::new());
@@ -418,7 +631,7 @@ async fn serve_connection(
 async fn handle_hyper_request(
     application: Arc<Application>,
     request: HyperRequest<Incoming>,
-    peer_addr: Option<SocketAddr>,
+    connection_info: ConnectionInfo,
 ) -> Result<HyperResponse<UnsyncBoxBody<Bytes, Infallible>>, Infallible> {
     let (parts, body) = request.into_parts();
     let body = tokio::time::timeout(
@@ -431,9 +644,10 @@ async fn handle_hyper_request(
         Ok(Ok(body)) => {
             let mut request =
                 Request::from_parts(parts.method, parts.uri, parts.headers, body.to_bytes());
-            if let Some(peer_addr) = peer_addr {
+            if let Some(peer_addr) = connection_info.peer_addr() {
                 request.extensions_mut().insert(peer_addr);
             }
+            request.extensions_mut().insert(connection_info);
             application.handle(request).await
         }
         Ok(Err(error)) if error.is::<LengthLimitError>() => {
@@ -530,8 +744,11 @@ mod tests {
     use hyper::client::conn::http2;
     use phoenix_http::{Method, State, typed};
     use phoenix_routing::ApplicationContext;
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
     use std::future::{Ready, ready};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_rustls::TlsConnector;
 
     fn streaming_handler(_request: Request) -> Ready<Response> {
         ready(Response::stream(stream::iter([
@@ -617,6 +834,87 @@ mod tests {
         assert!(sender.send_request(request).await.is_err());
         connection_task.await.unwrap().unwrap_err();
         server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tls_listener_negotiates_http2_with_alpn_and_exposes_secure_connection_info() {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let tls = TlsConfig::from_pem(
+            cert.pem().as_bytes(),
+            signing_key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            tls.alpn_protocols(),
+            &[ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()]
+        );
+        let server =
+            Application::new(Routes::new().get("/secure", |request: Request| async move {
+                let info = request.extensions().get::<ConnectionInfo>().unwrap();
+                format!(
+                    "{}:{}",
+                    info.scheme().as_str(),
+                    info.alpn_protocol().unwrap_or("missing")
+                )
+            }))
+            .unwrap()
+            .spawn_tls("127.0.0.1:0", tls)
+            .await
+            .unwrap();
+
+        let mut roots = RootCertStore::empty();
+        roots.add(cert.der().clone()).unwrap();
+        let mut client_config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        client_config.alpn_protocols = vec![ALPN_HTTP_2.to_vec()];
+        let connector = TlsConnector::from(Arc::new(client_config));
+        let stream = TcpStream::connect(server.local_addr()).await.unwrap();
+        let tls_stream = connector
+            .connect(ServerName::try_from("localhost").unwrap(), stream)
+            .await
+            .unwrap();
+        assert_eq!(tls_stream.get_ref().1.alpn_protocol(), Some(ALPN_HTTP_2));
+
+        let (mut sender, connection) =
+            http2::handshake::<_, _, Empty<Bytes>>(TokioExecutor::new(), TokioIo::new(tls_stream))
+                .await
+                .unwrap();
+        let connection_task = tokio::spawn(connection);
+        let request = HyperRequest::builder()
+            .uri("https://localhost/secure")
+            .body(Empty::new())
+            .unwrap();
+        let response = sender.send_request(request).await.unwrap();
+        assert_eq!(response.version(), http::Version::HTTP_2);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "https:h2"
+        );
+
+        drop(sender);
+        server.shutdown().await.unwrap();
+        connection_task.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn tls_configuration_rejects_missing_material_and_zero_deadlines() {
+        assert!(matches!(
+            TlsConfig::from_pem(b"", b""),
+            Err(TlsConfigError::MissingCertificate)
+        ));
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let tls = TlsConfig::from_pem(
+            cert.pem().as_bytes(),
+            signing_key.serialize_pem().as_bytes(),
+        )
+        .unwrap();
+        assert!(matches!(
+            tls.handshake_timeout(Duration::ZERO),
+            Err(TlsConfigError::InvalidHandshakeTimeout)
+        ));
     }
 
     #[derive(Clone)]

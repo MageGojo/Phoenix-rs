@@ -17,7 +17,7 @@ pub mod prelude {
     pub use phoenix_core::applications;
     pub use phoenix_core::{
         Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
-        MultiApplicationError, Server, ServerError, ServerHandle,
+        MultiApplicationError, Server, ServerError, ServerHandle, TlsConfig, TlsConfigError,
     };
     pub use phoenix_crypto::{
         Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, Jwt,
@@ -29,12 +29,12 @@ pub mod prelude {
         ResourceRoutes, mount_routes,
     };
     pub use phoenix_http::{
-        BoxFuture, ByteStream, Download, Form, FormRejection, FromMultipart, FromRequest, Handler,
-        Header, HeaderRejection, IntoResponse, Json, JsonRejection, Method, Middleware, Mime,
-        Multipart, MultipartData, MultipartField, MultipartRejection, Next, Path, PathRejection,
-        Query, QueryRejection, Redirect, Request, Response, ResponseBody, RouteManifest,
-        SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode, TypedHandler, Uri,
-        middleware_fn, typed,
+        BoxFuture, ByteStream, ConnectionInfo, Download, Form, FormRejection, FromMultipart,
+        FromRequest, Handler, Header, HeaderRejection, IntoResponse, Json, JsonRejection, Method,
+        Middleware, Mime, Multipart, MultipartData, MultipartField, MultipartRejection, Next, Path,
+        PathRejection, Query, QueryRejection, Redirect, Request, Response, ResponseBody,
+        RouteManifest, SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode,
+        TransportScheme, TypedHandler, Uri, middleware_fn, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
     pub use phoenix_routing::routes;
@@ -43,9 +43,10 @@ pub mod prelude {
         UrlGenerationError,
     };
     pub use phoenix_security::{
-        AccessLog, ClientIp, Cors, CorsConfig, Csrf, HostAllowlist, RateLimit, RateLimitConfig,
-        RequestId, RequestIdValue, SameSite, SecurityPolicy, Session, SessionConfig,
-        SessionMiddleware, SessionStore, TrustedProxies,
+        AccessLog, ClientIp, Cors, CorsConfig, Csrf, EffectiveScheme, HostAllowlist, HttpsRedirect,
+        HttpsRedirectError, RateLimit, RateLimitConfig, RequestId, RequestIdValue, SameSite,
+        SecurityPolicy, Session, SessionConfig, SessionMiddleware, SessionStore, TrustedProxies,
+        effective_scheme,
     };
     pub use phoenix_validation::{
         BoxedRule, Rule, RuleContext, Validate, Validated, ValidatedRejection, ValidationError,

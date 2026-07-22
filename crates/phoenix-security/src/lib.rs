@@ -7,9 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use http::uri::Authority;
 use phoenix_http::{
-    BoxFuture, Bytes, HeaderMap, HeaderName, HeaderValue, Method, Middleware, Next, Request,
-    Response, StatusCode, header,
+    BoxFuture, Bytes, ConnectionInfo, HeaderMap, HeaderName, HeaderValue, Method, Middleware, Next,
+    Request, Response, StatusCode, TransportScheme, header,
 };
 use serde_json::Value;
 
@@ -41,6 +42,24 @@ impl Middleware for RequestId {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ClientIp(pub IpAddr);
 
+/// Request scheme after direct TLS and trusted forwarding policy are applied.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct EffectiveScheme(pub TransportScheme);
+
+/// Resolve the effective request scheme without trusting raw forwarding headers.
+#[must_use]
+pub fn effective_scheme(request: &Request) -> TransportScheme {
+    request.extensions().get::<EffectiveScheme>().map_or_else(
+        || {
+            request
+                .extensions()
+                .get::<ConnectionInfo>()
+                .map_or(TransportScheme::Http, ConnectionInfo::scheme)
+        },
+        |scheme| scheme.0,
+    )
+}
+
 /// Resolves forwarding headers only when the direct peer is explicitly trusted.
 #[derive(Clone, Debug, Default)]
 pub struct TrustedProxies {
@@ -60,16 +79,37 @@ impl Middleware for TrustedProxies {
     fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
         let trusted = Arc::clone(&self.trusted);
         Box::pin(async move {
+            let direct_scheme = effective_scheme(&request);
+            let mut scheme = direct_scheme;
             if let Some(peer) = request.extensions().get::<SocketAddr>().copied() {
                 let client = if trusted.contains(&peer.ip()) {
+                    scheme = forwarded_scheme(request.headers()).unwrap_or(direct_scheme);
                     forwarded_client(request.headers(), peer.ip(), &trusted)
                 } else {
                     peer.ip()
                 };
                 request.extensions_mut().insert(ClientIp(client));
             }
+            request.extensions_mut().insert(EffectiveScheme(scheme));
             next.run(request).await
         })
+    }
+}
+
+fn forwarded_scheme(headers: &HeaderMap) -> Option<TransportScheme> {
+    let value = headers
+        .get("x-forwarded-proto")?
+        .to_str()
+        .ok()?
+        .rsplit(',')
+        .next()?
+        .trim();
+    if value.eq_ignore_ascii_case("https") {
+        Some(TransportScheme::Https)
+    } else if value.eq_ignore_ascii_case("http") {
+        Some(TransportScheme::Http)
+    } else {
+        None
     }
 }
 
@@ -93,6 +133,73 @@ fn forwarded_client(headers: &HeaderMap, peer: IpAddr, trusted: &HashSet<IpAddr>
     }
     client
 }
+
+/// Redirect cleartext requests to a configured canonical HTTPS authority.
+#[derive(Clone, Debug)]
+pub struct HttpsRedirect {
+    authority: Authority,
+    status: StatusCode,
+}
+
+impl HttpsRedirect {
+    /// Create a permanent (308) redirect without trusting the request Host header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured authority is invalid.
+    pub fn new(authority: impl AsRef<str>) -> Result<Self, HttpsRedirectError> {
+        let authority = authority
+            .as_ref()
+            .parse::<Authority>()
+            .map_err(|_| HttpsRedirectError)?;
+        Ok(Self {
+            authority,
+            status: StatusCode::PERMANENT_REDIRECT,
+        })
+    }
+
+    /// Use a temporary 307 redirect while preserving the request method and body semantics.
+    #[must_use]
+    pub const fn temporary(mut self) -> Self {
+        self.status = StatusCode::TEMPORARY_REDIRECT;
+        self
+    }
+}
+
+impl Middleware for HttpsRedirect {
+    fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+        let authority = self.authority.clone();
+        let status = self.status;
+        Box::pin(async move {
+            if effective_scheme(&request).is_secure() {
+                return next.run(request).await;
+            }
+            let path_and_query = request
+                .uri()
+                .path_and_query()
+                .map_or("/", http::uri::PathAndQuery::as_str);
+            let location = format!("https://{authority}{path_and_query}");
+            let Ok(location) = HeaderValue::from_str(&location) else {
+                return Response::text("Invalid HTTPS redirect")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            let mut response = Response::new(status, Bytes::new());
+            response.headers_mut().insert(header::LOCATION, location);
+            response
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HttpsRedirectError;
+
+impl std::fmt::Display for HttpsRedirectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("invalid canonical HTTPS authority")
+    }
+}
+
+impl std::error::Error for HttpsRedirectError {}
 
 /// Rejects requests whose HTTP Host is not explicitly allowed.
 #[derive(Clone, Debug)]
@@ -682,6 +789,7 @@ impl Middleware for SecurityPolicy {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
         let policy = self.clone();
         Box::pin(async move {
+            let secure = effective_scheme(&request).is_secure();
             let mut response = next.run(request).await;
             insert_default(response.headers_mut(), "x-content-type-options", "nosniff");
             insert_default(response.headers_mut(), "x-frame-options", "DENY");
@@ -700,7 +808,7 @@ impl Middleware for SecurityPolicy {
                 "content-security-policy",
                 &policy.content_security_policy,
             );
-            if let Some(max_age) = policy.hsts {
+            if secure && let Some(max_age) = policy.hsts {
                 let mut value = format!("max-age={}", max_age.as_secs());
                 if policy.hsts_include_subdomains {
                     value.push_str("; includeSubDomains");
@@ -931,6 +1039,11 @@ mod tests {
         first
             .extensions_mut()
             .insert(ClientIp("127.0.0.1".parse().unwrap()));
+        first.extensions_mut().insert(ConnectionInfo::new(
+            None,
+            TransportScheme::Https,
+            Some("h2".to_owned()),
+        ));
         let response = handle(&router, first).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key("content-security-policy"));
@@ -992,6 +1105,68 @@ mod tests {
             handle(&router, disallowed_method).await.status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[tokio::test]
+    async fn redirects_only_effective_http_and_trusts_forwarded_proto_from_known_peers() {
+        let proxy: IpAddr = "10.0.0.2".parse().unwrap();
+        let router = Routes::new()
+            .get("/account", |_request: Request| async { "secure" })
+            .with_middleware(TrustedProxies::new([proxy]))
+            .with_middleware(HttpsRedirect::new("app.invalid").unwrap())
+            .build()
+            .unwrap();
+
+        let mut spoofed = request(Method::GET, "/account?tab=security");
+        spoofed
+            .extensions_mut()
+            .insert("203.0.113.9:1234".parse::<SocketAddr>().unwrap());
+        spoofed
+            .headers_mut()
+            .insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let response = handle(&router, spoofed).await;
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "https://app.invalid/account?tab=security"
+        );
+
+        let mut forwarded = request(Method::GET, "/account");
+        forwarded
+            .extensions_mut()
+            .insert(SocketAddr::new(proxy, 443));
+        forwarded
+            .headers_mut()
+            .insert("x-forwarded-proto", HeaderValue::from_static("http, https"));
+        assert_eq!(handle(&router, forwarded).await.body(), "secure");
+
+        let mut direct_tls = request(Method::GET, "/account");
+        direct_tls.extensions_mut().insert(ConnectionInfo::new(
+            None,
+            TransportScheme::Https,
+            Some("http/1.1".to_owned()),
+        ));
+        assert_eq!(handle(&router, direct_tls).await.body(), "secure");
+
+        assert!(HttpsRedirect::new("https://app.invalid/path").is_err());
+    }
+
+    #[tokio::test]
+    async fn hsts_is_emitted_only_for_effective_https() {
+        let router = Routes::new()
+            .get("/", |_request: Request| async { "ok" })
+            .with_middleware(SecurityPolicy::default())
+            .build()
+            .unwrap();
+        let clear = handle(&router, request(Method::GET, "/")).await;
+        assert!(!clear.headers().contains_key("strict-transport-security"));
+
+        let mut secure = request(Method::GET, "/");
+        secure
+            .extensions_mut()
+            .insert(EffectiveScheme(TransportScheme::Https));
+        let secure = handle(&router, secure).await;
+        assert!(secure.headers().contains_key("strict-transport-security"));
     }
 
     #[tokio::test]

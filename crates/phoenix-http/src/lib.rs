@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     future::Future,
+    net::SocketAddr,
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::Arc,
@@ -16,6 +17,72 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+/// Transport scheme established by the socket or a trusted proxy layer.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum TransportScheme {
+    #[default]
+    Http,
+    Https,
+}
+
+impl TransportScheme {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_secure(self) -> bool {
+        matches!(self, Self::Https)
+    }
+}
+
+/// Connection metadata populated before Phoenix middleware executes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectionInfo {
+    peer_addr: Option<SocketAddr>,
+    scheme: TransportScheme,
+    alpn_protocol: Option<String>,
+}
+
+impl ConnectionInfo {
+    #[must_use]
+    pub const fn new(
+        peer_addr: Option<SocketAddr>,
+        scheme: TransportScheme,
+        alpn_protocol: Option<String>,
+    ) -> Self {
+        Self {
+            peer_addr,
+            scheme,
+            alpn_protocol,
+        }
+    }
+
+    #[must_use]
+    pub const fn peer_addr(&self) -> Option<SocketAddr> {
+        self.peer_addr
+    }
+
+    #[must_use]
+    pub const fn scheme(&self) -> TransportScheme {
+        self.scheme
+    }
+
+    #[must_use]
+    pub fn alpn_protocol(&self) -> Option<&str> {
+        self.alpn_protocol.as_deref()
+    }
+
+    #[must_use]
+    pub const fn is_secure(&self) -> bool {
+        self.scheme.is_secure()
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct RouteManifest(Arc<HashMap<String, String>>);
