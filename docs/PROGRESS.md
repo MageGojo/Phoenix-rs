@@ -200,6 +200,14 @@
 - 两个宏只展开为已经验证的 builder API；动态组装继续使用普通 Rust，不另建隐式注册系统。
 - `examples/multi-app` 已改为真实使用两个宏；macro doctest、路由中间件测试、三应用集成测试和严格 Clippy 均通过。
 
+## 2026-07-22：增强目标全仓验收
+
+- `cargo test --workspace --locked` 全部通过，覆盖原单应用博客、HTTP/1.1/HTTP/2、JWT/AES-GCM/Argon2id、多应用、声明宏、CLI、数据库、安全与 renderer。
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` 与 `cargo fmt --all -- --check` 通过。
+- React、React SSR、Vite 与博客共 33 个前端测试通过；示例 TypeScript 类型检查通过。
+- `@phoenix/react`、`@phoenix/react-ssr`、`@phoenix/vite`、博客 client 和 SSR production build 全部通过。
+- 工作树中既有 CLI 脚手架、IDE 配置、临时配置和示例生成数据保持未提交；本轮四个功能提交没有纳入这些并发改动。
+
 ## 2026-07-22：应用状态、页面外围协议与安全响应
 
 - `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。
