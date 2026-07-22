@@ -1,8 +1,13 @@
-use std::{collections::HashMap, fmt, panic::AssertUnwindSafe, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    panic::AssertUnwindSafe,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use futures_util::FutureExt;
-use http::{HeaderValue, Method, StatusCode};
+use http::{HeaderValue, Method, StatusCode, header, uri::Authority};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use phoenix_http::{
     Handler, IntoResponse, Middleware, Request, Response, RouteManifest, apply_middleware,
@@ -186,6 +191,12 @@ impl Routes {
         self
     }
 
+    /// Apply a path/name/middleware scope to an existing route collection.
+    #[must_use]
+    pub fn scoped(self, group: RouteGroup) -> Self {
+        Self::new().group(group, |_| self)
+    }
+
     /// Compile route definitions into an immutable request router.
     ///
     /// # Errors
@@ -286,6 +297,84 @@ pub struct Router {
     named_routes: Arc<HashMap<String, String>>,
 }
 
+/// Metadata for the application module selected for the current request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationContext {
+    name: Arc<str>,
+    path_prefix: Arc<str>,
+    host: Option<Arc<str>>,
+}
+
+impl ApplicationContext {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn path_prefix(&self) -> &str {
+        &self.path_prefix
+    }
+
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+}
+
+/// One independently compiled router mounted into a multi-application router.
+pub struct RouterMount {
+    context: ApplicationContext,
+    match_prefix: String,
+    authority: Option<Authority>,
+    router: Router,
+}
+
+impl RouterMount {
+    /// Construct and validate a router mount.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid application names or Host authorities.
+    pub fn new(
+        name: impl Into<String>,
+        path_prefix: impl Into<String>,
+        host: Option<impl Into<String>>,
+        router: Router,
+    ) -> Result<Self, MultiRouterError> {
+        let name = name.into();
+        if !valid_application_name(&name) {
+            return Err(MultiRouterError::InvalidApplicationName(name));
+        }
+        let match_prefix = normalize_prefix(&path_prefix.into());
+        let display_prefix = if match_prefix.is_empty() {
+            "/".to_owned()
+        } else {
+            match_prefix.clone()
+        };
+        let (authority, display_host) = match host.map(Into::into) {
+            Some(host) => {
+                let normalized = host.trim().to_ascii_lowercase();
+                let authority = normalized
+                    .parse::<Authority>()
+                    .map_err(|_| MultiRouterError::InvalidHost(host))?;
+                (Some(authority), Some(Arc::from(normalized)))
+            }
+            None => (None, None),
+        };
+        Ok(Self {
+            context: ApplicationContext {
+                name: Arc::from(name),
+                path_prefix: Arc::from(display_prefix),
+                host: display_host,
+            },
+            match_prefix,
+            authority,
+            router,
+        })
+    }
+}
+
 impl fmt::Debug for Router {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -296,6 +385,51 @@ impl fmt::Debug for Router {
 }
 
 impl Router {
+    /// Compose independently built routers using Host and path-prefix selection.
+    ///
+    /// Host-bound mounts win over hostless fallbacks, explicit ports win over
+    /// host-only bindings, and longer path prefixes win over shorter prefixes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty sets, duplicate application names/selectors,
+    /// or duplicate global route names.
+    pub fn multi(mounts: Vec<RouterMount>) -> Result<Self, MultiRouterError> {
+        if mounts.is_empty() {
+            return Err(MultiRouterError::Empty);
+        }
+        let mut application_names = HashSet::new();
+        let mut selectors = HashSet::new();
+        let mut named_routes = HashMap::new();
+        for mount in &mounts {
+            if !application_names.insert(mount.context.name.to_string()) {
+                return Err(MultiRouterError::DuplicateApplication(
+                    mount.context.name.to_string(),
+                ));
+            }
+            let selector = (
+                mount.authority.as_ref().map(ToString::to_string),
+                mount.match_prefix.clone(),
+            );
+            if !selectors.insert(selector.clone()) {
+                return Err(MultiRouterError::DuplicateSelector {
+                    host: selector.0,
+                    path_prefix: display_prefix(&selector.1),
+                });
+            }
+            for (name, path) in mount.router.named_routes.iter() {
+                if named_routes.insert(name.clone(), path.clone()).is_some() {
+                    return Err(MultiRouterError::DuplicateRouteName(name.clone()));
+                }
+            }
+        }
+        let dispatch: Arc<dyn Handler> = Arc::new(MultiDispatch { mounts });
+        Ok(Self {
+            handler: Arc::new(PanicBoundary { next: dispatch }),
+            named_routes: Arc::new(named_routes),
+        })
+    }
+
     pub async fn handle(&self, mut request: Request) -> Response {
         request
             .extensions_mut()
@@ -343,6 +477,92 @@ impl Router {
             output.push('/');
         }
         Ok(output)
+    }
+}
+
+struct MultiDispatch {
+    mounts: Vec<RouterMount>,
+}
+
+impl Handler for MultiDispatch {
+    fn call(&self, mut request: Request) -> phoenix_http::BoxFuture<Response> {
+        let selected = select_mount(&self.mounts, &request)
+            .map(|mount| (mount.context.clone(), Arc::clone(&mount.router.handler)));
+        Box::pin(async move {
+            let Some((context, handler)) = selected else {
+                return (StatusCode::NOT_FOUND, "Application Not Found").into_response();
+            };
+            request.extensions_mut().insert(context);
+            handler.call(request).await
+        })
+    }
+}
+
+fn select_mount<'a>(mounts: &'a [RouterMount], request: &Request) -> Option<&'a RouterMount> {
+    let request_authority = request_authority(request);
+    mounts
+        .iter()
+        .filter(|mount| {
+            prefix_matches(&mount.match_prefix, request.uri().path())
+                && mount.authority.as_ref().is_none_or(|configured| {
+                    request_authority
+                        .as_ref()
+                        .is_some_and(|actual| authority_matches(configured, actual))
+                })
+        })
+        .max_by_key(|mount| {
+            (
+                u8::from(mount.authority.is_some()),
+                u8::from(
+                    mount
+                        .authority
+                        .as_ref()
+                        .is_some_and(|authority| authority.port_u16().is_some()),
+                ),
+                mount.match_prefix.len(),
+            )
+        })
+}
+
+fn request_authority(request: &Request) -> Option<Authority> {
+    request.uri().authority().cloned().or_else(|| {
+        request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.to_ascii_lowercase().parse().ok())
+    })
+}
+
+fn authority_matches(configured: &Authority, actual: &Authority) -> bool {
+    configured.host().eq_ignore_ascii_case(actual.host())
+        && configured
+            .port_u16()
+            .is_none_or(|port| actual.port_u16() == Some(port))
+}
+
+fn prefix_matches(prefix: &str, path: &str) -> bool {
+    prefix.is_empty()
+        || path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn valid_application_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic())
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn display_prefix(prefix: &str) -> String {
+    if prefix.is_empty() {
+        "/".to_owned()
+    } else {
+        prefix.to_owned()
     }
 }
 
@@ -542,9 +762,117 @@ pub enum RouteBuildError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum MultiRouterError {
+    #[error("a multi-application router requires at least one application")]
+    Empty,
+    #[error("invalid application name `{0}`")]
+    InvalidApplicationName(String),
+    #[error("invalid application Host authority `{0}`")]
+    InvalidHost(String),
+    #[error("duplicate application name `{0}`")]
+    DuplicateApplication(String),
+    #[error("duplicate application selector for host {host:?} and path `{path_prefix}`")]
+    DuplicateSelector {
+        host: Option<String>,
+        path_prefix: String,
+    },
+    #[error("duplicate route name `{0}` across applications")]
+    DuplicateRouteName(String),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum UrlGenerationError {
     #[error("unknown named route `{0}`")]
     UnknownRoute(String),
     #[error("named route `{route}` requires parameter `{parameter}`")]
     MissingParameter { route: String, parameter: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn application_name(request: Request) -> phoenix_http::BoxFuture<Response> {
+        Box::pin(async move {
+            request
+                .extensions()
+                .get::<ApplicationContext>()
+                .map_or_else(|| "missing".to_owned(), |context| context.name().to_owned())
+                .into_response()
+        })
+    }
+
+    #[tokio::test]
+    async fn multi_router_selects_path_and_host_apps_and_generates_global_urls() {
+        let site = Routes::new()
+            .get("/", application_name)
+            .name("home")
+            .scoped(RouteGroup::new().name("site."))
+            .build()
+            .unwrap();
+        let admin = Routes::new()
+            .get("/", application_name)
+            .name("dashboard")
+            .scoped(RouteGroup::new().prefix("/admin").name("admin."))
+            .build()
+            .unwrap();
+        let partner = Routes::new()
+            .get("/", application_name)
+            .name("home")
+            .scoped(RouteGroup::new().name("partner."))
+            .build()
+            .unwrap();
+        let router = Router::multi(vec![
+            RouterMount::new("site", "/", None::<String>, site).unwrap(),
+            RouterMount::new("admin", "/admin", None::<String>, admin).unwrap(),
+            RouterMount::new("partner", "/", Some("partner.test"), partner).unwrap(),
+        ])
+        .unwrap();
+
+        let site_response = router
+            .handle(Request::new(Method::GET, "/".parse().unwrap()))
+            .await;
+        assert_eq!(site_response.body(), "site");
+
+        let admin_response = router
+            .handle(Request::new(Method::GET, "/admin".parse().unwrap()))
+            .await;
+        assert_eq!(admin_response.body(), "admin");
+
+        let mut partner_request = Request::new(Method::GET, "/".parse().unwrap());
+        partner_request
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("partner.test:8080"));
+        let partner_response = router.handle(partner_request).await;
+        assert_eq!(partner_response.body(), "partner");
+
+        assert_eq!(router.url("site.home", &[]).unwrap(), "/");
+        assert_eq!(router.url("admin.dashboard", &[]).unwrap(), "/admin");
+        assert_eq!(router.url("partner.home", &[]).unwrap(), "/");
+    }
+
+    #[test]
+    fn multi_router_rejects_ambiguous_apps() {
+        let first = Routes::new().get("/", application_name).build().unwrap();
+        let second = Routes::new().get("/", application_name).build().unwrap();
+        let error = Router::multi(vec![
+            RouterMount::new("first", "/same", None::<String>, first).unwrap(),
+            RouterMount::new("second", "/same", None::<String>, second).unwrap(),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            MultiRouterError::DuplicateSelector {
+                host: None,
+                path_prefix: "/same".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn path_prefix_matching_stops_at_segment_boundaries() {
+        assert!(prefix_matches("/admin", "/admin"));
+        assert!(prefix_matches("/admin", "/admin/users"));
+        assert!(!prefix_matches("/admin", "/administrator"));
+    }
 }

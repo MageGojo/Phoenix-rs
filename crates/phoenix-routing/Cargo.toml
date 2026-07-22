@@ -15,5 +15,8 @@ percent-encoding.workspace = true
 phoenix-http = { path = "../phoenix-http" }
 thiserror.workspace = true
 
+[dev-dependencies]
+tokio.workspace = true
+
 [lints]
 workspace = true

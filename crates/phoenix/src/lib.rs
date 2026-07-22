@@ -12,7 +12,10 @@ pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
 pub mod prelude {
-    pub use phoenix_core::{Application, HttpProtocol, Server, ServerError, ServerHandle};
+    pub use phoenix_core::{
+        Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
+        MultiApplicationError, Server, ServerError, ServerHandle,
+    };
     pub use phoenix_crypto::{
         Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, Jwt,
         JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, Password, PasswordError,
@@ -31,7 +34,10 @@ pub mod prelude {
         middleware_fn, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
-    pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
+    pub use phoenix_routing::{
+        ApplicationContext, MultiRouterError, RouteBuildError, RouteGroup, Router, Routes,
+        UrlGenerationError,
+    };
     pub use phoenix_security::{
         AccessLog, ClientIp, Cors, CorsConfig, Csrf, HostAllowlist, RateLimit, RateLimitConfig,
         RequestId, RequestIdValue, SameSite, SecurityPolicy, Session, SessionConfig,

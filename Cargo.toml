@@ -15,6 +15,7 @@ members = [
     "crates/phoenix-validation",
     "crates/phoenix-view",
     "examples/blog",
+    "examples/multi-app",
 ]
 resolver = "3"
 

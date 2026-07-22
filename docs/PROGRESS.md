@@ -184,6 +184,15 @@
 - `Password` 生成带随机 salt 的 Argon2id PHC string，验证时沿用 hash 参数，并限制异常超长输入。
 - 7 个密码学与中间件测试、严格 Clippy 和 Rustfmt 通过。
 
+## 2026-07-22：单项目多应用架构
+
+- `Application::multi()` 与 `ApplicationModule` 把官网、用户前台、管理后台编译到同一个 `Application`，原 `Application::new(routes)` 保持兼容。
+- 模块默认挂载在 `/{name}` 且命名路由自动加 `{name}.` 前缀；`.root()`、`.prefix()`、`.host()` 和 `.name_prefix()` 可显式覆盖约定。
+- 分派器优先匹配 Host-bound 模块，再比较显式端口和最长 path prefix；`/admin` 不会误匹配 `/administrator`。
+- 每个模块可以挂载独立 middleware 与同类型不同值的强类型 State；handler 通过 `ApplicationContext` 获得当前模块名、prefix 与 Host。
+- 组合 Router 汇总全部命名路由，因此后端 URL 生成和 React route manifest 都能看到 `website.*`、`frontend.*` 与 `admin.*`。
+- 新增 `examples/multi-app`，真实验证 `/` 官网、`/app` 前台、`/admin` 后台、隔离 State、404 边界和跨应用 URL 生成。
+
 ## 2026-07-22：应用状态、页面外围协议与安全响应
 
 - `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。

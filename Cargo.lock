@@ -1554,6 +1554,14 @@ name = "phoenix-macros"
 version = "0.1.0"
 
 [[package]]
+name = "phoenix-multi-app-example"
+version = "0.1.0"
+dependencies = [
+ "phoenix",
+ "tokio",
+]
+
+[[package]]
 name = "phoenix-routing"
 version = "0.1.0"
 dependencies = [
@@ -1564,6 +1572,7 @@ dependencies = [
  "percent-encoding",
  "phoenix-http",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

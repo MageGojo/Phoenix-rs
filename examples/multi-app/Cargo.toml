@@ -1,0 +1,15 @@
+[package]
+name = "phoenix-multi-app-example"
+description = "Website, frontend, and admin applications in one Phoenix project"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+phoenix = { path = "../../crates/phoenix" }
+tokio.workspace = true
+
+[lints]
+workspace = true

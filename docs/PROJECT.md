@@ -57,6 +57,8 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 稳定的应用入口，重导出常用 trait、类型和宏。公共文档与示例优先只使用该 crate，减少开发者理解内部拆分的成本。
 
+多应用模式仍返回同一个 `Application`：`ApplicationModule` 先给每套 `Routes` 应用独立 path/name scope 与中间件/State，再由组合 Router 按 Host 约束、端口精确度和最长路径前缀选择模块。单应用继续使用 `Application::new(routes)`，不增加迁移成本。
+
 ### `phoenix-core`
 
 负责应用构建器、服务容器边界、配置加载、环境、统一错误、启动和优雅关闭。首版不实现运行时反射式依赖注入；依赖通过显式 `AppState`、trait 和构造器连接。

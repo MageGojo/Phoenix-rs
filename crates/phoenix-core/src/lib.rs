@@ -14,8 +14,8 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo, TokioTimer},
     server::conn::auto,
 };
-use phoenix_http::{Request, Response, ResponseBody};
-use phoenix_routing::{RouteBuildError, Router, Routes};
+use phoenix_http::{Middleware, Request, Response, ResponseBody, StateMiddleware};
+use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
@@ -57,14 +57,24 @@ impl Application {
     ///
     /// Returns a route build error when route patterns or names are invalid.
     pub fn new(routes: Routes) -> Result<Self, RouteBuildError> {
-        Ok(Self {
-            router: routes.build()?,
+        Ok(Self::from_router(routes.build()?))
+    }
+
+    fn from_router(router: Router) -> Self {
+        Self {
+            router,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
             http_protocol: HttpProtocol::Auto,
-        })
+        }
+    }
+
+    /// Start building an application composed of independently scoped modules.
+    #[must_use]
+    pub fn multi() -> MultiApplicationBuilder {
+        MultiApplicationBuilder::new()
     }
 
     #[must_use]
@@ -151,6 +161,131 @@ impl Application {
             task,
         })
     }
+}
+
+/// One website/API/admin module mounted into the same Phoenix process.
+pub struct ApplicationModule {
+    name: String,
+    path_prefix: String,
+    name_prefix: String,
+    host: Option<String>,
+    routes: Routes,
+}
+
+impl ApplicationModule {
+    /// Create a module mounted at `/{name}` with route names prefixed by `{name}.`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, routes: Routes) -> Self {
+        let name = name.into();
+        Self {
+            path_prefix: format!("/{name}"),
+            name_prefix: format!("{name}."),
+            name,
+            host: None,
+            routes,
+        }
+    }
+
+    /// Mount this module at `/`.
+    #[must_use]
+    pub fn root(mut self) -> Self {
+        "/".clone_into(&mut self.path_prefix);
+        self
+    }
+
+    #[must_use]
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.path_prefix = prefix.into();
+        self
+    }
+
+    /// Restrict this module to a Host authority. A host without a port matches any port.
+    #[must_use]
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.host = Some(host.into());
+        self
+    }
+
+    /// Override the automatic `{application}.` named-route prefix.
+    #[must_use]
+    pub fn name_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.name_prefix = prefix.into();
+        self
+    }
+
+    /// Apply middleware only to routes in this application module.
+    #[must_use]
+    pub fn middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: Middleware,
+    {
+        self.routes = self.routes.with_middleware(middleware);
+        self
+    }
+
+    /// Insert cloneable, strongly typed state only for this application module.
+    #[must_use]
+    pub fn state<T>(self, state: T) -> Self
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        self.middleware(StateMiddleware::new(state))
+    }
+}
+
+/// Builds a single server from multiple isolated application modules.
+#[derive(Default)]
+pub struct MultiApplicationBuilder {
+    modules: Vec<ApplicationModule>,
+}
+
+impl MultiApplicationBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn mount(mut self, module: ApplicationModule) -> Self {
+        self.modules.push(module);
+        self
+    }
+
+    /// Compile all application routers and the Host/path dispatcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid routes, application selectors, or global route names.
+    pub fn build(self) -> Result<Application, MultiApplicationError> {
+        let mounts = self
+            .modules
+            .into_iter()
+            .map(|module| {
+                let scoped_routes = module.routes.scoped(
+                    RouteGroup::new()
+                        .prefix(&module.path_prefix)
+                        .name(&module.name_prefix),
+                );
+                let compiled_router = scoped_routes.build()?;
+                RouterMount::new(
+                    module.name,
+                    module.path_prefix,
+                    module.host,
+                    compiled_router,
+                )
+                .map_err(MultiApplicationError::Router)
+            })
+            .collect::<Result<Vec<_>, MultiApplicationError>>()?;
+        Ok(Application::from_router(Router::multi(mounts)?))
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum MultiApplicationError {
+    #[error(transparent)]
+    Route(#[from] RouteBuildError),
+    #[error(transparent)]
+    Router(#[from] MultiRouterError),
 }
 
 pub struct Server {
@@ -337,6 +472,8 @@ mod tests {
     use futures_util::stream;
     use http_body_util::Empty;
     use hyper::client::conn::http2;
+    use phoenix_http::{Method, State, typed};
+    use phoenix_routing::ApplicationContext;
     use std::future::{Ready, ready};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -424,5 +561,69 @@ mod tests {
         assert!(sender.send_request(request).await.is_err());
         connection_task.await.unwrap().unwrap_err();
         server.shutdown().await.unwrap();
+    }
+
+    #[derive(Clone)]
+    struct ModuleLabel(&'static str);
+
+    fn module_routes(route_name: &'static str) -> Routes {
+        Routes::new()
+            .get(
+                "/",
+                typed(
+                    |State(state): State<ModuleLabel>,
+                     State(context): State<ApplicationContext>| async move {
+                        format!("{}:{}:{}", context.name(), context.path_prefix(), state.0)
+                    },
+                ),
+            )
+            .name(route_name)
+    }
+
+    #[tokio::test]
+    async fn multi_application_mounts_root_path_and_host_modules_with_isolated_state() {
+        let application = Application::multi()
+            .mount(
+                ApplicationModule::new("site", module_routes("home"))
+                    .root()
+                    .state(ModuleLabel("public")),
+            )
+            .mount(
+                ApplicationModule::new("admin", module_routes("dashboard"))
+                    .state(ModuleLabel("staff")),
+            )
+            .mount(
+                ApplicationModule::new("partner", module_routes("home"))
+                    .root()
+                    .host("partner.test")
+                    .state(ModuleLabel("partner")),
+            )
+            .build()
+            .unwrap();
+
+        let site = application
+            .handle(Request::new(Method::GET, "/".parse().unwrap()))
+            .await;
+        assert_eq!(site.body(), "site:/:public");
+
+        let admin = application
+            .handle(Request::new(Method::GET, "/admin".parse().unwrap()))
+            .await;
+        assert_eq!(admin.body(), "admin:/admin:staff");
+
+        let mut partner_request = Request::new(Method::GET, "/".parse().unwrap());
+        partner_request.headers_mut().insert(
+            http::header::HOST,
+            http::HeaderValue::from_static("partner.test"),
+        );
+        let partner = application.handle(partner_request).await;
+        assert_eq!(partner.body(), "partner:/:partner");
+
+        assert_eq!(application.router().url("site.home", &[]).unwrap(), "/");
+        assert_eq!(
+            application.router().url("admin.dashboard", &[]).unwrap(),
+            "/admin"
+        );
+        assert_eq!(application.router().url("partner.home", &[]).unwrap(), "/");
     }
 }
