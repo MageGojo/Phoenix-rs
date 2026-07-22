@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use phoenix_metrics::{Metrics, RendererMetricsSnapshot};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
@@ -136,6 +137,20 @@ pub struct RendererHealth {
     pub restarts: u64,
     pub timeouts: u64,
     pub shutting_down: bool,
+}
+
+impl RendererHealth {
+    /// Copy this point-in-time health snapshot into the shared metrics registry.
+    pub fn record_metrics(&self, metrics: &Metrics) {
+        metrics.set_renderer(RendererMetricsSnapshot {
+            ready_workers: u64::try_from(self.ready_workers).unwrap_or(u64::MAX),
+            active_requests: u64::try_from(self.active_requests).unwrap_or(u64::MAX),
+            rendered_requests: self.rendered_requests,
+            failures: self.failures,
+            restarts: self.restarts,
+            timeouts: self.timeouts,
+        });
+    }
 }
 
 impl NodeRenderer {

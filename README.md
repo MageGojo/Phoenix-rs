@@ -75,6 +75,7 @@ const member = await members.store({ name });
 - JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - 开发文本/生产 JSON 两种结构化日志格式、`PHOENIX_LOG` 过滤和脱敏访问日志。
+- Prometheus exporter：HTTP 延迟/状态、TCP 连接、TLS、renderer、数据库、队列及安全状态指标，标签集合固定且不包含用户输入。
 - HS256 JWT、refresh rotation、reuse detection、access/family 撤销和持久化 token store，以及 AES-256-GCM 应用数据加密与 Argon2id 密码哈希。
 - 默认拒绝的 RBAC/ABAC：角色继承、直接 allow/deny、资源属性 policy、决策审计、JWT principal 映射和 401/403 权限中间件。
 - 单进程多应用：官网、用户前台、管理后台可按 Host/路径独立挂载，拥有路由命名空间与强类型 State。
@@ -94,6 +95,7 @@ React 页面协议、三种渲染模式、自动页面/island 发现、Rust/Type
 - [React 渲染模式](docs/RENDERING.md)
 - [安全与数据传输](docs/SECURITY.md)
 - [认证、授权与 Token 生命周期](docs/AUTHORIZATION.md)
+- [Prometheus 指标](docs/METRICS.md)
 - [技术决策](docs/DECISIONS.md)
 - [当前进度](docs/PROGRESS.md)
 - [下一阶段](docs/NEXT.md)
@@ -150,6 +152,7 @@ npm run test:react
 ```text
 crates/phoenix-http/    请求、响应、Handler 与中间件
 crates/phoenix-logging/ tracing 文本/JSON 初始化与日志过滤
+crates/phoenix-metrics/ Prometheus registry、HTTP 采集与运行时指标
 crates/phoenix-routing/ 路由、分组和命名 URL
 crates/phoenix-core/    Hyper 服务与应用生命周期
 crates/phoenix-crypto/  JWT、AES-GCM 与 Argon2id 密码学门面

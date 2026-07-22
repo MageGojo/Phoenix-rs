@@ -8,6 +8,7 @@ pub use phoenix_dx::mount_routes;
 pub use phoenix_http as http;
 pub use phoenix_logging as logging;
 pub use phoenix_macros::contract;
+pub use phoenix_metrics as metrics;
 pub use phoenix_routing as routing;
 pub use phoenix_routing::routes;
 pub use phoenix_security as security;
@@ -46,6 +47,9 @@ pub mod prelude {
         TransportScheme, TypedHandler, Uri, middleware_fn, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
+    pub use phoenix_metrics::{
+        DatabaseOutcome, JobOutcome, Metrics, MetricsMiddleware, RendererMetricsSnapshot,
+    };
     pub use phoenix_routing::routes;
     pub use phoenix_routing::{
         ApplicationContext, MultiRouterError, RouteBuildError, RouteGroup, Router, Routes,

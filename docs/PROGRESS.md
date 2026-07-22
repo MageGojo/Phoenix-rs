@@ -232,3 +232,10 @@
 - JWT 增加随机 `jti` 与 refresh family `sid`；`TokenService` 实现 refresh rotation、并发 reuse detection、单 access token 撤销、family 撤销和过期清理。
 - `MemoryTokenStore` 支持测试/开发；`FileTokenStore` 仅保存 refresh hash 和撤销状态，使用同目录临时文件、同步落盘和原子替换，重启后保持状态，持久化失败不会污染内存状态。
 - 测试覆盖角色图、资源属性策略、审计、JWT→principal→permission 链路、并发 refresh、reuse family revoke、access revoke、文件重开与持久化回滚；workspace 全量测试、严格 Clippy 和 Rustfmt 通过。
+
+## 2026-07-22：Prometheus 指标 exporter
+
+- 新增 `phoenix-metrics`，以原子 counter/gauge 和固定 latency bucket 输出 Prometheus 0.0.4 文本，不接受任意用户 label。
+- `MetricsMiddleware` 采集 HTTP method/status class、活跃请求与耗时；`Application::metrics` 在真实网络边界采集 TCP 连接和 TLS handshake 成败。
+- renderer health 可写入同一 registry；数据库和后续 queue worker 使用固定 success/failure/retry outcome hook，Session/限流预留无 ID 的安全状态计数器。
+- 测试验证 request query 不进入 exporter、连接 guard 正确归零、TLS 成功计数及 content type；目标 crate 测试和严格 Clippy 通过。

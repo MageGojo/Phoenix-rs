@@ -11,6 +11,7 @@ members = [
     "crates/phoenix-http",
     "crates/phoenix-logging",
     "crates/phoenix-macros",
+    "crates/phoenix-metrics",
     "crates/phoenix-routing",
     "crates/phoenix-security",
     "crates/phoenix-validation",

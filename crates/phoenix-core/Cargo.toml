@@ -14,6 +14,7 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 phoenix-http = { path = "../phoenix-http" }
+phoenix-metrics = { path = "../phoenix-metrics" }
 phoenix-routing = { path = "../phoenix-routing" }
 rustls.workspace = true
 rustls-pemfile.workspace = true

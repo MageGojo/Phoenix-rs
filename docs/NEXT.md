@@ -56,7 +56,7 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 ## 下一阶段优先级
 
 1. （已完成）TLS/HTTPS/ALPN、RBAC/ABAC 和 JWT refresh/revocation 持久化首版。
-2. 分布式 Session store、限流后端和指标 exporter。
+2. 指标 exporter 已完成首版；继续分布式 Session store 与限流 backend。
 3. CSP nonce、流中错误语义与 hydration 诊断。
 4. WebSocket、SSE、流式请求、队列和邮件。
 5. 管理后台、插件机制、安全评审与项目改名决策。

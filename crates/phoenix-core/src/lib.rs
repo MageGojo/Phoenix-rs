@@ -20,6 +20,7 @@ use hyper_util::{
 use phoenix_http::{
     ConnectionInfo, Middleware, Request, Response, ResponseBody, StateMiddleware, TransportScheme,
 };
+use phoenix_metrics::Metrics;
 use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
 use rustls::ServerConfig;
 use thiserror::Error;
@@ -171,6 +172,7 @@ pub struct Application {
     body_read_timeout: Duration,
     graceful_shutdown_timeout: Duration,
     http_protocol: HttpProtocol,
+    metrics: Option<Metrics>,
 }
 
 impl Application {
@@ -191,6 +193,7 @@ impl Application {
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
             http_protocol: HttpProtocol::Auto,
+            metrics: None,
         }
     }
 
@@ -228,6 +231,13 @@ impl Application {
     #[must_use]
     pub const fn http_protocol(mut self, protocol: HttpProtocol) -> Self {
         self.http_protocol = protocol;
+        self
+    }
+
+    /// Attach the process metrics registry used for connection and TLS telemetry.
+    #[must_use]
+    pub fn metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = Some(metrics);
         self
     }
 
@@ -532,6 +542,7 @@ async fn serve_transport(
     shutdown: watch::Receiver<bool>,
     transport: ServerTransport,
 ) {
+    let _connection_guard = application.metrics.as_ref().map(Metrics::connection_opened);
     let peer_addr = stream.peer_addr().ok();
     match transport {
         ServerTransport::Plain => {
@@ -542,6 +553,9 @@ async fn serve_transport(
             let acceptor = TlsAcceptor::from(Arc::clone(&config.server_config));
             match tokio::time::timeout(config.handshake_timeout, acceptor.accept(stream)).await {
                 Ok(Ok(tls_stream)) => {
+                    if let Some(metrics) = &application.metrics {
+                        metrics.record_tls_handshake(true);
+                    }
                     let alpn = tls_stream
                         .get_ref()
                         .1
@@ -552,9 +566,15 @@ async fn serve_transport(
                     serve_connection(tls_stream, application, shutdown, connection_info).await;
                 }
                 Ok(Err(error)) => {
+                    if let Some(metrics) = &application.metrics {
+                        metrics.record_tls_handshake(false);
+                    }
                     tracing::warn!(peer = ?peer_addr, error = %error, "TLS handshake failed");
                 }
                 Err(_) => {
+                    if let Some(metrics) = &application.metrics {
+                        metrics.record_tls_handshake(false);
+                    }
                     tracing::warn!(peer = ?peer_addr, "TLS handshake timed out");
                 }
             }
@@ -849,6 +869,7 @@ mod tests {
             tls.alpn_protocols(),
             &[ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()]
         );
+        let metrics = Metrics::new();
         let server =
             Application::new(Routes::new().get("/secure", |request: Request| async move {
                 let info = request.extensions().get::<ConnectionInfo>().unwrap();
@@ -859,6 +880,7 @@ mod tests {
                 )
             }))
             .unwrap()
+            .metrics(metrics.clone())
             .spawn_tls("127.0.0.1:0", tls)
             .await
             .unwrap();
@@ -896,6 +918,10 @@ mod tests {
         drop(sender);
         server.shutdown().await.unwrap();
         connection_task.await.unwrap().unwrap();
+        let exported = metrics.render();
+        assert!(exported.contains("phoenix_connections_total 1"));
+        assert!(exported.contains("phoenix_connections_active 0"));
+        assert!(exported.contains("outcome=\"success\"} 1"));
     }
 
     #[test]

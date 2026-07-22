@@ -34,6 +34,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
       -> phoenix-auth（RBAC、ABAC、principal 与授权中间件）
       -> phoenix-crypto（JWT、应用数据加密、密码哈希）
       -> phoenix-http（请求、响应、Cookie、上传）
+      -> phoenix-metrics（低基数指标与 Prometheus exporter）
       -> phoenix-routing（路由、命名 URL、参数绑定）
       -> phoenix-validation（请求 DTO 与验证错误）
       -> phoenix-contracts（Rust schema、TS 导出、冲突检查）
@@ -101,6 +102,10 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 ### `phoenix-security`
 
 负责服务端会话、CSRF、安全 Cookie、CORS、限流、可信代理、Host allowlist、CSP/HSTS、request ID、访问日志脱敏和可选安全信封。所有密码学能力使用成熟库，并由测试向量验证。
+
+### `phoenix-metrics`
+
+使用固定 method/status/outcome vocabulary 记录 HTTP、连接、TLS、renderer、数据库、队列和安全状态，输出 Prometheus 文本格式。registry 不提供任意用户 label，避免 token、query、用户 ID、Host 和资源参数进入时间序列；多实例聚合由外部 Prometheus 完成。
 
 ### `phoenix-dx` 与 `phoenix-cli`
 

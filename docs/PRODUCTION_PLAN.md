@@ -9,7 +9,7 @@
 | JWT refresh/revocation | 已完成首版 | 原子 rotation、并发/reuse detection、hashed refresh secret、access/family revoke、内存/文件 store contract、重启持久化与过期清理 |
 | 分布式 Session | 待实现 | 原子 load/save/rotate/delete、TTL、冲突语义、共享后端适配器与双实例测试 |
 | 分布式限流 | 待实现 | 原子窗口操作、key policy、Retry-After、共享后端故障策略与双实例测试 |
-| 指标 exporter | 待实现 | 请求/连接/TLS/renderer/数据库/队列指标、Prometheus 文本端点、低基数规则 |
+| 指标 exporter | 已完成首版 | HTTP 延迟/状态 middleware、连接/TLS server 接入、renderer snapshot、数据库/队列 hooks、Prometheus 0.0.4 文本端点、固定低基数标签测试 |
 | CSP nonce | 待实现 | 每请求随机 nonce、Header/HTML/renderer 一致、Vite dev/production 策略、缓存边界 |
 | WebSocket/SSE/流式请求 | 待实现 | 受控 upgrade、backpressure、取消、大小/deadline、优雅关闭、真实网络测试 |
 | 队列 | 待实现 | job envelope、重试/backoff、幂等键、dead-letter、worker shutdown、持久化 backend contract |

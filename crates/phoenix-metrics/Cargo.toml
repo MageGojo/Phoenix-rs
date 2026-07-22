@@ -1,0 +1,17 @@
+[package]
+name = "phoenix-metrics"
+description = "Low-cardinality Prometheus metrics for Phoenix applications"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+phoenix-http = { path = "../phoenix-http" }
+
+[dev-dependencies]
+phoenix-routing = { path = "../phoenix-routing" }
+tokio.workspace = true
+
+[lints]
+workspace = true

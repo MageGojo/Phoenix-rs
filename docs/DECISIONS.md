@@ -219,3 +219,10 @@
 - 决定：RBAC 使用精确权限和启动时编译的角色继承图，ABAC policy 与 RBAC 采用 deny-overrides；没有 allow 时默认拒绝。refresh token 是只持久化 hash 的 opaque secret，每次使用原子轮换；重复使用撤销整个 family，access token 通过 `jti`/`sid` 检查撤销状态。
 - 原因：精确 capability 和失败关闭语义避免通配符或未知角色意外扩权；一次性 refresh rotation 能把并发重放转化为可检测的 family 泄露事件。
 - 边界：`FileTokenStore` 只适合单进程低吞吐持久化。多实例后端必须原子实现 `rotate_refresh`，store 不可用时 stateful 认证失败关闭；审计事件不得包含 token、资源正文或敏感属性。
+
+## ADR-032：指标 vocabulary 固定并由 Prometheus 跨实例聚合
+
+- 状态：已接受
+- 决定：Phoenix registry 只暴露固定 method、status class 和 outcome labels；HTTP middleware、TCP/TLS server 和 renderer 使用同一进程 registry，数据库与队列通过固定枚举 hook 记录。多实例由 Prometheus 按 target 抓取和聚合。
+- 原因：任意字符串 label 会让路径、用户、错误或 token 形成高基数时间序列和隐私泄露；进程内原子 counter/gauge 不需要请求路径上的网络依赖。
+- 边界：指标端点必须受内部网络或管理应用保护。registry 不存储全局分布式 gauge，renderer snapshot 需要显式刷新，数据库/队列适配器负责在真实操作边界调用 hook。

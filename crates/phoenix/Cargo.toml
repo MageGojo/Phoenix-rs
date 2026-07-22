@@ -15,6 +15,7 @@ phoenix-dx = { path = "../phoenix-dx" }
 phoenix-http = { path = "../phoenix-http" }
 phoenix-logging = { path = "../phoenix-logging" }
 phoenix-macros = { path = "../phoenix-macros" }
+phoenix-metrics = { path = "../phoenix-metrics" }
 phoenix-routing = { path = "../phoenix-routing" }
 phoenix-security = { path = "../phoenix-security" }
 phoenix-validation = { path = "../phoenix-validation" }
