@@ -75,6 +75,7 @@ const member = await members.store({ name });
 - JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - 开发文本/生产 JSON 两种结构化日志格式、`PHOENIX_LOG` 过滤和脱敏访问日志。
+- HS256 JWT 签发/校验与 Bearer 中间件、AES-256-GCM 应用数据加密和 Argon2id 密码哈希。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
 React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供服务端 Session、自动 action CSRF、精确 CORS、可信代理、Host allowlist、限流、安全头、request ID、日志脱敏以及安全重定向/下载响应。TLS 终止、认证授权、分布式 Session、CSP nonce 和独立安全评审仍是生产发布前置条件。
@@ -134,6 +135,7 @@ crates/phoenix-http/    请求、响应、Handler 与中间件
 crates/phoenix-logging/ tracing 文本/JSON 初始化与日志过滤
 crates/phoenix-routing/ 路由、分组和命名 URL
 crates/phoenix-core/    Hyper 服务与应用生命周期
+crates/phoenix-crypto/  JWT、AES-GCM 与 Argon2id 密码学门面
 crates/phoenix-database/ Toasty、迁移与测试隔离
 crates/phoenix-dx/      resource routes、中间件别名与模型绑定
 crates/phoenix-cli/     Rust + Vite 开发进程监督器

@@ -1,4 +1,5 @@
 pub use phoenix_core as core;
+pub use phoenix_crypto as crypto;
 pub use phoenix_database as database;
 pub use phoenix_dx as dx;
 pub use phoenix_dx::mount_routes;
@@ -12,6 +13,10 @@ pub use phoenix_view as view;
 
 pub mod prelude {
     pub use phoenix_core::{Application, HttpProtocol, Server, ServerError, ServerHandle};
+    pub use phoenix_crypto::{
+        Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, Jwt,
+        JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, Password, PasswordError,
+    };
     pub use phoenix_database::{Backend, Database, DatabaseBuilder, DatabaseError, TestDatabase};
     pub use phoenix_dx::{
         Bound, MiddlewareAliasError, MiddlewareAliases, ModelBinding, Resource, ResourceAction,

@@ -180,10 +180,57 @@ let policy = SecurityPolicy {
 
 内置 Session store 和限流 bucket 都是单进程内存实现。多实例部署必须接入共享后端或在可信网关层完成相应能力，否则不同实例之间不会共享状态。
 
+### JWT、Bearer API 与密码
+
+`phoenix-crypto` 的 JWT 首版固定 HS256，并把算法 allowlist、`kid`、过期时间、not-before、issuer 和 audience 当作同一个验证边界：
+
+```rust
+use std::{sync::Arc, time::Duration};
+use phoenix::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ApiClaims {
+    role: String,
+}
+
+let manager = JwtManager::new(
+    JwtKey::new("KEY_2026_07", std::env::var("APP_JWT_KEY")?.as_bytes())?,
+    JwtConfig::new(Duration::from_mins(15))
+        .issuer("APP_A")
+        .audience("APP_A_API"),
+)?;
+
+let routes = Routes::new()
+    .get("/api/me", typed(|claims: Jwt<ApiClaims>| async move {
+        format!("{}:{}", claims.sub, claims.custom.role)
+    }))
+    .with_middleware(JwtAuth::<ApiClaims>::new(Arc::new(manager)));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+新 key 用于签发，旧 key 只通过 `.with_verification_key(old_key)` 保留验证窗口；轮换窗口结束后删除旧 key。JWT payload 不是密文，禁止放入密码、密钥、支付数据或只应服务端可见的字段。Authorization Header 和完整 token 永远不得进入日志。
+
+密码使用 `Password::hash()` 生成 Argon2id PHC string，以 `Password::verify()` 验证。数据库只保存 PHC string；登录成功后如参数策略升级，可重新 hash 并替换旧值。
+
+### 应用数据认证加密
+
+`Encryptor` 使用 AES-256-GCM。调用方必须提供稳定且不可混用的关联数据，例如 `APP_A|users|7|email`；同一份密文用不同上下文解密会认证失败。密文 envelope 含版本、算法、`key_id`、随机 nonce 与含 tag 的 ciphertext，但不保存关联数据：
+
+```rust
+let key = EncryptionKey::new("KEY_2026_07", [7_u8; 32])?;
+let encryptor = Encryptor::new(key);
+let sealed = encryptor.seal(b"private value", b"APP_A|users|7|email")?;
+let plaintext = encryptor.open(&sealed, b"APP_A|users|7|email")?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+示例数组只用于说明类型，真实 key 必须由 secrets manager 或受保护的环境注入，不能硬编码或提交到 Git。
+
 ## 3.3 尚未实现的安全能力
 
 - TLS/HTTPS 终止、HTTPS 重定向与代理传入 scheme 的可信判断。
-- 认证/授权策略、持久化或分布式 SessionStore 适配器，以及多密钥 Cookie session。
+- 完整 RBAC/ABAC 授权策略、JWT 撤销/refresh-token 存储、持久化或分布式 SessionStore 适配器，以及多密钥 Cookie session。
 - CSP nonce 与 Vite 开发模式的自动策略切换；当前 CSP/HSTS 由应用按环境显式配置。
 - Multipart 已在全局 body 上限内解析为内存字段；上传存储、文件名净化、静态文件路径与下载响应尚未实现。
 - 依赖漏洞/许可证 CI 与正式发布前的独立安全评审。

@@ -31,6 +31,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 应用代码
   -> phoenix（统一导出与 prelude）
       -> phoenix-core（应用、配置、错误、生命周期）
+      -> phoenix-crypto（JWT、应用数据加密、密码哈希）
       -> phoenix-http（请求、响应、Cookie、上传）
       -> phoenix-routing（路由、命名 URL、参数绑定）
       -> phoenix-validation（请求 DTO 与验证错误）
@@ -63,6 +64,10 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 ### `phoenix-http`
 
 直接在 Hyper 1.x、`http` 与 `http-body` 类型之上提供稳定门面，包括 Tokio 连接适配、请求 body 归一化、内容类型判断、大小限制、JSON/Form/Multipart 提取、Cookie、重定向、下载和统一错误映射。`hyper-util` 与 `http-body-util` 只承担连接/runtime 适配和 body 工具，不定义应用层 API。
+
+### `phoenix-crypto`
+
+提供三种不混淆用途的能力：HS256 JWT 签名和严格验证、AES-256-GCM 应用数据认证加密、Argon2id 密码哈希。JWT 和 AES key ring 都用 `key_id` 支持轮换，密钥使用后清零且 Debug 输出脱敏；Bearer 中间件只把签名、算法、时间、issuer 和 audience 均验证通过的强类型 claims 放入 Request extensions。
 
 ### `phoenix-routing`
 

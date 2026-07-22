@@ -175,6 +175,15 @@
 - 新增 `phoenix-logging`，支持 compact 文本、逐行 JSON、`PHOENIX_LOG` 环境过滤、ANSI/target 配置和重复初始化错误。
 - TLS/ALPN 仍属于部署/TLS 适配层；当前 HTTP/2 验证是明文 prior-knowledge 连接，不虚假宣称已交付 HTTPS。
 
+## 2026-07-22：JWT 与通用密码学门面
+
+- 新增 `phoenix-crypto`，明确区分 JWT 签名、AES-256-GCM 可逆加密与 Argon2id 不可逆密码哈希。
+- `JwtManager` 固定 HS256 算法、拒绝短于 256 bit 的 secret、要求 `kid`、支持验证旧 key，并校验 `exp`、`nbf`、`sub`、可选 issuer/audience 和 clock leeway。
+- 自定义 JWT claims 必须序列化为对象且不能覆盖 `sub/exp/iat/nbf/iss/aud`；Bearer 中间件失败统一返回 401 与 `WWW-Authenticate: Bearer`，成功后提供强类型 `Jwt<T>` extractor。
+- `Encryptor` 使用操作系统随机 nonce、版本化 A256GCM envelope、关联数据和解密 key ring；错误关联数据和被篡改密文统一认证失败。
+- `Password` 生成带随机 salt 的 Argon2id PHC string，验证时沿用 hash 参数，并限制异常超长输入。
+- 7 个密码学与中间件测试、严格 Clippy 和 Rustfmt 通过。
+
 ## 2026-07-22：应用状态、页面外围协议与安全响应
 
 - `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。
