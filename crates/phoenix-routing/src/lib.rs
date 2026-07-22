@@ -11,7 +11,8 @@ pub use http::Method;
 use http::{HeaderValue, StatusCode, header, uri::Authority};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use phoenix_http::{
-    Handler, IntoResponse, Middleware, Request, Response, RouteManifest, apply_middleware,
+    Handler, IntoResponse, Middleware, Request, RequestBodyMode, Response, RouteManifest,
+    apply_middleware,
 };
 use thiserror::Error;
 
@@ -31,6 +32,7 @@ struct RouteDefinition {
     path: String,
     name: Option<String>,
     handler: Arc<dyn Handler>,
+    body_mode: RequestBodyMode,
     middleware: Vec<Arc<dyn Middleware>>,
 }
 
@@ -92,11 +94,13 @@ impl Routes {
     where
         H: Handler,
     {
+        let body_mode = handler.request_body_mode();
         self.definitions.push(RouteDefinition {
             method,
             path: normalize_path(&path.into()),
             name: None,
             handler: Arc::new(handler),
+            body_mode,
             middleware: Vec::new(),
         });
         self
@@ -236,6 +240,7 @@ impl Routes {
 
             compiled_routes.push(CompiledRoute {
                 name: definition.name,
+                body_mode: definition.body_mode,
                 handler: apply_middleware(definition.handler, &definition.middleware),
             });
         }
@@ -253,6 +258,7 @@ impl Routes {
         Ok(Router {
             handler: Arc::new(PanicBoundary { next: handler }),
             named_routes: Arc::new(named_routes),
+            body_modes: BodyModeRouter::Single(inner),
         })
     }
 }
@@ -296,6 +302,13 @@ impl RouteGroup {
 pub struct Router {
     handler: Arc<dyn Handler>,
     named_routes: Arc<HashMap<String, String>>,
+    body_modes: BodyModeRouter,
+}
+
+#[derive(Clone)]
+enum BodyModeRouter {
+    Single(Arc<RouterInner>),
+    Multi(Arc<Vec<RouterMount>>),
 }
 
 /// Metadata for the application module selected for the current request.
@@ -424,10 +437,14 @@ impl Router {
                 }
             }
         }
-        let dispatch: Arc<dyn Handler> = Arc::new(MultiDispatch { mounts });
+        let mounts = Arc::new(mounts);
+        let dispatch: Arc<dyn Handler> = Arc::new(MultiDispatch {
+            mounts: Arc::clone(&mounts),
+        });
         Ok(Self {
             handler: Arc::new(PanicBoundary { next: dispatch }),
             named_routes: Arc::new(named_routes),
+            body_modes: BodyModeRouter::Multi(mounts),
         })
     }
 
@@ -436,6 +453,20 @@ impl Router {
             .extensions_mut()
             .insert(RouteManifest::new(Arc::clone(&self.named_routes)));
         self.handler.call(request).await
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn request_body_mode(&self, request: &Request) -> RequestBodyMode {
+        match &self.body_modes {
+            BodyModeRouter::Single(inner) => {
+                inner.request_body_mode(request.method(), request.uri().path())
+            }
+            BodyModeRouter::Multi(mounts) => select_mount(mounts, request)
+                .map_or(RequestBodyMode::Buffered, |mount| {
+                    mount.router.request_body_mode(request)
+                }),
+        }
     }
 
     /// Generate a URL from a Laravel-style named route.
@@ -482,7 +513,7 @@ impl Router {
 }
 
 struct MultiDispatch {
-    mounts: Vec<RouterMount>,
+    mounts: Arc<Vec<RouterMount>>,
 }
 
 impl Handler for MultiDispatch {
@@ -569,6 +600,7 @@ fn display_prefix(prefix: &str) -> String {
 
 struct CompiledRoute {
     name: Option<String>,
+    body_mode: RequestBodyMode,
     handler: Arc<dyn Handler>,
 }
 
@@ -608,6 +640,20 @@ impl Handler for DispatchHandler {
 }
 
 impl RouterInner {
+    fn request_body_mode(&self, method: &Method, path: &str) -> RequestBodyMode {
+        let lookup_method = if method == Method::HEAD && !self.has_match(&Method::HEAD, path) {
+            &Method::GET
+        } else {
+            method
+        };
+        self.method_routers
+            .get(lookup_method)
+            .and_then(|router| router.at(path).ok())
+            .map_or(RequestBodyMode::Buffered, |matched| {
+                self.routes[*matched.value].body_mode
+            })
+    }
+
     async fn dispatch(&self, mut request: Request) -> Response {
         let is_head = request.method() == Method::HEAD;
         let lookup_method = if is_head && !self.has_match(&Method::HEAD, request.uri().path()) {
@@ -850,7 +896,7 @@ macro_rules! __phoenix_route {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoenix_http::SecurityHeaders;
+    use phoenix_http::{RequestBodyMode, SecurityHeaders, streaming};
 
     fn application_name(request: Request) -> phoenix_http::BoxFuture<Response> {
         Box::pin(async move {
@@ -934,6 +980,55 @@ mod tests {
         assert!(prefix_matches("/admin", "/admin"));
         assert!(prefix_matches("/admin", "/admin/users"));
         assert!(!prefix_matches("/admin", "/administrator"));
+    }
+
+    #[test]
+    fn body_mode_preflight_matches_single_and_multi_application_dispatch() {
+        let streaming_router = Routes::new()
+            .post(
+                "/upload",
+                streaming(|_request: Request| async { "streamed" }),
+            )
+            .build()
+            .unwrap();
+        let upload = Request::new(Method::POST, "/upload".parse().unwrap());
+        let wrong_method = Request::new(Method::GET, "/upload".parse().unwrap());
+        assert_eq!(
+            streaming_router.request_body_mode(&upload),
+            RequestBodyMode::Streaming
+        );
+        assert_eq!(
+            streaming_router.request_body_mode(&wrong_method),
+            RequestBodyMode::Buffered
+        );
+
+        let site = Routes::new()
+            .post("/upload", |_request: Request| async { "buffered" })
+            .build()
+            .unwrap();
+        let admin = Routes::new()
+            .post(
+                "/upload",
+                streaming(|_request: Request| async { "streamed" }),
+            )
+            .scoped(RouteGroup::new().prefix("/admin"))
+            .build()
+            .unwrap();
+        let router = Router::multi(vec![
+            RouterMount::new("site", "/", None::<String>, site).unwrap(),
+            RouterMount::new("admin", "/admin", None::<String>, admin).unwrap(),
+        ])
+        .unwrap();
+        let site_upload = Request::new(Method::POST, "/upload".parse().unwrap());
+        let admin_upload = Request::new(Method::POST, "/admin/upload".parse().unwrap());
+        assert_eq!(
+            router.request_body_mode(&site_upload),
+            RequestBodyMode::Buffered
+        );
+        assert_eq!(
+            router.request_body_mode(&admin_upload),
+            RequestBodyMode::Streaming
+        );
     }
 
     #[tokio::test]

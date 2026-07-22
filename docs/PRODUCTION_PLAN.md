@@ -11,7 +11,8 @@
 | 分布式限流 | 已完成首版 | 原子 `RateLimitBackend::hit`、可替换有界 key policy、Retry-After、默认失败关闭/显式失败开放、指标与共享 backend 双实例测试 |
 | 指标 exporter | 已完成首版 | HTTP 延迟/状态 middleware、连接/TLS server 接入、renderer snapshot、数据库/队列 hooks、Prometheus 0.0.4 文本端点、固定低基数标签测试 |
 | CSP nonce | 已完成首版 | 每请求随机 nonce、Header/HTML/Vite/renderer 一致、renderer v2、开发 origin 校验、HTML/XHTML no-store、失败关闭/断连取消及官方 React Suspense 跨语言 E2E |
-| WebSocket/SSE/流式请求 | 待实现 | 受控 upgrade、backpressure、取消、大小/deadline、优雅关闭、真实网络测试 |
+| 流式请求 | 已完成首版 | 路由预分类、typed one-shot stream、backpressure、Content-Length/chunked 限额、绝对 deadline、断连、H1 pipeline、H2 并发与关闭测试 |
+| WebSocket/SSE | 待实现 | 受控 upgrade、流完成/错误语义、keepalive、背压、取消、Origin/大小限制、优雅关闭与真实网络测试 |
 | 队列 | 待实现 | job envelope、重试/backoff、幂等键、dead-letter、worker shutdown、持久化 backend contract |
 | 邮件 | 待实现 | Message builder、文本/HTML、Header 注入防护、transport contract、内存测试 transport |
 | 管理后台 | 待实现 | 认证/授权保护、资源列表/表单、审计日志、可替换 UI 与示例 |

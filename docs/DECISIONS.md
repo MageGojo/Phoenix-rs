@@ -263,3 +263,10 @@
 - 决定：应用通过 cloneable `DocumentTemplate` 函数按请求生成 `DocumentSlots`，定制 html/body/root attributes、head 和 root 前后标记。Phoenix 始终生成 React root、渲染模式、hydration JSON、module 入口、资源标签和请求级 CSP nonce。
 - 原因：生产应用需要品牌 shell、语言、主题、全局导航和自有 head 标签；把完整 HTML 字符串交给业务会同时复制协议标记、转义、流式 SSR 与 CSP 逻辑。受控 slots 保留可组合性，也让普通与流式文档使用同一模板。
 - 边界：attributes 始终执行 HTML attribute 转义，root 的 `id`/`data-render-mode` 保留给框架。`TrustedHtml` 只接收应用自有静态标记或已按上下文净化的内容；业务数据继续使用 React props 或 `PageHead`。模板失败映射为通用 500，局部页面协议不执行文档模板。
+
+## ADR-038：流式请求由路由显式选择且 body 只能提取一次
+
+- 状态：已接受
+- 决定：普通路由继续在进入 middleware 前完整缓冲并验证 body；需要上传流的路由使用 `streaming(handler)`，由 Router 复用实际 method/Host/path/multi-app 选择逻辑完成预分类。`RequestBodyStream` 通过内部一次性 slot 同时服务 raw 与 typed handler。
+- 原因：仅根据 extractor 泛型自动改变网络读取方式会波及外部 extractor 与中间件，且容易让路由行为变得隐式。显式 wrapper 能保持默认安全语义，并让请求在 handler 拉取时自然继承 Hyper backpressure。
+- 限制与失败边界：`Content-Length` 超限在任何业务副作用前返回 413；未知长度由总字节上限和绝对 deadline 约束。stream 已取走后再次提取失败；`Json`、`Form`、`Multipart` 不允许读取流式路由的空缓冲区。HTTP/1 无法安全排空剩余 body 时允许关闭连接，但不得把剩余字节解释为下一请求；HTTP/2 只取消对应 stream。

@@ -139,9 +139,9 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - Phoenix 在进入路由前把原始 body 统一为框架请求类型，避免 Hyper body 泛型泄漏到控制器签名。
 - Phoenix 自己定义 `Handler`、`IntoResponse`、提取器、路由树和中间件接口，公共 API 不要求应用直接实现 Hyper trait。
 - 中间件核心先围绕 Phoenix 请求/响应实现。Tower 互操作可作为后续适配器，不作为 P0 架构前提。
-- 流式响应已通过框架 `ResponseBody::Stream` 接入 Hyper；升级、流式请求、SSE 和 WebSocket 仍需要受控逃生口。
+- 流式响应已通过框架 `ResponseBody::Stream` 接入 Hyper。流式请求由路由显式选择 `RequestBodyMode::Streaming`，以 one-shot `RequestBodyStream` 在 handler 拉取时施加背压；升级、SSE 和 WebSocket 仍需要受控逃生口。
 
-当前实现使用 Hyper/hyper-util 在同一监听器自动服务 HTTP/1.1 与 HTTP/2，并允许应用限制为 `Http1Only` 或 `Http2Only`。rustls 接入层提供 PEM/文件证书、TLS 握手 deadline 和与协议策略一致的 `h2`/`http/1.1` ALPN；真实网络测试覆盖 TLS + HTTP/2。HTTP/1.1 chunked 流式响应已经接入，升级连接、流式请求、SSE 和 WebSocket 仍需要受控逃生口。
+当前实现使用 Hyper/hyper-util 在同一监听器自动服务 HTTP/1.1 与 HTTP/2，并允许应用限制为 `Http1Only` 或 `Http2Only`。rustls 接入层提供 PEM/文件证书、TLS 握手 deadline 和与协议策略一致的 `h2`/`http/1.1` ALPN；真实网络测试覆盖 TLS + HTTP/2。HTTP/1.1 chunked 流式响应和 H1/H2 流式请求已经接入；请求保留原始 HTTP version 与 extensions，为 `OnUpgrade` 和 RFC 8441 奠定边界。升级连接、SSE 和 WebSocket 仍待完成。
 
 ### 结构化日志
 

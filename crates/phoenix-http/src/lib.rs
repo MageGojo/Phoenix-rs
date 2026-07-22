@@ -5,12 +5,16 @@ use std::{
     net::SocketAddr,
     ops::{Deref, DerefMut},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+    time::Duration,
 };
 
 pub use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
-pub use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
+pub use http::{
+    Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, Version, header,
+};
 pub use mime::Mime;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Serialize, de::DeserializeOwned};
@@ -200,15 +204,92 @@ impl std::fmt::Debug for ResponseContext {
     }
 }
 
+/// How the server should expose an incoming request body to a route handler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RequestBodyMode {
+    /// Read and validate the complete body before entering middleware and handlers.
+    #[default]
+    Buffered,
+    /// Let the handler pull body chunks with network backpressure.
+    Streaming,
+}
+
+/// A bounded, deadline-aware stream of incoming request body chunks.
+pub struct RequestBodyStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, RequestBodyError>> + Send + 'static>>,
+}
+
+impl RequestBodyStream {
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Bytes, RequestBodyError>> + Send + 'static,
+    {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+
+    /// Pull the next body chunk without requiring an application dependency on
+    /// the `futures-util` extension traits.
+    pub async fn next_chunk(&mut self) -> Option<Result<Bytes, RequestBodyError>> {
+        self.next().await
+    }
+
+    /// Collect the remaining stream when a bounded endpoint eventually needs one buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first size, deadline, or transport error emitted by the server.
+    pub async fn into_bytes(mut self) -> Result<Bytes, RequestBodyError> {
+        let mut output = Vec::new();
+        while let Some(chunk) = self.next().await {
+            output.extend_from_slice(&chunk?);
+        }
+        Ok(Bytes::from(output))
+    }
+}
+
+impl Stream for RequestBodyStream {
+    type Item = Result<Bytes, RequestBodyError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(context)
+    }
+}
+
+impl std::fmt::Debug for RequestBodyStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RequestBodyStream(<body>)")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+pub enum RequestBodyError {
+    #[error("The request body exceeds the configured size limit.")]
+    TooLarge,
+    #[error("The request body exceeded its {0:?} deadline.")]
+    Timeout(Duration),
+    #[error("The request body transport failed.")]
+    Transport,
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("A streaming request body is unavailable or has already been consumed.")]
+pub struct RequestBodyStreamRejection;
+
 #[derive(Debug)]
 pub struct Request {
     method: Method,
     uri: Uri,
+    version: Version,
     headers: HeaderMap,
     body: Bytes,
     params: Vec<(String, String)>,
     route_name: Option<String>,
     extensions: Extensions,
+    body_stream: Option<Arc<Mutex<Option<RequestBodyStream>>>>,
 }
 
 impl Request {
@@ -217,11 +298,13 @@ impl Request {
         Self {
             method,
             uri,
+            version: Version::HTTP_11,
             headers: HeaderMap::new(),
             body: Bytes::new(),
             params: Vec::new(),
             route_name: None,
             extensions: Extensions::new(),
+            body_stream: None,
         }
     }
 
@@ -230,11 +313,36 @@ impl Request {
         Self {
             method,
             uri,
+            version: Version::HTTP_11,
             headers,
             body,
             params: Vec::new(),
             route_name: None,
             extensions: Extensions::new(),
+            body_stream: None,
+        }
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_server_parts(
+        method: Method,
+        uri: Uri,
+        version: Version,
+        headers: HeaderMap,
+        extensions: Extensions,
+        body: Bytes,
+    ) -> Self {
+        Self {
+            method,
+            uri,
+            version,
+            headers,
+            body,
+            params: Vec::new(),
+            route_name: None,
+            extensions,
+            body_stream: None,
         }
     }
 
@@ -249,6 +357,11 @@ impl Request {
     }
 
     #[must_use]
+    pub const fn version(&self) -> Version {
+        self.version
+    }
+
+    #[must_use]
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
@@ -258,8 +371,33 @@ impl Request {
     }
 
     #[must_use]
+    /// Return the fully buffered request body.
+    ///
+    /// Streaming routes keep this buffer empty; use [`Self::take_body_stream`]
+    /// or the [`RequestBodyStream`] extractor on those routes.
     pub fn body(&self) -> &Bytes {
         &self.body
+    }
+
+    #[must_use]
+    pub const fn is_body_streaming(&self) -> bool {
+        self.body_stream.is_some()
+    }
+
+    /// Take ownership of the incoming body stream on a [`streaming`] route.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the route is buffered or the stream was already taken.
+    pub fn take_body_stream(&self) -> Result<RequestBodyStream, RequestBodyStreamRejection> {
+        let body = self
+            .body_stream
+            .as_ref()
+            .ok_or(RequestBodyStreamRejection)?;
+        body.lock()
+            .map_err(|_| RequestBodyStreamRejection)?
+            .take()
+            .ok_or(RequestBodyStreamRejection)
     }
 
     /// Deserialize the request body as JSON.
@@ -269,6 +407,9 @@ impl Request {
     /// Returns an error when `Content-Type` is not JSON or the body is not
     /// valid JSON for `T`.
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, JsonRejection> {
+        if self.is_body_streaming() {
+            return Err(JsonRejection::StreamingBody);
+        }
         let content_type = self
             .headers
             .get(header::CONTENT_TYPE)
@@ -313,10 +454,24 @@ impl Request {
         self.route_name = name;
         self.params = params;
     }
+
+    #[doc(hidden)]
+    pub fn set_buffered_body(&mut self, body: Bytes) {
+        self.body = body;
+        self.body_stream = None;
+    }
+
+    #[doc(hidden)]
+    pub fn set_streaming_body(&mut self, body: RequestBodyStream) {
+        self.body = Bytes::new();
+        self.body_stream = Some(Arc::new(Mutex::new(Some(body))));
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum JsonRejection {
+    #[error("JSON extraction cannot read a streaming request body.")]
+    StreamingBody,
     #[error("The Content-Type header must be application/json.")]
     MissingContentType,
     #[error("The Content-Type header must be application/json.")]
@@ -329,6 +484,7 @@ impl JsonRejection {
     #[must_use]
     pub const fn status(&self) -> StatusCode {
         match self {
+            Self::StreamingBody => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingContentType | Self::UnsupportedContentType => {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE
             }
@@ -340,13 +496,24 @@ impl JsonRejection {
 pub trait FromRequest: Sized + Send + 'static {
     type Rejection: IntoResponse + Send + 'static;
 
-    /// Extract a strongly typed value from an already buffered request.
+    /// Extract a strongly typed value from a normalized request.
+    ///
+    /// Buffered body extractors read [`Request::body`]. [`RequestBodyStream`]
+    /// takes the one-shot body slot of a [`streaming`] route.
     ///
     /// # Errors
     ///
     /// Returns a typed rejection when the request cannot be converted into
     /// the requested value.
     fn from_request(request: &Request) -> Result<Self, Self::Rejection>;
+}
+
+impl FromRequest for RequestBodyStream {
+    type Rejection = RequestBodyStreamRejection;
+
+    fn from_request(request: &Request) -> Result<Self, Self::Rejection> {
+        request.take_body_stream()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -436,6 +603,8 @@ pub enum StringMapRejection {
 
 #[derive(Debug, Error)]
 pub enum FormRejection {
+    #[error("Form extraction cannot read a streaming request body.")]
+    StreamingBody,
     #[error("The Content-Type header must be application/x-www-form-urlencoded.")]
     MissingContentType,
     #[error("The Content-Type header must be application/x-www-form-urlencoded.")]
@@ -511,6 +680,9 @@ where
     type Rejection = FormRejection;
 
     fn from_request(request: &Request) -> Result<Self, Self::Rejection> {
+        if request.is_body_streaming() {
+            return Err(FormRejection::StreamingBody);
+        }
         let content_type = request
             .headers()
             .get(header::CONTENT_TYPE)
@@ -646,6 +818,8 @@ impl MultipartField {
 
 #[derive(Debug, Error)]
 pub enum MultipartRejection {
+    #[error("Multipart extraction cannot read a streaming request body.")]
+    StreamingBody,
     #[error("The Content-Type header must be multipart/form-data.")]
     MissingContentType,
     #[error("The Content-Type header must be multipart/form-data with a boundary.")]
@@ -663,6 +837,9 @@ where
     type Rejection = MultipartRejection;
 
     fn from_request(request: &Request) -> Result<Self, Self::Rejection> {
+        if request.is_body_streaming() {
+            return Err(MultipartRejection::StreamingBody);
+        }
         let content_type = request
             .headers()
             .get(header::CONTENT_TYPE)
@@ -1252,6 +1429,17 @@ impl IntoResponse for JsonRejection {
     }
 }
 
+impl IntoResponse for RequestBodyError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Timeout(_) => StatusCode::REQUEST_TIMEOUT,
+            Self::Transport => StatusCode::BAD_REQUEST,
+        };
+        rejection_response(status, &self.to_string())
+    }
+}
+
 impl IntoResponse for QueryRejection {
     fn into_response(self) -> Response {
         rejection_response(StatusCode::BAD_REQUEST, &self.to_string())
@@ -1273,6 +1461,7 @@ impl IntoResponse for HeaderRejection {
 impl IntoResponse for FormRejection {
     fn into_response(self) -> Response {
         let status = match self {
+            Self::StreamingBody => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingContentType | Self::UnsupportedContentType => {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE
             }
@@ -1288,9 +1477,16 @@ impl IntoResponse for StateRejection {
     }
 }
 
+impl IntoResponse for RequestBodyStreamRejection {
+    fn into_response(self) -> Response {
+        rejection_response(StatusCode::INTERNAL_SERVER_ERROR, &self.to_string())
+    }
+}
+
 impl IntoResponse for MultipartRejection {
     fn into_response(self) -> Response {
         let status = match self {
+            Self::StreamingBody => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingContentType | Self::UnsupportedContentType => {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE
             }
@@ -1313,6 +1509,11 @@ fn rejection_response(status: StatusCode, message: &str) -> Response {
 
 pub trait Handler: Send + Sync + 'static {
     fn call(&self, request: Request) -> BoxFuture<Response>;
+
+    #[doc(hidden)]
+    fn request_body_mode(&self) -> RequestBodyMode {
+        RequestBodyMode::Buffered
+    }
 }
 
 pub struct TypedHandler {
@@ -1322,6 +1523,37 @@ pub struct TypedHandler {
 impl Handler for TypedHandler {
     fn call(&self, request: Request) -> BoxFuture<Response> {
         self.handler.call(request)
+    }
+
+    fn request_body_mode(&self) -> RequestBodyMode {
+        self.handler.request_body_mode()
+    }
+}
+
+/// Handler wrapper that opts one route into pull-based request body streaming.
+pub struct StreamingHandler<H> {
+    handler: H,
+}
+
+/// Mark a handler as consuming [`RequestBodyStream`] instead of a pre-buffered body.
+///
+/// Wrap typed handlers as `streaming(typed(upload))`; omitting `streaming`
+/// intentionally leaves the route in buffered mode and rejects stream extraction.
+#[must_use]
+pub const fn streaming<H>(handler: H) -> StreamingHandler<H> {
+    StreamingHandler { handler }
+}
+
+impl<H> Handler for StreamingHandler<H>
+where
+    H: Handler,
+{
+    fn call(&self, request: Request) -> BoxFuture<Response> {
+        self.handler.call(request)
+    }
+
+    fn request_body_mode(&self) -> RequestBodyMode {
+        RequestBodyMode::Streaming
     }
 }
 
@@ -1535,6 +1767,7 @@ pub fn apply_middleware(
 
 #[cfg(test)]
 mod tests {
+    use futures_util::stream;
     use serde::Deserialize;
 
     use super::*;
@@ -1765,6 +1998,99 @@ mod tests {
             ))
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn streaming_body_is_typed_one_shot_and_rejects_buffered_extractors() {
+        let handler = streaming(typed(
+            |Query(input): Query<SearchInput>, body: RequestBodyStream| async move {
+                let body = body.into_bytes().await?;
+                Ok::<_, RequestBodyError>(format!(
+                    "{}:{}",
+                    input.term,
+                    String::from_utf8_lossy(&body)
+                ))
+            },
+        ));
+        assert_eq!(handler.request_body_mode(), RequestBodyMode::Streaming);
+
+        let mut request = Request::new(Method::POST, "/upload?page=1&term=stream".parse().unwrap());
+        request.set_streaming_body(RequestBodyStream::new(stream::iter([
+            Ok(Bytes::from_static(b"first-")),
+            Ok(Bytes::from_static(b"second")),
+        ])));
+        let response = handler.call(request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), "stream:first-second");
+
+        let mut request = Request::new(Method::POST, "/upload".parse().unwrap());
+        request.set_streaming_body(RequestBodyStream::new(stream::empty()));
+        assert!(matches!(
+            Json::<SearchInput>::from_request(&request),
+            Err(JsonRejection::StreamingBody)
+        ));
+        assert!(matches!(
+            Form::<SearchInput>::from_request(&request),
+            Err(FormRejection::StreamingBody)
+        ));
+        assert!(matches!(
+            Multipart::<MultipartData>::from_request(&request),
+            Err(MultipartRejection::StreamingBody)
+        ));
+        assert!(RequestBodyStream::from_request(&request).is_ok());
+        assert!(RequestBodyStream::from_request(&request).is_err());
+        assert!(request.is_body_streaming());
+        assert!(request.body().is_empty());
+    }
+
+    #[tokio::test]
+    async fn request_body_stream_preserves_chunk_order_and_errors() {
+        let mut body = RequestBodyStream::new(stream::iter([
+            Ok(Bytes::from_static(b"one")),
+            Ok(Bytes::from_static(b"two")),
+        ]));
+        assert_eq!(body.next_chunk().await.unwrap().unwrap(), "one");
+        assert_eq!(body.next_chunk().await.unwrap().unwrap(), "two");
+        assert!(body.next_chunk().await.is_none());
+
+        for (error, expected_status) in [
+            (RequestBodyError::TooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+            (
+                RequestBodyError::Timeout(Duration::from_secs(1)),
+                StatusCode::REQUEST_TIMEOUT,
+            ),
+            (RequestBodyError::Transport, StatusCode::BAD_REQUEST),
+        ] {
+            let body = RequestBodyStream::new(stream::iter([
+                Ok(Bytes::from_static(b"partial")),
+                Err(error),
+            ]));
+            assert_eq!(body.into_bytes().await, Err(error));
+            assert_eq!(error.into_response().status(), expected_status);
+        }
+    }
+
+    #[test]
+    fn server_request_parts_preserve_version_and_extensions() {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        struct Marker(&'static str);
+
+        let mut extensions = Extensions::new();
+        extensions.insert(Marker("preserved"));
+        let request = Request::from_server_parts(
+            Method::POST,
+            "/upload".parse().unwrap(),
+            Version::HTTP_2,
+            HeaderMap::new(),
+            extensions,
+            Bytes::new(),
+        );
+
+        assert_eq!(request.version(), Version::HTTP_2);
+        assert_eq!(
+            request.extensions().get::<Marker>(),
+            Some(&Marker("preserved"))
+        );
     }
 
     #[tokio::test]

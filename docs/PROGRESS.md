@@ -282,3 +282,11 @@
 - `DocumentContext` 提供页面信封与当前请求 CSP nonce，供应用自有 script/style 标签使用；Phoenix 继续托管 hydration JSON、module 入口和上下文安全编码。
 - 普通、SSR/Islands 完整响应与流式响应共用同一文档模板；模板失败返回不泄露内部详情的 500，页面协议导航不执行 HTML chrome。
 - `cargo test -p phoenix-view --locked` 通过 30 个测试，覆盖自定义 chrome、属性注入防护、nonce 函数上下文和错误失败关闭。
+
+## 2026-07-23：真实流式请求 body
+
+- 路由通过 `streaming(handler)` 显式选择 pull-based body；raw handler 可调用 `Request::take_body_stream()`，typed handler 使用 one-shot `RequestBodyStream` extractor。
+- Request 保留 Hyper 的 HTTP version 与 extensions；普通构造器保持 HTTP/1.1 兼容默认，为 H1 `OnUpgrade` 和 H2 RFC 8441 protocol extension 留出后续边界。
+- 声明的超限 `Content-Length` 在进入中间件/handler 前返回 413；chunked/H2 body 继续由运行时总字节限额约束，读取使用从请求进入 handler 时开始的绝对 deadline。
+- `RequestBodyError` 稳定映射 413/408/400；`Json`、`Form`、`Multipart` 在流式路由明确返回配置错误，不再把空缓冲区误解析为客户端输入。
+- 真实网络测试证明首块在上传完成前可见、客户端断连可观察、未读取 EOF 不污染 H1 pipeline、H2 同连接并发 stream 保持健康，stalled upload 会在 graceful shutdown 硬期限内终止。

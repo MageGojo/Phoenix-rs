@@ -4,7 +4,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt, stream};
 use http_body_util::{
     BodyExt, Full, LengthLimitError, Limited, StreamBody, combinators::UnsyncBoxBody,
 };
@@ -18,7 +18,8 @@ use hyper_util::{
     server::conn::auto,
 };
 use phoenix_http::{
-    ConnectionInfo, Middleware, Request, Response, ResponseBody, StateMiddleware, TransportScheme,
+    ConnectionInfo, Middleware, Request, RequestBodyError, RequestBodyMode, RequestBodyStream,
+    Response, ResponseBody, StateMiddleware, TransportScheme,
 };
 use phoenix_metrics::Metrics;
 use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
@@ -37,6 +38,8 @@ const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const MIN_REJECTED_BODY_DRAIN_SIZE: usize = 64 * 1024;
+const MAX_REJECTED_BODY_DRAIN_SIZE: usize = 8 * 1024 * 1024;
 const ALPN_HTTP_2: &[u8] = b"h2";
 const ALPN_HTTP_1_1: &[u8] = b"http/1.1";
 
@@ -248,6 +251,10 @@ impl Application {
 
     pub async fn handle(&self, request: Request) -> Response {
         self.router.handle(request).await
+    }
+
+    fn request_body_mode(&self, request: &Request) -> RequestBodyMode {
+        self.router.request_body_mode(request)
     }
 
     /// Bind the application to a TCP address without accepting connections yet.
@@ -654,30 +661,107 @@ async fn handle_hyper_request(
     connection_info: ConnectionInfo,
 ) -> Result<HyperResponse<UnsyncBoxBody<Bytes, Infallible>>, Infallible> {
     let (parts, body) = request.into_parts();
-    let body = tokio::time::timeout(
-        application.body_read_timeout,
-        Limited::new(body, application.max_body_size).collect(),
-    )
-    .await;
+    let declared_body_too_large =
+        declared_content_length_exceeds(&parts.headers, application.max_body_size);
+    let mut request = Request::from_server_parts(
+        parts.method,
+        parts.uri,
+        parts.version,
+        parts.headers,
+        parts.extensions,
+        Bytes::new(),
+    );
+    if let Some(peer_addr) = connection_info.peer_addr() {
+        request.extensions_mut().insert(peer_addr);
+    }
+    request.extensions_mut().insert(connection_info);
 
-    let response = match body {
-        Ok(Ok(body)) => {
-            let mut request =
-                Request::from_parts(parts.method, parts.uri, parts.headers, body.to_bytes());
-            if let Some(peer_addr) = connection_info.peer_addr() {
-                request.extensions_mut().insert(peer_addr);
+    let response = if declared_body_too_large {
+        drain_rejected_body(
+            body,
+            application.max_body_size,
+            application.body_read_timeout,
+        );
+        Response::text("Payload Too Large").with_status(http::StatusCode::PAYLOAD_TOO_LARGE)
+    } else {
+        match application.request_body_mode(&request) {
+            RequestBodyMode::Streaming => {
+                request.set_streaming_body(incoming_body_stream(
+                    body,
+                    application.max_body_size,
+                    application.body_read_timeout,
+                ));
+                application.handle(request).await
             }
-            request.extensions_mut().insert(connection_info);
-            application.handle(request).await
+            RequestBodyMode::Buffered => {
+                let body = tokio::time::timeout(
+                    application.body_read_timeout,
+                    Limited::new(body, application.max_body_size).collect(),
+                )
+                .await;
+                match body {
+                    Ok(Ok(body)) => {
+                        request.set_buffered_body(body.to_bytes());
+                        application.handle(request).await
+                    }
+                    Ok(Err(error)) if error.is::<LengthLimitError>() => {
+                        Response::text("Payload Too Large")
+                            .with_status(http::StatusCode::PAYLOAD_TOO_LARGE)
+                    }
+                    Ok(Err(_)) => {
+                        Response::text("Bad Request").with_status(http::StatusCode::BAD_REQUEST)
+                    }
+                    Err(_) => Response::text("Request Timeout")
+                        .with_status(http::StatusCode::REQUEST_TIMEOUT),
+                }
+            }
         }
-        Ok(Err(error)) if error.is::<LengthLimitError>() => {
-            Response::text("Payload Too Large").with_status(http::StatusCode::PAYLOAD_TOO_LARGE)
-        }
-        Ok(Err(_)) => Response::text("Bad Request").with_status(http::StatusCode::BAD_REQUEST),
-        Err(_) => Response::text("Request Timeout").with_status(http::StatusCode::REQUEST_TIMEOUT),
     };
 
     Ok(into_hyper_response(response))
+}
+
+fn drain_rejected_body(body: Incoming, max_body_size: usize, body_read_timeout: Duration) {
+    let drain_limit = max_body_size
+        .saturating_mul(2)
+        .clamp(MIN_REJECTED_BODY_DRAIN_SIZE, MAX_REJECTED_BODY_DRAIN_SIZE);
+    drop(tokio::spawn(async move {
+        let _ = tokio::time::timeout(body_read_timeout, Limited::new(body, drain_limit).collect())
+            .await;
+    }));
+}
+
+fn declared_content_length_exceeds(headers: &http::HeaderMap, max_body_size: usize) -> bool {
+    let max_body_size = u64::try_from(max_body_size).unwrap_or(u64::MAX);
+    headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|content_length| content_length > max_body_size)
+}
+
+fn incoming_body_stream(
+    body: Incoming,
+    max_body_size: usize,
+    body_read_timeout: Duration,
+) -> RequestBodyStream {
+    let body = Limited::new(body, max_body_size).into_data_stream();
+    let deadline = tokio::time::Instant::now() + body_read_timeout;
+    RequestBodyStream::new(stream::unfold(
+        Some((body, deadline)),
+        move |state| async move {
+            let (mut body, deadline) = state?;
+            match tokio::time::timeout_at(deadline, body.next()).await {
+                Ok(Some(Ok(chunk))) => Some((Ok(chunk), Some((body, deadline)))),
+                Ok(Some(Err(error))) if error.is::<LengthLimitError>() => {
+                    Some((Err(RequestBodyError::TooLarge), None))
+                }
+                Ok(Some(Err(_))) => Some((Err(RequestBodyError::Transport), None)),
+                Ok(None) => None,
+                Err(_) => Some((Err(RequestBodyError::Timeout(body_read_timeout)), None)),
+            }
+        },
+    ))
 }
 
 fn into_hyper_response(response: Response) -> HyperResponse<UnsyncBoxBody<Bytes, Infallible>> {
@@ -759,15 +843,22 @@ macro_rules! __phoenix_application_module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::stream;
-    use http_body_util::Empty;
+    use futures_util::{StreamExt, stream};
+    use http_body_util::{Empty, StreamBody, combinators::UnsyncBoxBody};
     use hyper::client::conn::http2;
-    use phoenix_http::{Method, State, typed};
+    use phoenix_http::{Method, RequestBodyError, RequestBodyStream, State, streaming, typed};
     use phoenix_routing::ApplicationContext;
     use rcgen::{CertifiedKey, generate_simple_self_signed};
     use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
-    use std::future::{Ready, ready};
+    use std::{
+        future::{Ready, ready},
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Notify;
     use tokio_rustls::TlsConnector;
 
     fn streaming_handler(_request: Request) -> Ready<Response> {
@@ -775,6 +866,37 @@ mod tests {
             Bytes::from_static(b"first-"),
             Bytes::from_static(b"second"),
         ])))
+    }
+
+    async fn read_http1_until(client: &mut TcpStream, needle: &[u8]) -> Vec<u8> {
+        let mut response = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buffer))
+                .await
+                .expect("HTTP/1 response timed out")
+                .expect("HTTP/1 response read failed");
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&buffer[..read]);
+            if response
+                .windows(needle.len())
+                .any(|window| window == needle)
+            {
+                break;
+            }
+        }
+        response
+    }
+
+    async fn read_http1_to_end(client: &mut TcpStream) -> Vec<u8> {
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response))
+            .await
+            .expect("HTTP/1 response timed out")
+            .expect("HTTP/1 response read failed");
+        response
     }
 
     #[tokio::test]
@@ -800,6 +922,320 @@ mod tests {
         assert!(response.contains("second"));
 
         server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_request_yields_a_chunk_before_upload_completion() {
+        let handler = streaming(typed(|mut body: RequestBodyStream| async move {
+            match body.next_chunk().await {
+                Some(Ok(chunk)) => Ok(chunk),
+                Some(Err(error)) => Err(error),
+                None => Ok(Bytes::new()),
+            }
+        }));
+        let server = Application::new(Routes::new().post("/upload", handler))
+            .unwrap()
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n",
+            )
+            .await
+            .unwrap();
+
+        let response = read_http1_until(&mut client, b"first").await;
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+        assert!(response.windows(5).any(|window| window == b"first"));
+
+        drop(client);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn declared_streaming_body_limit_rejects_before_handler_side_effects() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler_calls = Arc::clone(&calls);
+        let handler = streaming(move |_request: Request| {
+            let handler_calls = Arc::clone(&handler_calls);
+            async move {
+                handler_calls.fetch_add(1, Ordering::SeqCst);
+                "unexpected"
+            }
+        });
+        let server = Application::new(Routes::new().post("/upload", handler))
+            .unwrap()
+            .max_body_size(4)
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabcde",
+            )
+            .await
+            .unwrap();
+
+        let response = read_http1_to_end(&mut client).await;
+        assert!(response.starts_with(b"HTTP/1.1 413 Payload Too Large"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chunked_streaming_body_limit_maps_to_payload_too_large() {
+        let handler = streaming(typed(|body: RequestBodyStream| async move {
+            body.into_bytes().await.map(|_| "accepted")
+        }));
+        let server = Application::new(Routes::new().post("/upload", handler))
+            .unwrap()
+            .max_body_size(4)
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nabcde\r\n0\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let response = read_http1_to_end(&mut client).await;
+        assert!(response.starts_with(b"HTTP/1.1 413 Payload Too Large"));
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_body_uses_an_absolute_read_deadline() {
+        let handler = streaming(typed(|mut body: RequestBodyStream| async move {
+            match body.next_chunk().await {
+                Some(Err(error)) => Err(error),
+                Some(Ok(_)) | None => Ok("unexpected"),
+            }
+        }));
+        let server = Application::new(Routes::new().post("/upload", handler))
+            .unwrap()
+            .body_read_timeout(Duration::from_millis(50))
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let response = read_http1_to_end(&mut client).await;
+        assert!(response.starts_with(b"HTTP/1.1 408 Request Timeout"));
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_handler_observes_client_disconnect() {
+        let (observed_tx, mut observed_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handler = streaming(typed(move |mut body: RequestBodyStream| {
+            let observed_tx = observed_tx.clone();
+            async move {
+                let disconnected = matches!(
+                    body.next_chunk().await,
+                    Some(Err(RequestBodyError::Transport))
+                );
+                let _ = observed_tx.send(disconnected);
+                "finished"
+            }
+        }));
+        let server = Application::new(Routes::new().post("/upload", handler))
+            .unwrap()
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        drop(client);
+
+        let disconnected = tokio::time::timeout(Duration::from_secs(2), observed_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(disconnected);
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_stream_before_eof_does_not_corrupt_http1_pipeline() {
+        let upload = streaming(typed(|mut body: RequestBodyStream| async move {
+            let _ = body.next_chunk().await;
+            "upload-finished"
+        }));
+        let routes = Routes::new()
+            .post("/upload", upload)
+            .get("/health", |_request: Request| async { "healthy" });
+        let server = Application::new(routes)
+            .unwrap()
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n0\r\n\r\nGET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+
+        let response = read_http1_to_end(&mut client).await;
+        let response = String::from_utf8(response).unwrap();
+        assert_eq!(response.matches("HTTP/1.1 200 OK").count(), 2);
+        assert!(response.contains("upload-finished"));
+        assert!(response.contains("healthy"));
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn http2_keeps_concurrent_streams_healthy_during_streaming_upload() {
+        let (started_tx, started_rx) = oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let release = Arc::new(Notify::new());
+        let handler_started = Arc::clone(&started_tx);
+        let handler_release = Arc::clone(&release);
+        let upload = streaming(typed(move |mut body: RequestBodyStream| {
+            let handler_started = Arc::clone(&handler_started);
+            let handler_release = Arc::clone(&handler_release);
+            async move {
+                let _ = body.next_chunk().await;
+                if let Some(started_tx) = handler_started.lock().unwrap().take() {
+                    let _ = started_tx.send(());
+                }
+                handler_release.notified().await;
+                "upload-finished"
+            }
+        }));
+        let routes =
+            Routes::new()
+                .post("/upload", upload)
+                .get("/health", |request: Request| async move {
+                    assert_eq!(request.version(), http::Version::HTTP_2);
+                    "healthy"
+                });
+        let server = Application::new(routes)
+            .unwrap()
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let stream = TcpStream::connect(server.local_addr()).await.unwrap();
+        let (mut sender, connection) = http2::handshake::<_, _, UnsyncBoxBody<Bytes, Infallible>>(
+            TokioExecutor::new(),
+            TokioIo::new(stream),
+        )
+        .await
+        .unwrap();
+        let connection_task = tokio::spawn(connection);
+        let upload_body = StreamBody::new(
+            stream::iter([Ok::<_, Infallible>(Frame::data(Bytes::from_static(
+                b"first",
+            )))])
+            .chain(stream::pending()),
+        )
+        .boxed_unsync();
+        let upload_request = HyperRequest::builder()
+            .method(http::Method::POST)
+            .uri("http://localhost/upload")
+            .body(upload_body)
+            .unwrap();
+        let upload_response = sender.send_request(upload_request);
+        tokio::pin!(upload_response);
+
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let health_request = HyperRequest::builder()
+            .uri("http://localhost/health")
+            .body(Empty::new().boxed_unsync())
+            .unwrap();
+        let health_response = sender.send_request(health_request).await.unwrap();
+        assert_eq!(
+            health_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+            "healthy"
+        );
+
+        release.notify_waiters();
+        let upload_response = upload_response.await.unwrap();
+        assert_eq!(
+            upload_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+            "upload-finished"
+        );
+
+        drop(sender);
+        server.shutdown().await.unwrap();
+        connection_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_aborts_a_stalled_streaming_upload_at_deadline() {
+        let (started_tx, started_rx) = oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let handler_started = Arc::clone(&started_tx);
+        let upload = streaming(typed(move |mut body: RequestBodyStream| {
+            let handler_started = Arc::clone(&handler_started);
+            async move {
+                if let Some(started_tx) = handler_started.lock().unwrap().take() {
+                    let _ = started_tx.send(());
+                }
+                let _ = body.next_chunk().await;
+                "finished"
+            }
+        }));
+        let server = Application::new(Routes::new().post("/upload", upload))
+            .unwrap()
+            .body_read_timeout(Duration::from_secs(30))
+            .graceful_shutdown_timeout(Duration::from_millis(50))
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(
+                b"POST /upload HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_millis(500), server.shutdown())
+            .await
+            .expect("server shutdown exceeded its hard deadline")
+            .unwrap();
+        drop(client);
     }
 
     #[tokio::test]
