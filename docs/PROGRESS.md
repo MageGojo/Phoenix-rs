@@ -193,6 +193,13 @@
 - 组合 Router 汇总全部命名路由，因此后端 URL 生成和 React route manifest 都能看到 `website.*`、`frontend.*` 与 `admin.*`。
 - 新增 `examples/multi-app`，真实验证 `/` 官网、`/app` 前台、`/admin` 后台、隔离 State、404 边界和跨应用 URL 生成。
 
+## 2026-07-22：快速声明宏
+
+- 新增 `routes!`，批量声明 GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS、可选命名路由与逐路由中间件。
+- 新增 `applications!`，用 ident 生成稳定应用名，并支持 root、prefix、host、name prefix、State 和 middleware 选项。
+- 两个宏只展开为已经验证的 builder API；动态组装继续使用普通 Rust，不另建隐式注册系统。
+- `examples/multi-app` 已改为真实使用两个宏；macro doctest、路由中间件测试、三应用集成测试和严格 Clippy 均通过。
+
 ## 2026-07-22：应用状态、页面外围协议与安全响应
 
 - `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。

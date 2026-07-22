@@ -1,12 +1,11 @@
-use phoenix::prelude::{Routes, typed};
+use phoenix::prelude::{Routes, routes, typed};
 
 use crate::module_home;
 
 #[must_use]
 pub fn routes() -> Routes {
-    Routes::new()
-        .get("/", typed(module_home))
-        .name("dashboard")
-        .get("/users", typed(module_home))
-        .name("users.index")
+    routes! {
+        GET "/" => typed(module_home), name = "dashboard";
+        GET "/users" => typed(module_home), name = "users.index";
+    }
 }

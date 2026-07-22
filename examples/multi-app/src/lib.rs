@@ -11,22 +11,11 @@ pub struct AppBrand(pub &'static str);
 ///
 /// Returns an error when an application selector or route declaration is invalid.
 pub fn application() -> Result<Application, MultiApplicationError> {
-    Application::multi()
-        .mount(
-            ApplicationModule::new("website", apps::website::routes())
-                .root()
-                .state(AppBrand("Official website")),
-        )
-        .mount(
-            ApplicationModule::new("frontend", apps::frontend::routes())
-                .prefix("/app")
-                .state(AppBrand("Customer frontend")),
-        )
-        .mount(
-            ApplicationModule::new("admin", apps::admin::routes())
-                .state(AppBrand("Administration")),
-        )
-        .build()
+    applications! {
+        website => apps::website::routes(), [root, state = AppBrand("Official website")];
+        frontend => apps::frontend::routes(), [prefix = "/app", state = AppBrand("Customer frontend")];
+        admin => apps::admin::routes(), [state = AppBrand("Administration")];
+    }
 }
 
 pub async fn module_home(

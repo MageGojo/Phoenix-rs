@@ -28,27 +28,18 @@ struct AppState {
 }
 
 fn application() -> Result<Application, MultiApplicationError> {
-    Application::multi()
-        .mount(
-            ApplicationModule::new("website", website_routes())
-                .root()
-                .state(AppState { label: "Website" }),
-        )
-        .mount(
-            ApplicationModule::new("frontend", frontend_routes())
-                .prefix("/app")
-                .state(AppState { label: "Frontend" }),
-        )
-        .mount(
-            ApplicationModule::new("admin", admin_routes())
-                .state(AppState { label: "Admin" }),
-        )
-        .build()
+    applications! {
+        website => website_routes(), [root, state = AppState { label: "Website" }];
+        frontend => frontend_routes(), [prefix = "/app", state = AppState { label: "Frontend" }];
+        admin => admin_routes(), [state = AppState { label: "Admin" }];
+    }
 }
 # fn website_routes() -> Routes { Routes::new() }
 # fn frontend_routes() -> Routes { Routes::new() }
 # fn admin_routes() -> Routes { Routes::new() }
 ```
+
+`applications!` 返回与手写 `Application::multi().mount(...).build()` 相同的 `Result`。选项按声明顺序展开，支持 `root`、`prefix`、`host`、`name_prefix`、`state` 和 `middleware`；复杂条件组装时可以随时改回普通 builder。
 
 约定结果：
 

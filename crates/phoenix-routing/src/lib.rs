@@ -7,7 +7,8 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::FutureExt;
-use http::{HeaderValue, Method, StatusCode, header, uri::Authority};
+pub use http::Method;
+use http::{HeaderValue, StatusCode, header, uri::Authority};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use phoenix_http::{
     Handler, IntoResponse, Middleware, Request, Response, RouteManifest, apply_middleware,
@@ -788,9 +789,68 @@ pub enum UrlGenerationError {
     MissingParameter { route: String, parameter: String },
 }
 
+/// Declare a route collection without repeating the builder variable.
+///
+/// ```
+/// use phoenix_routing::routes;
+///
+/// let routes = routes! {
+///     GET "/" => |_request: phoenix_http::Request| async { "home" }, name = "home";
+///     POST "/users" => |_request: phoenix_http::Request| async { "created" },
+///         name = "users.store";
+/// };
+/// assert!(routes.build().is_ok());
+/// ```
+#[macro_export]
+macro_rules! routes {
+    (
+        $(
+            $method:ident $path:literal => $handler:expr
+            $(, name = $name:literal)?
+            $(, middleware = [$($middleware:expr),* $(,)?])?
+            ;
+        )*
+    ) => {{
+        let routes = $crate::Routes::new();
+        $(
+            let routes = $crate::__phoenix_route!(routes, $method, $path, $handler);
+            $(let routes = routes.name($name);)?
+            $($(let routes = routes.middleware($middleware);)*)?
+        )*
+        routes
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __phoenix_route {
+    ($routes:expr, GET, $path:expr, $handler:expr) => {
+        $routes.get($path, $handler)
+    };
+    ($routes:expr, POST, $path:expr, $handler:expr) => {
+        $routes.post($path, $handler)
+    };
+    ($routes:expr, PUT, $path:expr, $handler:expr) => {
+        $routes.put($path, $handler)
+    };
+    ($routes:expr, PATCH, $path:expr, $handler:expr) => {
+        $routes.patch($path, $handler)
+    };
+    ($routes:expr, DELETE, $path:expr, $handler:expr) => {
+        $routes.delete($path, $handler)
+    };
+    ($routes:expr, HEAD, $path:expr, $handler:expr) => {
+        $routes.route($crate::Method::HEAD, $path, $handler)
+    };
+    ($routes:expr, OPTIONS, $path:expr, $handler:expr) => {
+        $routes.route($crate::Method::OPTIONS, $path, $handler)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phoenix_http::SecurityHeaders;
 
     fn application_name(request: Request) -> phoenix_http::BoxFuture<Response> {
         Box::pin(async move {
@@ -874,5 +934,25 @@ mod tests {
         assert!(prefix_matches("/admin", "/admin"));
         assert!(prefix_matches("/admin", "/admin/users"));
         assert!(!prefix_matches("/admin", "/administrator"));
+    }
+
+    #[tokio::test]
+    async fn routes_macro_applies_names_methods_and_route_middleware() {
+        let router = routes! {
+            GET "/items" => |_request: Request| async { "items" }, name = "items.index";
+            POST "/items" => |_request: Request| async { "created" },
+                name = "items.store", middleware = [SecurityHeaders];
+        }
+        .build()
+        .unwrap();
+
+        let response = router
+            .handle(Request::new(Method::POST, "/items".parse().unwrap()))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), "created");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(router.url("items.index", &[]).unwrap(), "/items");
+        assert_eq!(router.url("items.store", &[]).unwrap(), "/items");
     }
 }

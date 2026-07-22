@@ -466,6 +466,62 @@ pub enum ServerError {
     Task(#[from] tokio::task::JoinError),
 }
 
+/// Build a multi-application server from concise module declarations.
+///
+/// Each entry expands to [`ApplicationModule`] builder calls and the macro
+/// returns `Result<Application, MultiApplicationError>`.
+///
+/// ```
+/// use phoenix_core::applications;
+/// use phoenix_routing::Routes;
+///
+/// let application = applications! {
+///     website => Routes::new().get("/", |_request: phoenix_http::Request| async { "site" }), [root];
+///     admin => Routes::new().get("/", |_request: phoenix_http::Request| async { "admin" }), [];
+/// };
+/// assert!(application.is_ok());
+/// ```
+#[macro_export]
+macro_rules! applications {
+    (
+        $(
+            $name:ident => $routes:expr, [$($options:tt)*];
+        )+
+    ) => {{
+        let builder = $crate::Application::multi();
+        $(
+            let module = $crate::ApplicationModule::new(stringify!($name), $routes);
+            let module = $crate::__phoenix_application_module!(module; $($options)*);
+            let builder = builder.mount(module);
+        )+
+        builder.build()
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __phoenix_application_module {
+    ($module:expr;) => { $module };
+    ($module:expr; root $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.root(); $($($rest)*)?)
+    };
+    ($module:expr; prefix = $prefix:expr $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.prefix($prefix); $($($rest)*)?)
+    };
+    ($module:expr; host = $host:expr $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.host($host); $($($rest)*)?)
+    };
+    ($module:expr; name_prefix = $prefix:expr $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.name_prefix($prefix); $($($rest)*)?)
+    };
+    ($module:expr; middleware = $middleware:expr $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.middleware($middleware); $($($rest)*)?)
+    };
+    ($module:expr; state = $state:expr $(, $($rest:tt)*)?) => {
+        $crate::__phoenix_application_module!($module.state($state); $($($rest)*)?)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

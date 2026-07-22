@@ -365,7 +365,7 @@ Json(value).into_response();
 Page::new("posts/show", props).respond_to(&request, None)?;
 ```
 
-`Response::with_header` 用于经过验证的动态 Header，并返回 `Result`。handler panic 和模型绑定失败只向客户端返回通用 500；业务错误应映射为稳定状态码，把内部原因和 request ID 写入结构化日志。redirect、下载与 `back().with_errors(...)` 便利门面仍待实现。
+`Response::with_header` 用于经过验证的动态 Header，并返回 `Result`。handler panic 和模型绑定失败只向客户端返回通用 500；业务错误应映射为稳定状态码，把内部原因和 request ID 写入结构化日志。`Redirect` 与 `Download` 已提供安全门面；带验证错误和 flash 的 `back()` 仍待实现。
 
 ## 10. 测试体验
 
@@ -395,7 +395,7 @@ async fn guest_can_view_posts(app: TestApp) {
 
 测试 API 必须能区分完整 HTML 响应、页面协议响应和 JSON API 响应，并默认隔离数据库状态。
 
-## 9. 应用状态与安全响应
+## 11. 应用状态与安全响应
 
 应用级配置、数据库和外部客户端通过显式状态中间件进入强类型控制器：
 
@@ -410,3 +410,21 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
 `AppState` 必须可克隆且线程安全；通常内部持有连接池或 `Arc`，不要把逐请求可变数据放进全局状态。缺失状态会在控制器执行前返回通用 500，不暴露类型或内部配置。
 
 控制器可用 `Redirect::see_other(...)` 处理 POST 后跳转，用 `Download::attachment(...)` 返回受控文件。下载响应默认 `private, no-store` 与 `nosniff`，并同时生成安全 ASCII 回退文件名和 UTF-8 `filename*`；不要绕过该 API 手写来自用户输入的 `Content-Disposition`。
+
+## 12. 快速声明宏
+
+`routes!` 适合重复的静态路由声明：
+
+```rust
+let routes = routes! {
+    GET "/posts" => typed(PostController::index), name = "posts.index";
+    POST "/posts" => typed(PostController::store),
+        name = "posts.store", middleware = [RequireLogin];
+    PATCH "/posts/{post}" => typed(PostController::update), name = "posts.update";
+    DELETE "/posts/{post}" => typed(PostController::destroy), name = "posts.destroy";
+};
+```
+
+支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD` 和 `OPTIONS`。`name` 与 `middleware` 都可省略；多个中间件按数组中的声明顺序应用。
+
+`applications!` 用于官网/前台/后台的静态组装，详见[多应用项目](MULTI_APP.md)。两个宏都只生成现有 builder 调用，不隐藏动态控制流；需要循环、条件或运行时配置时直接使用 `Routes`、`ApplicationModule` 和 `Application::multi()`。

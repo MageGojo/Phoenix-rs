@@ -1,4 +1,5 @@
 pub use phoenix_core as core;
+pub use phoenix_core::applications;
 pub use phoenix_crypto as crypto;
 pub use phoenix_database as database;
 pub use phoenix_dx as dx;
@@ -7,11 +8,13 @@ pub use phoenix_http as http;
 pub use phoenix_logging as logging;
 pub use phoenix_macros::contract;
 pub use phoenix_routing as routing;
+pub use phoenix_routing::routes;
 pub use phoenix_security as security;
 pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
 pub mod prelude {
+    pub use phoenix_core::applications;
     pub use phoenix_core::{
         Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
         MultiApplicationError, Server, ServerError, ServerHandle,
@@ -34,6 +37,7 @@ pub mod prelude {
         middleware_fn, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
+    pub use phoenix_routing::routes;
     pub use phoenix_routing::{
         ApplicationContext, MultiRouterError, RouteBuildError, RouteGroup, Router, Routes,
         UrlGenerationError,
