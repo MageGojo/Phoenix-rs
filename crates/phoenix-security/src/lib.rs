@@ -12,6 +12,7 @@ use phoenix_http::{
     BoxFuture, Bytes, ConnectionInfo, HeaderMap, HeaderName, HeaderValue, Method, Middleware, Next,
     Request, Response, StatusCode, TransportScheme, header,
 };
+use phoenix_metrics::Metrics;
 use serde_json::Value;
 
 /// A request identifier available to controllers and logs.
@@ -391,72 +392,220 @@ impl Default for RateLimitConfig {
 
 #[derive(Clone, Copy, Debug)]
 struct RateWindow {
-    started: Instant,
+    started_at: u64,
     count: u64,
 }
 
-/// Limits requests by resolved client IP.
-#[derive(Clone, Debug)]
+/// Atomic result returned by a distributed rate-limit backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RateLimitDecision {
+    pub allowed: bool,
+    pub remaining: u64,
+    pub retry_after: Duration,
+}
+
+/// Error returned by a rate-limit backend without exposing backend details to clients.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateLimitStoreError(pub String);
+
+impl std::fmt::Display for RateLimitStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("rate-limit backend failed")
+    }
+}
+
+impl std::error::Error for RateLimitStoreError {}
+
+/// Shared backend contract. `hit` must increment and decide in one atomic operation.
+pub trait RateLimitBackend: Send + Sync + 'static {
+    fn hit(
+        &self,
+        key: String,
+        limit: u64,
+        window: Duration,
+        now: u64,
+    ) -> BoxFuture<Result<RateLimitDecision, RateLimitStoreError>>;
+}
+
+/// Shared in-memory backend used for local development and backend contract tests.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryRateLimitBackend {
+    windows: Arc<Mutex<HashMap<String, RateWindow>>>,
+}
+
+impl MemoryRateLimitBackend {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl RateLimitBackend for MemoryRateLimitBackend {
+    fn hit(
+        &self,
+        key: String,
+        limit: u64,
+        window: Duration,
+        now: u64,
+    ) -> BoxFuture<Result<RateLimitDecision, RateLimitStoreError>> {
+        let windows = Arc::clone(&self.windows);
+        Box::pin(async move {
+            let mut windows = windows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            windows.retain(|_, entry| now.saturating_sub(entry.started_at) < window.as_secs());
+            let entry = windows.entry(key).or_insert(RateWindow {
+                started_at: now,
+                count: 0,
+            });
+            if now.saturating_sub(entry.started_at) >= window.as_secs() {
+                *entry = RateWindow {
+                    started_at: now,
+                    count: 0,
+                };
+            }
+            entry.count = entry.count.saturating_add(1);
+            let elapsed = now.saturating_sub(entry.started_at);
+            Ok(RateLimitDecision {
+                allowed: entry.count <= limit,
+                remaining: limit.saturating_sub(entry.count),
+                retry_after: Duration::from_secs(window.as_secs().saturating_sub(elapsed).max(1)),
+            })
+        })
+    }
+}
+
+/// Produces a bounded backend key from trusted request context.
+pub trait RateLimitKey: Send + Sync + 'static {
+    fn key(&self, request: &Request) -> String;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClientIpRateLimitKey;
+
+impl RateLimitKey for ClientIpRateLimitKey {
+    fn key(&self, request: &Request) -> String {
+        request
+            .extensions()
+            .get::<ClientIp>()
+            .map(|client| client.0)
+            .or_else(|| request.extensions().get::<SocketAddr>().map(SocketAddr::ip))
+            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+            .to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RateLimitFailureMode {
+    #[default]
+    Closed,
+    Open,
+}
+
+/// Distributed-capable fixed-window limiter with an atomic backend contract.
+#[derive(Clone)]
 pub struct RateLimit {
     config: RateLimitConfig,
-    clients: Arc<Mutex<HashMap<IpAddr, RateWindow>>>,
+    backend: Arc<dyn RateLimitBackend>,
+    key: Arc<dyn RateLimitKey>,
+    failure_mode: RateLimitFailureMode,
+    metrics: Option<Metrics>,
+}
+
+impl std::fmt::Debug for RateLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RateLimit")
+            .field("config", &self.config)
+            .field("failure_mode", &self.failure_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RateLimit {
     #[must_use]
     pub fn new(config: RateLimitConfig) -> Self {
+        Self::with_backend(config, Arc::new(MemoryRateLimitBackend::new()))
+    }
+
+    #[must_use]
+    pub fn with_backend(config: RateLimitConfig, backend: Arc<dyn RateLimitBackend>) -> Self {
         Self {
             config,
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            backend,
+            key: Arc::new(ClientIpRateLimitKey),
+            failure_mode: RateLimitFailureMode::Closed,
+            metrics: None,
         }
+    }
+
+    #[must_use]
+    pub fn key(mut self, key: impl RateLimitKey) -> Self {
+        self.key = Arc::new(key);
+        self
+    }
+
+    #[must_use]
+    pub const fn failure_mode(mut self, mode: RateLimitFailureMode) -> Self {
+        self.failure_mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
 impl Middleware for RateLimit {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
         let config = self.config;
-        let clients = Arc::clone(&self.clients);
+        let backend = Arc::clone(&self.backend);
+        let key = self.key.key(&request);
+        let failure_mode = self.failure_mode;
+        let metrics = self.metrics.clone();
         Box::pin(async move {
-            let client = request
-                .extensions()
-                .get::<ClientIp>()
-                .map(|client| client.0)
-                .or_else(|| request.extensions().get::<SocketAddr>().map(SocketAddr::ip))
-                .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-            let limited = {
-                let mut clients = clients
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let now = Instant::now();
-                let window = clients.entry(client).or_insert(RateWindow {
-                    started: now,
-                    count: 0,
-                });
-                if now.duration_since(window.started) >= config.window {
-                    *window = RateWindow {
-                        started: now,
-                        count: 0,
-                    };
+            let now = unix_timestamp();
+            match backend.hit(key, config.requests, config.window, now).await {
+                Ok(decision) if !decision.allowed => {
+                    if let Some(metrics) = metrics {
+                        metrics.record_rate_limit_rejection();
+                    }
+                    rate_limited_response(decision.retry_after)
                 }
-                window.count = window.count.saturating_add(1);
-                (window.count > config.requests).then(|| {
-                    config
-                        .window
-                        .saturating_sub(now.duration_since(window.started))
-                })
-            };
-            if let Some(retry_after) = limited {
-                let mut response =
-                    Response::text("Too Many Requests").with_status(StatusCode::TOO_MANY_REQUESTS);
-                if let Ok(value) = HeaderValue::from_str(&retry_after.as_secs().max(1).to_string())
-                {
-                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                Ok(_) => next.run(request).await,
+                Err(_) if failure_mode == RateLimitFailureMode::Open => {
+                    if let Some(metrics) = metrics {
+                        metrics.record_rate_limit_store_error();
+                    }
+                    next.run(request).await
                 }
-                return response;
+                Err(_) => {
+                    if let Some(metrics) = metrics {
+                        metrics.record_rate_limit_store_error();
+                    }
+                    Response::text("Rate limit unavailable")
+                        .with_status(StatusCode::SERVICE_UNAVAILABLE)
+                }
             }
-            next.run(request).await
         })
     }
+}
+
+fn rate_limited_response(retry_after: Duration) -> Response {
+    let mut response =
+        Response::text("Too Many Requests").with_status(StatusCode::TOO_MANY_REQUESTS);
+    if let Ok(value) = HeaderValue::from_str(&retry_after.as_secs().max(1).to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
+fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 #[derive(Clone, Debug)]
@@ -1221,5 +1370,77 @@ mod tests {
             ..SessionConfig::default()
         };
         assert!(session_cookie(&session, &config).contains("; Secure"));
+    }
+
+    #[tokio::test]
+    async fn two_limiters_share_one_atomic_backend() {
+        let backend: Arc<dyn RateLimitBackend> = Arc::new(MemoryRateLimitBackend::new());
+        let config = RateLimitConfig {
+            requests: 1,
+            window: Duration::from_mins(1),
+        };
+        let build = || {
+            Routes::new()
+                .get("/", |_request: Request| async { "ok" })
+                .with_middleware(RateLimit::with_backend(config, Arc::clone(&backend)))
+                .build()
+                .unwrap()
+        };
+        let first = build();
+        let second = build();
+        let shared_client = "192.0.2.10".parse().unwrap();
+        let mut first_request = request(Method::GET, "/");
+        first_request
+            .extensions_mut()
+            .insert(ClientIp(shared_client));
+        assert_eq!(handle(&first, first_request).await.status(), StatusCode::OK);
+        let mut second_request = request(Method::GET, "/");
+        second_request
+            .extensions_mut()
+            .insert(ClientIp(shared_client));
+        let rejected = handle(&second, second_request).await;
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(rejected.headers().contains_key(header::RETRY_AFTER));
+    }
+
+    #[derive(Debug)]
+    struct FailingRateLimitBackend;
+
+    impl RateLimitBackend for FailingRateLimitBackend {
+        fn hit(
+            &self,
+            _key: String,
+            _limit: u64,
+            _window: Duration,
+            _now: u64,
+        ) -> BoxFuture<Result<RateLimitDecision, RateLimitStoreError>> {
+            Box::pin(async { Err(RateLimitStoreError("unavailable".to_owned())) })
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_failure_is_closed_unless_explicitly_opened() {
+        let backend: Arc<dyn RateLimitBackend> = Arc::new(FailingRateLimitBackend);
+        let config = RateLimitConfig::default();
+        let closed = Routes::new()
+            .get("/", |_request: Request| async { "ok" })
+            .with_middleware(RateLimit::with_backend(config, Arc::clone(&backend)))
+            .build()
+            .unwrap();
+        assert_eq!(
+            handle(&closed, request(Method::GET, "/")).await.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let open = Routes::new()
+            .get("/", |_request: Request| async { "ok" })
+            .with_middleware(
+                RateLimit::with_backend(config, backend).failure_mode(RateLimitFailureMode::Open),
+            )
+            .build()
+            .unwrap();
+        assert_eq!(
+            handle(&open, request(Method::GET, "/")).await.status(),
+            StatusCode::OK
+        );
     }
 }

@@ -182,6 +182,8 @@ let policy = SecurityPolicy {
 
 内置 Session store 和限流 bucket 都是单进程内存实现。多实例部署必须接入共享后端或在可信网关层完成相应能力，否则不同实例之间不会共享状态。
 
+分布式限流使用 `RateLimit::with_backend` 接入实现了原子 `hit` 的共享 backend。默认 key 只使用可信代理解析后的客户端 IP；应用可通过 `RateLimitKey` 提供租户/API key 等有界 key，但不得把原始 URL、query 或 token 作为 key。backend 故障默认返回 503；只有明确接受绕过风险的非关键路由才可选择 `RateLimitFailureMode::Open`。`MemoryRateLimitBackend` 可用于本地和双实例契约测试，不是跨进程存储。
+
 ### JWT、Bearer API 与密码
 
 `phoenix-crypto` 的 JWT 首版固定 HS256，并把算法 allowlist、`kid`、过期时间、not-before、issuer 和 audience 当作同一个验证边界：
@@ -233,7 +235,7 @@ let plaintext = encryptor.open(&sealed, b"APP_A|users|7|email")?;
 
 ## 3.3 尚未实现的安全能力
 
-- 分布式 `TokenStore`/`SessionStore`/限流适配器，以及多密钥 Cookie session；当前文件 token store 只面向单进程低吞吐部署。
+- 分布式 `TokenStore`/`SessionStore` 生产适配器，以及多密钥 Cookie session；限流已有原子共享 backend contract，但内置 backend 仍只面向单进程/契约测试。
 - CSP nonce 与 Vite 开发模式的自动策略切换；当前 CSP/HSTS 由应用按环境显式配置。
 - Multipart 已在全局 body 上限内解析为内存字段；上传存储、文件名净化、静态文件路径与下载响应尚未实现。
 - 依赖漏洞/许可证 CI 与正式发布前的独立安全评审。

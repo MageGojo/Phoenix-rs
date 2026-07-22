@@ -9,6 +9,7 @@ version.workspace = true
 [dependencies]
 http.workspace = true
 phoenix-http = { path = "../phoenix-http" }
+phoenix-metrics = { path = "../phoenix-metrics" }
 rand.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

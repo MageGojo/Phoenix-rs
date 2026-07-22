@@ -1729,6 +1729,7 @@ version = "0.1.0"
 dependencies = [
  "http",
  "phoenix-http",
+ "phoenix-metrics",
  "phoenix-routing",
  "rand 0.10.2",
  "serde_json",

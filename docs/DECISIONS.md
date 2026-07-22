@@ -226,3 +226,10 @@
 - 决定：Phoenix registry 只暴露固定 method、status class 和 outcome labels；HTTP middleware、TCP/TLS server 和 renderer 使用同一进程 registry，数据库与队列通过固定枚举 hook 记录。多实例由 Prometheus 按 target 抓取和聚合。
 - 原因：任意字符串 label 会让路径、用户、错误或 token 形成高基数时间序列和隐私泄露；进程内原子 counter/gauge 不需要请求路径上的网络依赖。
 - 边界：指标端点必须受内部网络或管理应用保护。registry 不存储全局分布式 gauge，renderer snapshot 需要显式刷新，数据库/队列适配器负责在真实操作边界调用 hook。
+
+## ADR-033：分布式限流由 backend 原子决定并默认失败关闭
+
+- 状态：已接受
+- 决定：`RateLimitBackend::hit` 必须在单个原子操作中完成窗口初始化/过期、递增和 allow/retry 决策；middleware 默认使用可信客户端 IP key，backend 故障返回 503，只有显式配置才失败开放。
+- 原因：应用层“读取计数再写回”在多实例并发下会丢失递增；静默失败开放会在存储故障时移除安全边界。
+- 边界：内置 memory backend 只验证共享语义，不跨进程。生产 Redis/数据库适配器必须使用脚本、事务或等价原子原语，并限制 key 长度/基数和 TTL。

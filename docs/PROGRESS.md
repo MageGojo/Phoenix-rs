@@ -239,3 +239,10 @@
 - `MetricsMiddleware` 采集 HTTP method/status class、活跃请求与耗时；`Application::metrics` 在真实网络边界采集 TCP 连接和 TLS handshake 成败。
 - renderer health 可写入同一 registry；数据库和后续 queue worker 使用固定 success/failure/retry outcome hook，Session/限流预留无 ID 的安全状态计数器。
 - 测试验证 request query 不进入 exporter、连接 guard 正确归零、TLS 成功计数及 content type；目标 crate 测试和严格 Clippy 通过。
+
+## 2026-07-22：分布式限流 contract
+
+- `RateLimitBackend` 把窗口过期、计数递增和 allow/retry 决策收敛为单个原子 `hit`，生产共享存储可替换内置 memory backend。
+- 默认 key 使用可信客户端 IP，`RateLimitKey` 支持应用提供有界租户/API key；响应继续提供准确 `Retry-After`。
+- backend 故障默认失败关闭为 503，可显式选择失败开放；rejection/store error 写入无客户端标识的指标。
+- 双 limiter/双 Router 测试证明共享 backend 跨实例累计，同步覆盖失败关闭和显式失败开放；目标 crate 测试与严格 Clippy 通过。

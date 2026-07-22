@@ -56,10 +56,11 @@ pub mod prelude {
         UrlGenerationError,
     };
     pub use phoenix_security::{
-        AccessLog, ClientIp, Cors, CorsConfig, Csrf, EffectiveScheme, HostAllowlist, HttpsRedirect,
-        HttpsRedirectError, RateLimit, RateLimitConfig, RequestId, RequestIdValue, SameSite,
-        SecurityPolicy, Session, SessionConfig, SessionMiddleware, SessionStore, TrustedProxies,
-        effective_scheme,
+        AccessLog, ClientIp, ClientIpRateLimitKey, Cors, CorsConfig, Csrf, EffectiveScheme,
+        HostAllowlist, HttpsRedirect, HttpsRedirectError, MemoryRateLimitBackend, RateLimit,
+        RateLimitBackend, RateLimitConfig, RateLimitDecision, RateLimitFailureMode, RateLimitKey,
+        RateLimitStoreError, RequestId, RequestIdValue, SameSite, SecurityPolicy, Session,
+        SessionConfig, SessionMiddleware, SessionStore, TrustedProxies, effective_scheme,
     };
     pub use phoenix_validation::{
         BoxedRule, Rule, RuleContext, Validate, Validated, ValidatedRejection, ValidationError,
