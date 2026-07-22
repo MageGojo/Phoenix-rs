@@ -9,6 +9,7 @@ version.workspace = true
 [dependencies]
 phoenix-core = { path = "../phoenix-core" }
 phoenix-database = { path = "../phoenix-database" }
+phoenix-dx = { path = "../phoenix-dx" }
 phoenix-http = { path = "../phoenix-http" }
 phoenix-routing = { path = "../phoenix-routing" }
 phoenix-security = { path = "../phoenix-security" }

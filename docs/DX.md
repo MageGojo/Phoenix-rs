@@ -1,6 +1,6 @@
 # 开发者体验草案
 
-本文同时记录已实现 API 与后续目标。标注“当前已实现”的代码由 `examples/blog` 测试验证；React、Toasty、derive 和迁移示例仍是设计草案。
+本文同时记录已实现 API 与后续目标。标注“当前已实现”的代码由 crate 测试或 `examples/blog` 功能测试验证。
 
 ## 1. 目录约定
 
@@ -32,7 +32,38 @@ tests/
 
 ## 2. 路由
 
-当前已实现：
+每个标准路由文件导出 `pub fn routes() -> Routes`；应用入口使用约定扫描，无需逐个声明 module：
+
+```rust
+pub fn routes() -> Routes {
+    phoenix::mount_routes!() // 按文件名排序挂载 routes/*.rs
+}
+```
+
+路由文件也可以使用 resource 声明：
+
+```rust
+use phoenix::prelude::*;
+
+pub fn routes() -> Routes {
+    Routes::new().resource(
+        "posts",
+        "/posts",
+        Resource::new()
+            .index(PostController::index)
+            .create(PostController::create)
+            .store(PostController::store)
+            .show(PostController::show)
+            .edit(PostController::edit)
+            .update(PostController::update)
+            .destroy(PostController::destroy),
+    )
+}
+```
+
+它生成 Laravel 风格的 `posts.index/create/store/show/edit/update/destroy` 名称；update 同时接受 PUT/PATCH。`only([...])` 与 `except([...])` 可裁剪集合，`parameter("article")` 可覆盖默认单数参数名。
+
+手工声明路由同样可用：
 
 ```rust
 use phoenix::prelude::*;
@@ -66,7 +97,7 @@ pub fn routes() -> Routes {
 - 当前路由参数使用 Laravel 风格 `{post}`，并支持 GET、POST、PUT、PATCH、DELETE、HEAD 和 OPTIONS。
 - 当前命名 URL 使用 `router.url("posts.show", &[("post", "42")])`；未知名称和缺失参数返回明确错误。
 - 重复路由名或冲突模式在 `Routes::build()` 阶段失败，不静默覆盖。
-- 模型绑定、正则参数约束和类型安全命名参数仍待实现。
+- 正则参数约束和类型安全命名参数仍待实现。
 
 ### 中间件与请求上下文
 
@@ -94,6 +125,35 @@ impl Middleware for RequireExampleToken {
 ```
 
 `examples/blog` 同时使用全局安全头、全局响应中间件、管理路由组中间件和单路由闭包中间件。
+
+重复使用的中间件可以注册短别名；未知别名会在构建路由阶段返回错误：
+
+```rust
+let mut aliases = MiddlewareAliases::new();
+aliases.register("auth", RequireLogin);
+
+let routes = aliases.apply(
+    Routes::new().get("/account", AccountController::show),
+    &["auth"],
+)?;
+```
+
+`ModelBinding<T>` 在业务 handler 前异步解析路径参数，并以 `Bound<T>` 写入请求 extensions。`Ok(None)` 固定为 404，resolver 错误固定为不泄露内部细节的 500：
+
+```rust
+let binding = ModelBinding::new("post", |key| Post::find(key));
+let post = Bound::<Post>::from_request(&request).expect("binding middleware ran");
+```
+
+## 2.1 统一开发命令
+
+安装/构建 `phoenix-cli` 后，在应用目录运行：
+
+```bash
+phoenix dev
+```
+
+该命令同时运行 `cargo run` 与 `npm run dev -- --strictPort`。两者位于独立进程组；Ctrl-C、Rust 提前退出或 Vite 提前退出都会终止并回收另一侧的整个子进程树，避免遗留开发服务器。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
 
 ## 3. 控制器与 React 页面
 

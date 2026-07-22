@@ -134,3 +134,11 @@
 - `NodeRenderer` 支持可配置 worker 池、预热、健康快照、超时淘汰、故障替换和显式优雅关闭；两 worker 并发测试固定容量行为。
 - React `renderToPipeableStream` 通过分帧协议连接 `ResponseBody::Stream` 与 Hyper，真实 TCP 测试验证无 Content-Length 的 chunked 响应，hydration 信封在完成帧后安全写入。
 - Rust 15 个 view 测试、真实 Hyper 流测试、严格 Clippy和 SSR 包测试通过。
+
+## 2026-07-22：Laravel 风格开发体验
+
+- 新增 `mount_routes!()`，按文件名确定性扫描并合并 `routes/*.rs`；博客案例入口不再手写单一路由文件调用。
+- 新增 resource routes，覆盖七个标准 action、PUT/PATCH update、`only`、`except` 和自定义模型参数名。
+- 新增中间件别名注册表；未知别名在路由构建前失败。`ModelBinding<T>` 异步加载路径模型并通过 `Bound<T>` 交给 handler，缺失/失败分别映射 404/500。
+- 新增 `phoenix dev` 进程监督器，同时运行 Rust 与 strict-port Vite；Ctrl-C 或任一子进程退出时终止并回收两个 Unix 进程组。
+- DX/CLI 单元测试、博客自动路由功能测试和真实双进程启动/退出验证通过；退出后 Rust 与 Vite 监听端口均已释放。

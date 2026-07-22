@@ -1,0 +1,21 @@
+[package]
+name = "phoenix-cli"
+description = "Development process supervisor for Phoenix Rust and Vite applications"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "phoenix"
+path = "src/main.rs"
+
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["process", "signal"] }
+
+[lints]
+workspace = true

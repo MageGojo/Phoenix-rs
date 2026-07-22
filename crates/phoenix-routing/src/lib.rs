@@ -128,6 +128,24 @@ impl Routes {
         self
     }
 
+    /// Merge declarations from another route file while preserving their
+    /// registration order. Global middleware from `other` remains scoped to
+    /// the imported declarations.
+    #[must_use]
+    pub fn merge(mut self, mut other: Self) -> Self {
+        if self.error.is_none() {
+            self.error = other.error.take();
+        }
+        let imported_globals = other.global_middleware;
+        for mut definition in other.definitions {
+            let mut middleware = imported_globals.clone();
+            middleware.append(&mut definition.middleware);
+            definition.middleware = middleware;
+            self.definitions.push(definition);
+        }
+        self
+    }
+
     #[must_use]
     pub fn group<F>(mut self, group: RouteGroup, configure: F) -> Self
     where

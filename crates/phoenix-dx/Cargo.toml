@@ -1,0 +1,20 @@
+[package]
+name = "phoenix-dx"
+description = "Laravel-inspired route resources, middleware aliases, and model binding"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+phoenix-dx-macros = { path = "../phoenix-dx-macros" }
+phoenix-http = { path = "../phoenix-http" }
+phoenix-routing = { path = "../phoenix-routing" }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

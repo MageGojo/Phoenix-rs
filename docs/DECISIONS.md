@@ -134,6 +134,13 @@
 - 原因：服务端 Session 便于撤销和敏感数据隔离；从不可伪造的连接元数据开始逐 hop 验证，避免直接相信客户端提供的 XFF。
 - 边界：内置 store 是单进程内存实现，适合开发和单实例服务。多实例部署必须接入共享持久化 store；TLS 终止与可信 scheme 仍由部署层和后续中间件负责。
 
+## ADR-025：约定路由在编译期发现，开发进程按组回收
+
+- 状态：已接受
+- 决定：`mount_routes!()` 在编译期按文件名排序发现 `routes/*.rs`，每个文件统一导出 `routes()`；resource/alias/model binding 是普通 Rust builder 与 middleware，不引入运行时反射。`phoenix dev` 在 Unix 上给 Rust/Vite 分配独立进程组并以 TERM/KILL 两阶段回收。
+- 原因：编译期文件发现让缺失目录和非法路由在启动前失败，同时保留 IDE 可导航的普通 Rust 文件；进程组可以清理 Cargo/npm 派生的实际 server，避免只杀父进程留下监听端口。
+- 边界：当前只扫描 route 目录第一层的 `.rs` 文件并要求固定 `routes()` 导出；CLI 默认命令面向含 `Cargo.toml` 与 `package.json` 的应用目录。
+
 ## ADR-019：浏览器调用 Rust action 使用命名路由
 
 - 状态：已接受

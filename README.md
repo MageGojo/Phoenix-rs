@@ -66,6 +66,7 @@ const member = await callRust<Member>(members.store, { name });
 - Phoenix Request、Response、Handler、JSON 响应和异步控制器。
 - GET、POST、PUT、PATCH、DELETE、HEAD/OPTIONS、路径参数和 404/405。
 - Laravel 风格 `.name()`、名称前缀、路径前缀、命名 URL 生成和重复名称检查。
+- `routes/*.rs` 自动挂载、REST resource routes、中间件别名与异步模型绑定。
 - 全局、单路由和路由组中间件。
 - `field("user", rules![...])`、内置规则和 trait/闭包两种自定义验证规则。
 - JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
@@ -87,7 +88,9 @@ React 页面协议、三种渲染模式、自动页面/island 发现、生产 ma
 ## 快速运行
 
 ```bash
-cargo run -p phoenix-blog-example
+cargo build -p phoenix-cli
+cd examples/blog
+../../target/debug/phoenix dev
 ```
 
 服务默认监听 `http://127.0.0.1:3000`：
@@ -97,11 +100,9 @@ curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/users/Ada
 ```
 
-React 案例需要同时启动 Vite：
+该命令在应用目录同时启动 Rust 与 Vite，并统一处理退出信号。只启动后端也可以运行：
 
 ```bash
-npm run build:ssr
-npm run dev -w phoenix-blog-react-example
 cargo run -p phoenix-blog-example
 ```
 
@@ -126,6 +127,8 @@ npm run test:react
 crates/phoenix-http/    请求、响应、Handler 与中间件
 crates/phoenix-routing/ 路由、分组和命名 URL
 crates/phoenix-core/    Hyper 服务与应用生命周期
+crates/phoenix-dx/      resource routes、中间件别名与模型绑定
+crates/phoenix-cli/     Rust + Vite 开发进程监督器
 crates/phoenix-validation/ 验证规则与错误
 crates/phoenix/         应用使用的统一入口
 packages/phoenix-react/ React 客户端适配层

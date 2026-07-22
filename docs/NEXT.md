@@ -23,23 +23,23 @@ cargo fmt --all -- --check
 
 ## 当前目标
 
-完成 Laravel 风格开发体验，使应用只维护约定式路由文件和控制器：
+完成全量回归、Vite 生成侧的独立提交和最终文档一致性检查：
 
 ```text
-routes/web.rs + routes/api.rs
-  -> 自动挂载 + 中间件别名
-  -> resource routes + 模型绑定
-  -> Rust/Vite 统一 dev 生命周期
+Cargo/TypeScript/React 全量测试
+  -> staged snapshot 检查
+  -> Vite manifest 生成提交
+  -> 文档与验收项收口
 ```
 
 ## 建议执行顺序
 
 1. （已完成）Toasty SQLite/PostgreSQL CRUD、关系、分页、事务、隔离测试与可靠迁移执行器。
 2. （已完成）Session/CSRF/CORS/限流/可信代理/Host/安全头/request ID/日志脱敏。
-3. （已完成）生产 manifest 解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR 运行时。
-4. 实现约定式 `routes/web.rs`、`routes/api.rs` 自动挂载与确定性冲突诊断。
-5. 实现 REST resource routes、中间件别名注册/解析和异步模型绑定。
-6. 提供统一启动 Rust server 与 Vite、转发退出信号并回收子进程的开发命令。
+3. （已完成）版本化 client/renderer manifest、生产静态解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR。
+4. （已完成）约定式 `routes/*.rs` 自动挂载、REST resource routes、中间件别名和异步模型绑定。
+5. （已完成）统一启动 Rust/Vite、转发退出信号并回收子进程组的 `phoenix dev`。
+6. 执行 workspace、前端包、博客构建和仅暂存快照回归，收口剩余文档。
 
 ## 下一切片验收标准
 

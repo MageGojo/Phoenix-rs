@@ -1,0 +1,18 @@
+[package]
+name = "phoenix-dx-macros"
+description = "Convention-based route file discovery for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["parsing"] }
+
+[lints]
+workspace = true

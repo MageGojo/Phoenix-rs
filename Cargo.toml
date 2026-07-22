@@ -2,7 +2,10 @@
 members = [
     "crates/phoenix",
     "crates/phoenix-core",
+    "crates/phoenix-cli",
     "crates/phoenix-database",
+    "crates/phoenix-dx",
+    "crates/phoenix-dx-macros",
     "crates/phoenix-http",
     "crates/phoenix-routing",
     "crates/phoenix-security",

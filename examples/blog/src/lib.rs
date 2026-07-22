@@ -7,13 +7,15 @@ pub mod middleware;
 #[path = "../app/requests/mod.rs"]
 pub mod requests;
 #[path = "../routes/web.rs"]
+#[allow(dead_code)]
 mod web_routes;
 
 use phoenix::prelude::{Application, NodeRenderer, RouteBuildError, Routes};
 
 #[must_use]
+#[allow(clippy::duplicate_mod)]
 pub fn routes() -> Routes {
-    web_routes::routes()
+    phoenix::mount_routes!()
 }
 
 /// Build the example application and compile its routes.
