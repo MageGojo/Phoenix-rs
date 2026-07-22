@@ -21,15 +21,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-## 当前目标
+## 本轮状态
 
-完成全量回归、Vite 生成侧的独立提交和最终文档一致性检查：
+数据库、迁移、安全、生产构建/SSR 与 Laravel 风格开发体验已经完成并通过全量回归：
 
 ```text
-Cargo/TypeScript/React 全量测试
-  -> staged snapshot 检查
-  -> Vite manifest 生成提交
-  -> 文档与验收项收口
+Toasty + migrations
+  -> security middleware stack
+  -> versioned assets + renderer pool + streaming SSR
+  -> conventional routes + resource/binding + phoenix dev
 ```
 
 ## 建议执行顺序
@@ -39,15 +39,23 @@ Cargo/TypeScript/React 全量测试
 3. （已完成）版本化 client/renderer manifest、生产静态解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR。
 4. （已完成）约定式 `routes/*.rs` 自动挂载、REST resource routes、中间件别名和异步模型绑定。
 5. （已完成）统一启动 Rust/Vite、转发退出信号并回收子进程组的 `phoenix dev`。
-6. 执行 workspace、前端包、博客构建和仅暂存快照回归，收口剩余文档。
+6. （已完成）workspace、前端包、博客生产构建和仅暂存快照回归。
 
-## 下一切片验收标准
+## 本轮验收结果
 
-- 标准路由文件无需在 `main.rs` 手工逐个合并，缺失文件、重复名称和重复 method/path 有稳定诊断。
-- resource routes 生成 index/create/store/show/edit/update/destroy 的标准集合，并允许 only/except。
-- 中间件别名未知时构建失败；模型不存在映射为 404，加载失败映射为通用 500。
-- 单个 dev 命令同时拉起 Rust 与 Vite，任一进程失败会终止另一进程，Ctrl-C 不遗留子进程。
-- `cargo test`、严格 Clippy 和格式检查全部通过。
+- 标准路由文件由 `mount_routes!()` 确定性挂载；重复名称和 method/path 在构建时诊断。
+- resource routes 覆盖七个标准 action、PUT/PATCH update、`only` 和 `except`。
+- 未知中间件别名失败关闭；模型不存在映射为 404，加载失败映射为通用 500。
+- `phoenix dev` 同时拉起 Rust/Vite；任一进程失败或 Ctrl-C 都会回收两个进程组。
+- Cargo workspace、严格 Clippy、Rustfmt、React/Vite 测试、示例类型检查及 client/SSR 生产构建全部通过。
+
+## 下一阶段优先级
+
+1. TLS/认证授权接入文档与部署模板。
+2. 分布式 Session store、限流后端和指标 exporter。
+3. CSP nonce、HTTP/2、流中错误语义与 hydration 诊断。
+4. PostgreSQL CI 服务与迁移并发压力测试。
+5. 技术预览前完成项目名称、公共 API 和安全评审。
 
 ## 待验证决策
 
@@ -60,4 +68,4 @@ Cargo/TypeScript/React 全量测试
 
 ## Definition of Done
 
-下一切片完成时，博客案例应只通过标准路由文件、resource 声明、别名中间件和模型绑定表达常用 CRUD，并能由一个 dev 命令完整启动和停止 Rust/Vite。
+本轮 Definition of Done 已满足。下一阶段以可重复部署、多实例安全状态和公开 API 稳定性为完成标准。
