@@ -52,8 +52,9 @@
 ## ADR-007：在目录和公共 API 稳定后提供代码生成 CLI
 
 - 状态：已接受
-- 决定：早期切片先延后生成器；目录、路由、Request/Resource 契约和迁移 API 验证后，正式提供 `phoenix new` 与 controller/model/migration/request/resource/middleware/page/island 生成命令。
+- 决定：早期切片先延后生成器；目录、路由、Request/Resource 契约和迁移 API 验证后，正式提供 `px new` 与 controller/model/migration/request/resource/middleware/page/island 生成命令。
 - 原因：现在生成内容已经由真实外部项目编译、TypeScript、生产构建和 HTTP 运行时验收固定，不再是过早固化猜测。
+- 命令名：公开二进制统一为 `px`，不同时维护 `phoenix` 别名；Phoenix crate、npm package 和框架品牌名不受影响。
 - 边界：CLI 只更新显式 `<phoenix:...>` 托管区块，默认拒绝覆盖业务文件；`--force` 必须由开发者明确选择。迁移 SQL 和业务查询仍需按实际需求修改。
 
 ## ADR-008：默认采用显式应用状态，不做反射式容器
@@ -138,7 +139,7 @@
 ## ADR-025：约定路由在编译期发现，开发进程按组回收
 
 - 状态：已接受
-- 决定：`mount_routes!()` 在编译期按文件名排序发现 `routes/*.rs`，每个文件统一导出 `routes()`；resource/alias/model binding 是普通 Rust builder 与 middleware，不引入运行时反射。`phoenix dev` 在 Unix 上给 Rust/Vite 分配独立进程组并以 TERM/KILL 两阶段回收。
+- 决定：`mount_routes!()` 在编译期按文件名排序发现 `routes/*.rs`，每个文件统一导出 `routes()`；resource/alias/model binding 是普通 Rust builder 与 middleware，不引入运行时反射。`px dev` 在 Unix 上给 Rust/Vite 分配独立进程组并以 TERM/KILL 两阶段回收。
 - 原因：编译期文件发现让缺失目录和非法路由在启动前失败，同时保留 IDE 可导航的普通 Rust 文件；进程组可以清理 Cargo/npm 派生的实际 server，避免只杀父进程留下监听端口。
 - 边界：当前只扫描 route 目录第一层的 `.rs` 文件并要求固定 `routes()` 导出；CLI 默认命令面向含 `Cargo.toml` 与 `package.json` 的应用目录。
 

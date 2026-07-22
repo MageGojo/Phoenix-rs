@@ -8,24 +8,24 @@ use phoenix_cli::{
 const HELP: &str = r"Phoenix application CLI
 
 Usage:
-  phoenix new <project> [--framework-path <path>] [--no-install] [--no-git]
-  phoenix dev
-  phoenix make:controller <name> [--resource] [--route] [--force]
-  phoenix make:model <name> [--all] [--migration] [--controller] [--resource]
+  px new <project> [--framework-path <path>] [--no-install] [--no-git]
+  px dev
+  px make:controller <name> [--resource] [--route] [--force]
+  px make:model <name> [--all] [--migration] [--controller] [--resource]
                             [--request] [--api-resource] [--page] [--force]
-  phoenix make:migration <name> [--force]
-  phoenix make:request <name> [--force]
-  phoenix make:resource <name> [--force]
-  phoenix make:middleware <name> [--force]
-  phoenix make:page <path> [--force]
-  phoenix make:island <name> [--force]
-  phoenix list
+  px make:migration <name> [--force]
+  px make:request <name> [--force]
+  px make:resource <name> [--force]
+  px make:middleware <name> [--force]
+  px make:page <path> [--force]
+  px make:island <name> [--force]
+  px list
 
 Examples:
-  phoenix new my-app
-  phoenix make:model Post --all
-  phoenix make:controller Admin/ReportController --resource
-  phoenix make:page posts/index
+  px new my-app
+  px make:model Post --all
+  px make:controller Admin/ReportController --resource
+  px make:page posts/index
 ";
 
 #[tokio::main]
@@ -33,7 +33,7 @@ async fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("Phoenix command failed: {error}");
+            eprintln!("px failed: {error}");
             ExitCode::FAILURE
         }
     }
@@ -113,7 +113,7 @@ fn new_project(arguments: Vec<String>) -> Result<(), String> {
         "Created Phoenix application at {}",
         options.target.display()
     );
-    println!("Next: cd {} && phoenix dev", options.target.display());
+    println!("Next: cd {} && px dev", options.target.display());
     Ok(())
 }
 
@@ -220,7 +220,7 @@ fn finish_generation(generator: &ProjectGenerator, paths: &[PathBuf]) -> Result<
     {
         println!("REFRESHED views/generated contracts and routes");
     } else {
-        println!("Type files will refresh automatically after npm install or phoenix dev");
+        println!("Type files will refresh automatically after npm install or px dev");
     }
     Ok(())
 }

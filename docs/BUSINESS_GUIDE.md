@@ -55,10 +55,10 @@ use phoenix::prelude::{
 新业务优先从 CLI 生成，避免手动创建目录、`mod.rs`、模型/迁移注册表和前端契约入口：
 
 ```bash
-phoenix new my-app
+px new my-app
 cd my-app
-phoenix make:model Post --all
-phoenix dev
+px make:model Post --all
+px dev
 ```
 
 `--all` 会生成模型、迁移、验证 Request、Resource、控制器、命名路由、Page Props 和 React 页面，并刷新 TypeScript action/类型。单项命令和覆盖规则见[项目与业务代码生成](DX.md#21-项目与业务代码生成)。生成的是可运行业务骨架，字段、数据库查询和迁移 SQL 仍应按实际业务修改。
@@ -135,10 +135,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 ```bash
 cargo build -p phoenix-cli
 cd examples/blog
-../../target/debug/phoenix dev
+../../target/debug/px dev
 ```
 
-`phoenix dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
+`px dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
 
 也可以通过环境变量修改监听地址：
 

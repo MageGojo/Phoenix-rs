@@ -150,12 +150,13 @@
 - 新增 `mount_routes!()`，按文件名确定性扫描并合并 `routes/*.rs`；博客案例入口不再手写单一路由文件调用。
 - 新增 resource routes，覆盖七个标准 action、PUT/PATCH update、`only`、`except` 和自定义模型参数名。
 - 新增中间件别名注册表；未知别名在路由构建前失败。`ModelBinding<T>` 异步加载路径模型并通过 `Bound<T>` 交给 handler，缺失/失败分别映射 404/500。
-- 新增 `phoenix dev` 进程监督器，同时运行 Rust 与 strict-port Vite；Ctrl-C 或任一子进程退出时终止并回收两个 Unix 进程组。
+- 新增 `px dev` 进程监督器，同时运行 Rust 与 strict-port Vite；Ctrl-C 或任一子进程退出时终止并回收两个 Unix 进程组。
 - DX/CLI 单元测试、博客自动路由功能测试和真实双进程启动/退出验证通过；退出后 Rust 与 Vite 监听端口均已释放。
 
 ## 2026-07-22：Laravel 风格项目与业务生成 CLI
 
-- `phoenix new` 生成独立 Cargo/npm/Vite/TypeScript 项目、标准业务目录、SPA 首页、Page Props 契约和本地 Git；默认安装依赖并刷新生成类型。
+- 对外 CLI 二进制统一缩短为 `px`；帮助、错误提示、生成项目 README、测试和业务文档均使用同一命令，不保留旧命令别名。
+- `px new` 生成独立 Cargo/npm/Vite/TypeScript 项目、标准业务目录、SPA 首页、Page Props 契约和本地 Git；默认安装依赖并刷新生成类型。
 - 新增 controller、model、migration、request、resource、middleware、page、island 生成命令，支持嵌套命名、冲突拒绝和显式 `--force`。
 - 生成器只维护 `<phoenix:...>` 区块，自动注册 Rust modules、多个 Toasty 模型、迁移集合、命名路由和 TypeScript contracts/routes。
 - `make:model Post --all` 生成模型、迁移、验证 Request、Resource、控制器、七条 resource 路由、类型化 store action、Page Props 与 React 页面。
@@ -173,7 +174,7 @@
 - 新增 `docs/DATABASE.md`，集中说明 Toasty 模型、SQLite/PostgreSQL、CRUD、关系、游标分页、事务、迁移与测试隔离。
 - `docs/SECURITY.md` 增加完整中间件装配顺序、Session/CSRF、Cookie、CSP/HSTS 和日志使用示例。
 - `docs/RENDERING.md` 增加 client/SSR 构建顺序、manifest、renderer 预热、流式页面、静态资源、健康指标与关闭流程。
-- `docs/DX.md` 和 `docs/BUSINESS_GUIDE.md` 记录自动路由、resource routes、中间件别名、模型绑定与 `phoenix dev` 的当前公开用法。
+- `docs/DX.md` 和 `docs/BUSINESS_GUIDE.md` 记录自动路由、resource routes、中间件别名、模型绑定与 `px dev` 的当前公开用法。
 
 ## 2026-07-22：HTTP/2 与结构化日志基础
 

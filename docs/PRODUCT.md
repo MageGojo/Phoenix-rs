@@ -55,7 +55,7 @@ Phoenix 要解决的不是“缺少 HTTP 服务器”，而是“缺少一套连
 
 ### 5.3 数据库变更
 
-1. 开发者运行 `phoenix make:migration` 或 `phoenix make:model Post --migration` 生成带稳定 ID、`up` 和 `down` 的迁移骨架。
+1. 开发者运行 `px make:migration` 或 `px make:model Post --migration` 生成带稳定 ID、`up` 和 `down` 的迁移骨架。
 2. 迁移包含稳定 ID、描述、`up` 和在可逆情况下的 `down`。
 3. 迁移执行器通过应用二进制或专用示例入口运行，记录已执行版本并使用数据库锁避免并发执行。
 4. Toasty 模型与迁移 schema 的一致性在测试或开发启动检查中验证。

@@ -153,26 +153,26 @@ let post = Bound::<Post>::from_request(&request).expect("binding middleware ran"
 
 ```bash
 cargo install --path crates/phoenix-cli
-phoenix new my-app
+px new my-app
 cd my-app
-phoenix dev
+px dev
 ```
 
-`phoenix new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。默认执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
+`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。默认执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
 
 业务生成命令：
 
 ```bash
-phoenix make:controller ReportController --route
-phoenix make:controller Admin/PostController --resource
-phoenix make:model Post --migration
-phoenix make:model Post --all
-phoenix make:migration add_status_to_posts
-phoenix make:request StorePostRequest
-phoenix make:resource PostResource
-phoenix make:middleware RequireLoginMiddleware
-phoenix make:page posts/index
-phoenix make:island LikeButton
+px make:controller ReportController --route
+px make:controller Admin/PostController --resource
+px make:model Post --migration
+px make:model Post --all
+px make:migration add_status_to_posts
+px make:request StorePostRequest
+px make:resource PostResource
+px make:middleware RequireLoginMiddleware
+px make:page posts/index
+px make:island LikeButton
 ```
 
 `make:model Post --all` 生成并连接一条可编译的业务切片：Toasty 模型、迁移、验证 Request、公开 Resource、控制器、七条命名 resource 路由、类型化 `store` action、Rust Page Props 和 React index 页面。生成后会自动刷新 Rust→TypeScript contracts/routes；浏览器可以直接调用生成的 `posts.store({ name })`。
@@ -184,7 +184,7 @@ phoenix make:island LikeButton
 安装/构建 `phoenix-cli` 后，在应用目录运行：
 
 ```bash
-phoenix dev
+px dev
 ```
 
 该命令同时运行 `cargo run` 与 `npm run dev -- --strictPort`。两者位于独立进程组；Ctrl-C、Rust 提前退出或 Vite 提前退出都会终止并回收另一侧的整个子进程树，避免遗留开发服务器。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
@@ -386,7 +386,7 @@ let applied = runner.up().await?;
 let rolled_back = runner.down(1).await?;
 ```
 
-runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。迁移骨架可以通过 `phoenix make:migration` 或 `phoenix make:model --migration` 生成并自动注册。
+runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。迁移骨架可以通过 `px make:migration` 或 `px make:model --migration` 生成并自动注册。
 
 ## 9. 响应与错误
 

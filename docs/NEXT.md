@@ -29,12 +29,12 @@ cargo fmt --all -- --check
 Toasty + migrations
   -> security middleware stack
   -> versioned assets + renderer pool + streaming SSR
-  -> conventional routes + resource/binding + phoenix dev
+  -> conventional routes + resource/binding + px dev
 ```
 
 强类型请求提取与跨端契约也已完成当前稳定范围：`Query`、`Path`、`Header`、`Json`、`Form`、`Multipart<T>`、`Validated<DTO>`，以及 Input、Resource、Page Props、Shared Props 和可直接调用的命名 action。未支持的 Rust/Serde wire 形态在构建期失败关闭。
 
-Laravel 风格 CLI 也已完成：`phoenix new`、`phoenix dev` 和 controller/model/migration/request/resource/middleware/page/island 生成器；`make:model --all` 会形成可编译、可构建、可运行的完整业务骨架。
+Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migration/request/resource/middleware/page/island 生成器；`make:model --all` 会形成可编译、可构建、可运行的完整业务骨架。
 
 ## 建议执行顺序
 
@@ -42,7 +42,7 @@ Laravel 风格 CLI 也已完成：`phoenix new`、`phoenix dev` 和 controller/m
 2. （已完成）Session/CSRF/CORS/限流/可信代理/Host/安全头/request ID/日志脱敏。
 3. （已完成）版本化 client/renderer manifest、生产静态解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR。
 4. （已完成）约定式 `routes/*.rs` 自动挂载、REST resource routes、中间件别名和异步模型绑定。
-5. （已完成）统一启动 Rust/Vite、转发退出信号并回收子进程组的 `phoenix dev`。
+5. （已完成）统一启动 Rust/Vite、转发退出信号并回收子进程组的 `px dev`。
 6. （已完成）workspace、前端包、博客生产构建和仅暂存快照回归。
 
 ## 本轮验收结果
@@ -50,7 +50,7 @@ Laravel 风格 CLI 也已完成：`phoenix new`、`phoenix dev` 和 controller/m
 - 标准路由文件由 `mount_routes!()` 确定性挂载；重复名称和 method/path 在构建时诊断。
 - resource routes 覆盖七个标准 action、PUT/PATCH update、`only` 和 `except`。
 - 未知中间件别名失败关闭；模型不存在映射为 404，加载失败映射为通用 500。
-- `phoenix dev` 同时拉起 Rust/Vite；任一进程失败或 Ctrl-C 都会回收两个进程组。
+- `px dev` 同时拉起 Rust/Vite；任一进程失败或 Ctrl-C 都会回收两个进程组。
 - Cargo workspace、严格 Clippy、Rustfmt、React/Vite 测试、示例类型检查及 client/SSR 生产构建全部通过。
 
 ## 下一阶段优先级

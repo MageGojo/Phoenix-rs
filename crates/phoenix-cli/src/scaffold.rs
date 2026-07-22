@@ -144,7 +144,7 @@ pub enum ScaffoldError {
     InvalidClock,
 }
 
-/// Create a complete Phoenix application that can immediately run `phoenix dev`.
+/// Create a complete Phoenix application that can immediately run `px dev`.
 ///
 /// # Errors
 ///
@@ -555,7 +555,7 @@ fn project_files(
 
 fn project_readme(package: &str) -> String {
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\nphoenix dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Generate business code\n\n```bash\nphoenix make:model Post --all\nphoenix make:controller AdminController\nphoenix make:request StorePostRequest\nphoenix make:resource PostResource\nphoenix make:middleware RequireLoginMiddleware\nphoenix make:page posts/index\nphoenix make:island LikeButton\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\n```\n"
     )
 }
 
@@ -675,7 +675,7 @@ export default function Home({ title, description }: HomeProps) {
       <p className="eyebrow">PHOENIX / RUST + REACT</p>
       <h1>{title}</h1>
       <p>{description}</p>
-      <code>phoenix make:model Post --all</code>
+      <code>px make:model Post --all</code>
     </main>
   );
 }

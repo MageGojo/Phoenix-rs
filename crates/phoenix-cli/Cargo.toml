@@ -7,7 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "phoenix"
+name = "px"
 path = "src/main.rs"
 
 [dependencies]

@@ -14,7 +14,7 @@ fn temporary_directory() -> PathBuf {
 }
 
 fn run(cwd: &Path, arguments: &[&str]) {
-    let status = Command::new(env!("CARGO_BIN_EXE_phoenix"))
+    let status = Command::new(env!("CARGO_BIN_EXE_px"))
         .args(arguments)
         .current_dir(cwd)
         .status()
