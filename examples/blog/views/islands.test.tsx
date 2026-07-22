@@ -7,7 +7,7 @@ import { renderPage } from "@phoenix/react-ssr";
 
 import MemberCreator from "./islands/member-creator.js";
 import MembersIndex from "./pages/members/index.js";
-import type { Member } from "./types/member.js";
+import type { Member } from "./generated/contracts.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { renderPage } from "@phoenix/react-ssr";
 import type { PageEnvelope } from "@phoenix/react";
 
 import { routes } from "./generated/routes.js";
+import type { Member, StoreMemberInput } from "./generated/contracts.js";
 import ArticleShow from "./pages/articles/show.js";
 import MembersIndex from "./pages/members/index.js";
 
@@ -29,11 +30,14 @@ describe("blog React case", () => {
     expect(routes).toEqual({
       admin: { dashboard: "admin.dashboard" },
       health: "health",
-      members: { index: "members.index", store: "members.store" },
+      members: { index: "members.index", store: expect.any(Function) },
       react: { islands: "react.islands", spa: "react.spa", ssr: "react.ssr" },
       register: { store: "register.store" },
       users: { show: "users.show" },
     });
+    expect(routes.members.store.routeName).toBe("members.store");
+    expectTypeOf(routes.members.store).parameter(0).toEqualTypeOf<StoreMemberInput>();
+    expectTypeOf(routes.members.store).returns.toEqualTypeOf<Promise<Member>>();
   });
 
   it("discovers article islands while rendering server HTML", () => {

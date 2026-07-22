@@ -32,6 +32,8 @@ Toasty + migrations
   -> conventional routes + resource/binding + phoenix dev
 ```
 
+强类型请求提取与跨端契约也已完成当前稳定范围：`Query`、`Path`、`Header`、`Json`、`Form`、`Multipart<T>`、`Validated<DTO>`，以及 Input、Resource、Page Props、Shared Props 和可直接调用的命名 action。未支持的 Rust/Serde wire 形态在构建期失败关闭。
+
 ## 建议执行顺序
 
 1. （已完成）Toasty SQLite/PostgreSQL CRUD、关系、分页、事务、隔离测试与可靠迁移执行器。

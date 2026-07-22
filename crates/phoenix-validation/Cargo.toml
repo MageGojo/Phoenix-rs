@@ -7,9 +7,13 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+phoenix-http = { path = "../phoenix-http" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true

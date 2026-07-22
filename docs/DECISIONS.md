@@ -70,14 +70,14 @@
 ## ADR-010：Rust 是前后端数据契约的唯一来源
 
 - 状态：已接受
-- 决定：Request DTO、页面 Props、Shared Props 与 Resource 通过 `Contract` schema 自动生成 TypeScript 类型和运行时字段描述；React 不重复声明相同字段接口。
+- 决定：Request DTO、页面 Props、Shared Props 与 Resource 通过 `#[phoenix::contract(...)]` 自动生成 TypeScript 类型、页面映射和 action 签名；React 不重复声明相同字段接口。客户端表单规则描述属于独立后续能力，不由当前类型生成器虚假推导。
 - 原因：减少字段漂移，让重命名、可选性、枚举和验证变化在构建阶段暴露。
 - 边界：数据库模型不直接导出；客户端验证不代替服务端验证；页面布局和控件选择不自动生成。
 
-## ADR-011：契约使用命名空间、方向和版本隔离
+## ADR-011：契约使用命名空间和方向隔离
 
 - 状态：已接受
-- 决定：契约 ID 使用 `namespace + name + version`，并区分 input/output。Serde 处理后的字段名是唯一 wire name；任何命名空间、rename、flatten 或 alias 冲突都会导致构建失败。
+- 决定：当前契约 ID 使用 `namespace + name + direction`。Serde 处理后的字段名是唯一 wire name；任何命名空间、rename、flatten 或 alias 冲突都会导致构建失败。兼容性由生成内容的 `contract_hash` 和生产 manifest 握手验证；显式版本字段在出现并行协议版本需求前不进入公共 API。
 - 原因：允许不同业务模块拥有同名类型，同时防止静默覆盖和敏感输入被误用为输出。
 
 ## ADR-012：React 支持 SPA、SSR 与 Islands
@@ -141,12 +141,12 @@
 - 原因：编译期文件发现让缺失目录和非法路由在启动前失败，同时保留 IDE 可导航的普通 Rust 文件；进程组可以清理 Cargo/npm 派生的实际 server，避免只杀父进程留下监听端口。
 - 边界：当前只扫描 route 目录第一层的 `.rs` 文件并要求固定 `routes()` 导出；CLI 默认命令面向含 `Cargo.toml` 与 `package.json` 的应用目录。
 
-## ADR-019：浏览器调用 Rust action 使用命名路由
+## ADR-019：浏览器调用 Rust action 使用命名路由和生成函数
 
 - 状态：已接受
-- 决定：Rust 路由器自动将命名路由映射加入页面协议；React 的 `callRust` 接收路由名和输入数据，并发送 JSON POST。
+- 决定：Rust 路由器自动将命名路由映射加入页面协议；`phoenix-vite` 把绑定了 Input/Output 的 action 生成为可直接调用的 TypeScript 函数。`callRust` 保留为底层传输 API。
 - 原因：React 不应依赖容易变化的后端 URL。路由路径调整时，只要稳定名称不变，前端调用无需修改。
-- 边界：`callRust` 是浏览器到 Rust 服务的 HTTP 传输封装，不是在浏览器内直接执行 Rust。当前切片只覆盖无路径参数的 POST action；参数化 URL 与其他 HTTP 方法需单独设计。
+- 边界：生成 action 是浏览器到 Rust 服务的 HTTP 封装，不是在浏览器内直接执行 Rust。当前切片只覆盖无路径参数的 POST action；参数化 URL 与其他 HTTP 方法需单独设计。
 
 ## ADR-020：Islands 使用编译期客户端指令与 SSR 自动收集
 
@@ -158,6 +158,13 @@
 ## ADR-021：Rust 命名路由生成 TypeScript 属性树
 
 - 状态：已接受
-- 决定：`phoenix-vite` 从标准路由目录中的字面量 `.name("...")` 生成 `views/generated/routes.ts`。点分路由名映射为嵌套只读对象，并为安全的顶层名称生成直接导出；路由组的静态名称前缀在生成时合并。
+- 决定：`phoenix-vite` 从标准路由目录中的字面量 `.name("...")` 生成 `views/generated/routes.ts`。点分路由名映射为嵌套只读对象；绑定 `.action::<Input, Output>()` 的叶子生成强类型调用函数。
 - 原因：裸字符串没有编辑器补全，Rust 路由重命名也不会触发前端错误。生成属性让 `members.store` 可导航、可补全，同时保留 Rust 命名路由作为唯一声明。
-- 边界：生成常量只携带稳定路由名，真实 URL 仍从 `PageEnvelope.routes` 解析。动态路由名在构建时拒绝。Input/Resource 类型需要后续强类型 action 契约，当前不能从 `Request -> Response` 自动推导。
+- 边界：生成 action 只携带稳定路由名，真实 URL 仍从 `PageEnvelope.routes` 解析。动态路由名在构建时拒绝。
+
+## ADR-023：契约生成遵守 Serde 并对未知形态失败关闭
+
+- 状态：已接受
+- 决定：Input、Resource、Page Props 和 Shared Props 使用 `#[phoenix::contract(...)]` 标记；Vite 从 Rust 源码生成 TypeScript，并把 Serde 的 rename、rename_all、flatten、alias、default 和方向性 skip 作为 wire-name 权威规则。
+- 原因：过程宏不能安全地直接向业务源码目录写文件；Vite 已经负责页面和路由发现，把生成阶段集中在同一个可观察构建入口可以免除业务 build script。
+- 边界：已支持的 Rust/Serde 形态必须生成准确类型；尚未支持的数据 enum、tuple/generic struct、无法解析的嵌套类型和可能越过 JavaScript 安全范围的整数必须中止构建，不允许退化成静默 `any`。生产 client 与 renderer manifest 携带同一 contract hash，Rust worker 握手不一致时失败关闭。

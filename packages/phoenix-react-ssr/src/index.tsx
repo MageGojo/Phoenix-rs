@@ -136,7 +136,8 @@ export function startRenderer({
       if (!request.envelope || !["render", "stream"].includes(request.kind)) {
         throw new Error("invalid renderer request");
       }
-      if (contractHash && request.envelope.contract_hash !== contractHash) {
+      if (contractHash && request.envelope.contract_hash
+        && request.envelope.contract_hash !== contractHash) {
         throw new Error("Phoenix renderer contract hash mismatch");
       }
 

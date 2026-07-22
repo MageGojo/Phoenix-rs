@@ -212,6 +212,17 @@ export async function callRust<Output, Input = unknown>(
   return body as Output;
 }
 
+export type RustAction<Input, Output> = ((input: Input) => Promise<Output>) & {
+  readonly routeName: string;
+};
+
+export function createRustAction<Input, Output>(
+  routeName: string,
+): RustAction<Input, Output> {
+  const action = (input: Input) => callRust<Output, Input>(routeName, input);
+  return Object.assign(action, { routeName });
+}
+
 function rustRoute(routeName: string, documentRef: Document = document): string {
   const route = readPage(documentRef).routes[routeName];
   if (!route) {

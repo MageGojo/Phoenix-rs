@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createAes256GcmDecryptor,
+  createRustAction,
   callRust,
   fetchPage,
   Island,
@@ -103,6 +104,27 @@ describe("Phoenix React client", () => {
       { name: "Lin" },
       fetcher as typeof fetch,
     )).resolves.toEqual({ id: 101, name: "Lin" });
+  });
+
+  it("creates a callable Rust action with inferred input and output slots", async () => {
+    installRoutes({ "members.store": "/api/members" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: 101, name: "Ada" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const store = createRustAction<{ name: string }, { id: number; name: string }>(
+      "members.store",
+    );
+
+    await expect(store({ name: "Ada" })).resolves.toEqual({ id: 101, name: "Ada" });
+    expect(store.routeName).toBe("members.store");
+    expect(fetchMock).toHaveBeenCalledWith("/api/members", expect.objectContaining({
+      body: JSON.stringify({ name: "Ada" }),
+      method: "POST",
+    }));
+    fetchMock.mockRestore();
   });
 
   it("surfaces a Rust action error with its status and details", async () => {

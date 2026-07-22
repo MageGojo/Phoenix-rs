@@ -119,6 +119,15 @@
 - 空数据库会自动创建 `phoenix_migrations`；失败 SQL 测试验证同批已执行 DDL 与状态记录均被回滚。
 - PostgreSQL 复用同一 CRUD/关系/分页契约测试，设置 `PHOENIX_TEST_POSTGRES_URL` 时连接真实实例执行。
 
+## 2026-07-22：强类型请求与 Rust/TypeScript action 契约
+
+- `phoenix-http` 新增 `Query<T>`、`Path<T>`、`Header<T>`、`Json<T>`、`Form<T>` 和 `Multipart<T>` extractor；Multipart 通过 `FromMultipart` 形成业务上传 DTO，并提供最多四参数的 `typed(...)` handler。
+- `phoenix-validation` 新增 `Validate`、`Validated<E>` 和 `max_length`；提取错误自动映射为 400/415 JSON，字段验证失败自动映射为 422 JSON。
+- 新增 `#[phoenix::contract(...)]`，覆盖 Input、Resource、Page Props 与 Shared Props；Vite 自动生成 TypeScript 类型、页面映射和稳定 contract hash。
+- 生成器遵守方向性 Serde rename/default/flatten/alias/skip 规则，处理容器 default 与 unit enum alias/skip，检查 flatten、alias 和 enum wire-name 冲突；不安全大整数、tuple/generic struct 及无法准确表达的 wire transform 会失败关闭。
+- Rust 路由通过 `.action::<Input, Output>()` 生成可调用 action；成员 Island 已从 `callRust<Member>(members.store, { name })` 收敛为 `members.store({ name })`，输入和返回值均由 Rust 推导。
+- 成员页面删除手写 `Member` 与页面 Props 接口，改用 Rust `MemberResource`、`MembersPageProps` 和 `SharedProps` 生成结果。
+
 ## 2026-07-22：Web 安全基础栈
 
 - 新增 `phoenix-security`，实现服务端 Session、安全 Cookie、会话 ID 轮换/注销、Session CSRF、精确 CORS、固定窗口限流、可信代理和 Host allowlist。

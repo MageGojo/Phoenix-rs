@@ -4,8 +4,12 @@ use std::time::Duration;
 pub mod controllers;
 #[path = "../app/middleware/mod.rs"]
 pub mod middleware;
+#[path = "../app/props/mod.rs"]
+pub mod props;
 #[path = "../app/requests/mod.rs"]
 pub mod requests;
+#[path = "../app/resources/mod.rs"]
+pub mod resources;
 #[path = "../routes/web.rs"]
 #[allow(dead_code)]
 mod web_routes;

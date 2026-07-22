@@ -3,6 +3,7 @@ pub use phoenix_database as database;
 pub use phoenix_dx as dx;
 pub use phoenix_dx::mount_routes;
 pub use phoenix_http as http;
+pub use phoenix_macros::contract;
 pub use phoenix_routing as routing;
 pub use phoenix_security as security;
 pub use phoenix_validation as validation;
@@ -16,9 +17,11 @@ pub mod prelude {
         ResourceRoutes, mount_routes,
     };
     pub use phoenix_http::{
-        BoxFuture, ByteStream, Handler, IntoResponse, Json, JsonRejection, Method, Middleware,
-        Next, Request, Response, ResponseBody, RouteManifest, SecurityHeaders, StatusCode, Uri,
-        middleware_fn,
+        BoxFuture, ByteStream, Form, FormRejection, FromMultipart, FromRequest, Handler, Header,
+        HeaderRejection, IntoResponse, Json, JsonRejection, Method, Middleware, Multipart,
+        MultipartData, MultipartField, MultipartRejection, Next, Path, PathRejection, Query,
+        QueryRejection, Request, Response, ResponseBody, RouteManifest, SecurityHeaders,
+        StatusCode, TypedHandler, Uri, middleware_fn, typed,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_security::{
@@ -27,8 +30,8 @@ pub mod prelude {
         SessionMiddleware, SessionStore, TrustedProxies,
     };
     pub use phoenix_validation::{
-        BoxedRule, Rule, RuleContext, ValidationError, ValidationErrors, Validator, custom_rule,
-        min_length, required, rules, string,
+        BoxedRule, Rule, RuleContext, Validate, Validated, ValidatedRejection, ValidationError,
+        ValidationErrors, Validator, custom_rule, max_length, min_length, required, rules, string,
     };
     pub use phoenix_view::{
         ASSET_MANIFEST_SCHEMA, Aes256GcmCodec, AssetEntry, AssetManifest, AssetManifestError,

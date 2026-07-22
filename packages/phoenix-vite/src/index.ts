@@ -11,6 +11,13 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import ts from "typescript";
 
+import {
+  generateContractTypes,
+  type GeneratedActionContract,
+  type RustActionContract,
+} from "./contracts.js";
+import { delimiterPairs, tokenizeRust, type RustToken } from "./rust.js";
+
 const CLIENT_ID = "virtual:phoenix/client";
 const SERVER_ID = "virtual:phoenix/server";
 const RESOLVED_CLIENT_ID = `\0${CLIENT_ID}`;
@@ -19,7 +26,8 @@ const COMPONENT_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 
 export interface PhoenixViteOptions {
   clientManifest?: string;
-  contractHash?: string;
+  contracts?: string;
+  generatedContracts?: string;
   generatedRoutes?: string;
   manifest?: string;
   publicPath?: string;
@@ -40,8 +48,9 @@ interface Discovery {
 }
 
 export function phoenix(options: PhoenixViteOptions = {}): Plugin {
-  let buildContractHash = "";
+  let contractsRoot = "";
   let clientManifestFile = "";
+  let generatedContractsFile = "";
   let generatedRoutesFile = "";
   let routesRoot = "";
   let viewsRoot = "";
@@ -86,15 +95,24 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
     configResolved(resolved) {
       viewsRoot = resolve(resolved.root, options.views ?? "views");
       routesRoot = resolve(resolved.root, options.routes ?? "routes");
+      contractsRoot = resolve(resolved.root, options.contracts ?? ".");
+      clientManifestFile = resolve(
+        resolved.root,
+        options.clientManifest ?? "public/assets/phoenix-manifest.json",
+      );
+      generatedContractsFile = resolve(
+        resolved.root,
+        options.generatedContracts ?? "views/generated/contracts.ts",
+      );
       generatedRoutesFile = resolve(
         resolved.root,
         options.generatedRoutes ?? "views/generated/routes.ts",
       );
-      generateRouteTypes(routesRoot, generatedRoutesFile);
-      buildContractHash = options.contractHash ?? sourceHash(readFileSync(generatedRoutesFile, "utf8"));
-      clientManifestFile = resolve(
-        resolved.root,
-        options.clientManifest ?? "public/assets/phoenix-manifest.json",
+      generateRouteTypes(
+        routesRoot,
+        generatedRoutesFile,
+        contractsRoot,
+        generatedContractsFile,
       );
     },
 
@@ -111,9 +129,8 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
         ? clientModule(discovery)
         : serverModule(
           discovery,
-          options.renderer
-            ? readClientBuildIdentity(clientManifestFile, buildContractHash)
-            : undefined,
+          generatedContractsFile,
+          options.renderer ? clientManifestFile : undefined,
         );
     },
 
@@ -126,12 +143,23 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
 
     configureServer(server) {
       watchForNewModules(server, viewsRoot);
-      watchForRoutes(server, routesRoot, generatedRoutesFile);
+      watchForRoutes(
+        server,
+        routesRoot,
+        generatedRoutesFile,
+        contractsRoot,
+        generatedContractsFile,
+      );
     },
 
     handleHotUpdate({ file, server }) {
-      if (isWithin(file, routesRoot) && extname(file) === ".rs") {
-        generateRouteTypes(routesRoot, generatedRoutesFile);
+      if (isWithin(file, contractsRoot) && extname(file) === ".rs") {
+        generateRouteTypes(
+          routesRoot,
+          generatedRoutesFile,
+          contractsRoot,
+          generatedContractsFile,
+        );
         server.ws.send({ type: "full-reload" });
         return;
       }
@@ -140,14 +168,8 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
     },
 
     generateBundle(_output, bundle) {
+      const contractHash = readContractHash(generatedContractsFile);
       const version = bundleVersion(bundle);
-      const entry = Object.values(bundle).find(
-        (item) => item.type === "chunk" && item.isEntry,
-      );
-      if (!entry || entry.type !== "chunk") {
-        throw new Error("Phoenix build did not produce an entry chunk");
-      }
-
       if (options.renderer) {
         this.emitFile({
           type: "asset",
@@ -155,31 +177,34 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
           source: `${JSON.stringify({
             schema: 1,
             version,
-            contract_hash: buildContractHash,
-            entry: entry.fileName,
+            contract_hash: contractHash,
+            entry: Object.values(bundle).find((item) => item.type === "chunk" && item.isEntry)?.fileName,
           }, null, 2)}\n`,
         });
         return;
       }
 
+      const entry = Object.values(bundle).find(
+        (item) => item.type === "chunk" && item.isEntry,
+      );
+      if (!entry || entry.type !== "chunk") {
+        throw new Error("Phoenix client build did not produce an entry chunk");
+      }
       const css = Object.values(bundle)
         .filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
         .map((item) => item.fileName)
         .sort();
+      const imports = [...new Set(entry.imports)].sort();
       this.emitFile({
         type: "asset",
         fileName: options.manifest ?? "phoenix-manifest.json",
         source: `${JSON.stringify({
           schema: 1,
           version,
-          contract_hash: buildContractHash,
+          contract_hash: contractHash,
           public_path: options.publicPath ?? "/assets/",
           entries: {
-            client: {
-              file: entry.fileName,
-              css,
-              imports: [...new Set(entry.imports)].sort(),
-            },
+            client: { file: entry.fileName, css, imports },
           },
         }, null, 2)}\n`,
       });
@@ -187,14 +212,19 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
   };
 }
 
-function sourceHash(source: string): string {
-  return `sha256-${createHash("sha256").update(source).digest("hex")}`;
+function readContractHash(generatedContractsFile: string): string {
+  const source = readFileSync(generatedContractsFile, "utf8");
+  const hash = source.match(/export const contractHash = ["']([^"']+)["']/)?.[1];
+  if (!hash) {
+    throw new Error(`Phoenix generated contracts do not contain contractHash: ${generatedContractsFile}`);
+  }
+  return hash;
 }
 
 function readClientBuildIdentity(
   clientManifestFile: string,
   expectedContractHash: string,
-): { assetVersion: string; contractHash: string } {
+): { version: string } {
   if (!existsSync(clientManifestFile)) {
     throw new Error(
       `Phoenix SSR build requires the client manifest; run the client build first: ${clientManifestFile}`,
@@ -213,34 +243,17 @@ function readClientBuildIdentity(
       `Phoenix client/renderer contract hash mismatch: ${manifest.contract_hash} != ${expectedContractHash}`,
     );
   }
-  return {
-    assetVersion: manifest.version,
-    contractHash: expectedContractHash,
-  };
+  return { version: manifest.version };
 }
 
-function bundleVersion(
-  bundle: Record<string, {
-    code?: string;
-    fileName: string;
-    source?: string | Uint8Array;
-    type: string;
-  }>,
-): string {
+function bundleVersion(bundle: Record<string, { fileName: string; type: string; code?: string; source?: string | Uint8Array }>): string {
   const hash = createHash("sha256");
-  for (const item of Object.values(bundle).sort((left, right) => (
-    left.fileName.localeCompare(right.fileName)
-  ))) {
+  for (const item of Object.values(bundle).sort((left, right) => left.fileName.localeCompare(right.fileName))) {
     hash.update(item.fileName);
     if (item.type === "chunk") hash.update(item.code ?? "");
     else hash.update(item.source ?? "");
   }
   return `sha256-${hash.digest("hex").slice(0, 24)}`;
-}
-
-interface RustToken {
-  kind: "identifier" | "punctuation" | "string";
-  value: string;
 }
 
 interface RustNameCall {
@@ -257,41 +270,62 @@ interface RustGroup {
 
 interface RouteTreeNode {
   children: Map<string, RouteTreeNode>;
-  route?: string;
+  route?: RustRouteDeclaration;
 }
 
-export function generateRouteTypes(routesRoot: string, outputFile: string): string[] {
-  const names = discoverRouteNames(routesRoot);
-  const source = routeTypesModule(names);
+interface RustRouteDeclaration {
+  action?: RustActionContract;
+  name: string;
+}
+
+export function generateRouteTypes(
+  routesRoot: string,
+  outputFile: string,
+  contractsRoot?: string,
+  contractsFile?: string,
+): string[] {
+  const routes = discoverRoutes(routesRoot);
+  const actionDeclarations = routes.flatMap((route) => route.action ? [route.action] : []);
+  let actions = new Map<string, GeneratedActionContract>();
+  let typeImports: string[] = [];
+  if (contractsRoot && contractsFile) {
+    const generated = generateContractTypes(contractsRoot, contractsFile, actionDeclarations);
+    actions = generated.actions;
+    typeImports = generated.typeImports;
+  } else if (actionDeclarations.length > 0) {
+    throw new Error("Phoenix action contracts require a contract source root and output file");
+  }
+  const source = routeTypesModule(routes, actions, typeImports);
   mkdirSync(dirname(outputFile), { recursive: true });
   if (!existsSync(outputFile) || readFileSync(outputFile, "utf8") !== source) {
     writeFileSync(outputFile, source);
   }
-  return names;
+  return routes.map((route) => route.name);
 }
 
-function discoverRouteNames(routesRoot: string): string[] {
+function discoverRoutes(routesRoot: string): RustRouteDeclaration[] {
   if (!existsSync(routesRoot)) return [];
-  const names = walk(routesRoot)
+  const routes = walk(routesRoot)
     .filter((file) => extname(file) === ".rs")
-    .flatMap((file) => routeNamesFromRust(readFileSync(file, "utf8"), file))
-    .sort((left, right) => left.localeCompare(right));
+    .flatMap((file) => routesFromRust(readFileSync(file, "utf8"), file))
+    .sort((left, right) => left.name.localeCompare(right.name));
   const seen = new Set<string>();
-  for (const name of names) {
-    if (seen.has(name)) {
-      throw new Error(`Phoenix discovered duplicate Rust route name: ${name}`);
+  for (const route of routes) {
+    if (seen.has(route.name)) {
+      throw new Error(`Phoenix discovered duplicate Rust route name: ${route.name}`);
     }
-    seen.add(name);
+    seen.add(route.name);
   }
-  return names;
+  return routes;
 }
 
-function routeNamesFromRust(source: string, file: string): string[] {
+function routesFromRust(source: string, file: string): RustRouteDeclaration[] {
   const tokens = tokenizeRust(source);
   const pairs = delimiterPairs(tokens, file);
   const calls = nameCalls(tokens, file);
   const groups = routeGroups(tokens, pairs, calls);
   const prefixCalls = new Set(groups.map((group) => group.prefixCall));
+  const actions = actionCalls(tokens, file);
 
   return calls
     .filter((call) => !prefixCalls.has(call.tokenIndex))
@@ -301,124 +335,57 @@ function routeNamesFromRust(source: string, file: string): string[] {
         .sort((left, right) => right.bodyEnd - right.bodyStart - (left.bodyEnd - left.bodyStart))
         .map((group) => group.prefix)
         .join("");
-      return `${prefix}${call.name}`;
+      const name = `${prefix}${call.name}`;
+      const action = actions.find((candidate) => candidate.nameTokenIndex === call.tokenIndex);
+      return {
+        name,
+        action: action ? { input: action.input, output: action.output, route: name } : undefined,
+      };
     });
 }
 
-function tokenizeRust(source: string): RustToken[] {
-  const tokens: RustToken[] = [];
-  let index = 0;
-  while (index < source.length) {
-    const character = source[index];
-    if (/\s/.test(character)) {
-      index += 1;
-      continue;
-    }
-    if (source.startsWith("//", index)) {
-      index = source.indexOf("\n", index + 2);
-      if (index === -1) break;
-      continue;
-    }
-    if (source.startsWith("/*", index)) {
-      index = skipBlockComment(source, index);
-      continue;
-    }
-    const rawString = readRawRustString(source, index);
-    if (rawString) {
-      tokens.push({ kind: "string", value: rawString.value });
-      index = rawString.end;
-      continue;
-    }
-    if (character === '"') {
-      const string = readRustString(source, index);
-      tokens.push({ kind: "string", value: string.value });
-      index = string.end;
-      continue;
-    }
-    if (/[A-Za-z_]/.test(character)) {
-      let end = index + 1;
-      while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end += 1;
-      tokens.push({ kind: "identifier", value: source.slice(index, end) });
-      index = end;
-      continue;
-    }
-    tokens.push({ kind: "punctuation", value: character });
-    index += 1;
-  }
-  return tokens;
-}
-
-function skipBlockComment(source: string, start: number): number {
-  let depth = 1;
-  let index = start + 2;
-  while (index < source.length && depth > 0) {
-    if (source.startsWith("/*", index)) {
-      depth += 1;
-      index += 2;
-    } else if (source.startsWith("*/", index)) {
-      depth -= 1;
-      index += 2;
-    } else {
-      index += 1;
-    }
-  }
-  return index;
-}
-
-function readRawRustString(source: string, start: number): { end: number; value: string } | null {
-  if (source[start] !== "r") return null;
-  let quote = start + 1;
-  while (source[quote] === "#") quote += 1;
-  if (source[quote] !== '"') return null;
-  const hashes = source.slice(start + 1, quote);
-  const terminator = `"${hashes}`;
-  const end = source.indexOf(terminator, quote + 1);
-  if (end === -1) throw new Error("Phoenix found an unterminated Rust raw string");
-  return { end: end + terminator.length, value: source.slice(quote + 1, end) };
-}
-
-function readRustString(source: string, start: number): { end: number; value: string } {
-  let index = start + 1;
-  let value = "";
-  while (index < source.length) {
-    const character = source[index];
-    if (character === '"') return { end: index + 1, value };
-    if (character !== "\\") {
-      value += character;
-      index += 1;
-      continue;
-    }
-    const escaped = source[index + 1];
-    const replacements: Record<string, string> = {
-      "\\": "\\",
-      '"': '"',
-      n: "\n",
-      r: "\r",
-      t: "\t",
-    };
-    value += replacements[escaped] ?? escaped;
-    index += 2;
-  }
-  throw new Error("Phoenix found an unterminated Rust string");
-}
-
-function delimiterPairs(tokens: RustToken[], file: string): Map<number, number> {
-  const pairs = new Map<number, number>();
-  const stack: Array<{ index: number; value: string }> = [];
-  const closing: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-  for (const [index, token] of tokens.entries()) {
-    if (["(", "[", "{"].includes(token.value)) {
-      stack.push({ index, value: token.value });
-    } else if (token.value in closing) {
-      const opening = stack.pop();
-      if (!opening || opening.value !== closing[token.value]) {
-        throw new Error(`Phoenix could not parse Rust route delimiters in ${file}`);
+function actionCalls(
+  tokens: RustToken[],
+  file: string,
+): Array<{ input: string; nameTokenIndex: number; output: string }> {
+  const calls: Array<{ input: string; nameTokenIndex: number; output: string }> = [];
+  const names = nameCalls(tokens, file);
+  for (let index = 1; index < tokens.length - 7; index += 1) {
+    if (tokens[index - 1].value !== "." || tokens[index].value !== "action"
+      || tokens[index + 1].value !== ":" || tokens[index + 2].value !== ":"
+      || tokens[index + 3].value !== "<") continue;
+    let angleDepth = 1;
+    let comma: number | undefined;
+    let close: number | undefined;
+    for (let cursor = index + 4; cursor < tokens.length; cursor += 1) {
+      if (tokens[cursor].value === "<") angleDepth += 1;
+      if (tokens[cursor].value === ">") {
+        angleDepth -= 1;
+        if (angleDepth === 0) {
+          close = cursor;
+          break;
+        }
       }
-      pairs.set(opening.index, index);
+      if (tokens[cursor].value === "," && angleDepth === 1 && comma === undefined) comma = cursor;
     }
+    if (comma === undefined || close === undefined
+      || tokens[close + 1]?.value !== "(" || tokens[close + 2]?.value !== ")") {
+      throw new Error(`Phoenix action requires .action::<Input, Output>() (${file})`);
+    }
+    const name = [...names].reverse().find((candidate) => candidate.tokenIndex < index);
+    if (!name) throw new Error(`Phoenix action must follow a literal .name(\"...\") (${file})`);
+    calls.push({
+      input: rustTypeSource(tokens.slice(index + 4, comma)),
+      nameTokenIndex: name.tokenIndex,
+      output: rustTypeSource(tokens.slice(comma + 1, close)),
+    });
+    index = close + 2;
   }
-  if (stack.length > 0) throw new Error(`Phoenix found an unclosed Rust delimiter in ${file}`);
-  return pairs;
+  return calls;
+}
+
+function rustTypeSource(tokens: RustToken[]): string {
+  return tokens.map((token) => token.kind === "string" ? JSON.stringify(token.value) : token.value).join("");
 }
 
 function nameCalls(tokens: RustToken[], file: string): RustNameCall[] {
@@ -495,18 +462,30 @@ function findToken(
   return undefined;
 }
 
-function routeTypesModule(names: string[]): string {
+function routeTypesModule(
+  routes: RustRouteDeclaration[],
+  actions: Map<string, GeneratedActionContract>,
+  typeImports: string[],
+): string {
   const root: RouteTreeNode = { children: new Map() };
-  for (const name of names) addRoute(root, name);
+  for (const route of routes) addRoute(root, route);
   const exports = [...root.children.keys()]
     .filter(isSafeBindingName)
     .map((name) => `export const ${name} = routes[${JSON.stringify(name)}];`);
-  const routeNameType = names.length === 0
+  const routeNameType = routes.length === 0
     ? "never"
-    : names.map((name) => JSON.stringify(name)).join(" | ");
+    : routes.map((route) => JSON.stringify(route.name)).join(" | ");
+  const imports = actions.size === 0 ? [] : [
+    'import { createRustAction } from "@phoenix/react";',
+    ...(typeImports.length > 0
+      ? [`import type { ${typeImports.join(", ")} } from "./contracts.js";`]
+      : []),
+    "",
+  ];
   return [
     "// This file is generated by @phoenix/vite from Rust named routes. Do not edit.",
-    `export const routes = ${printRouteTree(root, 0)} as const;`,
+    ...imports,
+    `export const routes = ${printRouteTree(root, 0, actions)} as const;`,
     "",
     `export type PhoenixRouteName = ${routeNameType};`,
     ...(exports.length > 0 ? ["", ...exports] : []),
@@ -514,15 +493,15 @@ function routeTypesModule(names: string[]): string {
   ].join("\n");
 }
 
-function addRoute(root: RouteTreeNode, route: string): void {
-  const segments = route.split(".");
+function addRoute(root: RouteTreeNode, route: RustRouteDeclaration): void {
+  const segments = route.name.split(".");
   if (segments.some((segment) => segment.length === 0)) {
-    throw new Error(`Phoenix route name cannot contain an empty segment: ${route}`);
+    throw new Error(`Phoenix route name cannot contain an empty segment: ${route.name}`);
   }
   let node = root;
   for (const [index, segment] of segments.entries()) {
     if (node.route) {
-      throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${node.route}`);
+      throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${node.route.name}`);
     }
     let child = node.children.get(segment);
     if (!child) {
@@ -532,22 +511,31 @@ function addRoute(root: RouteTreeNode, route: string): void {
     node = child;
     if (index === segments.length - 1) {
       if (node.children.size > 0) {
-        throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${route}`);
+        throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${route.name}`);
       }
       node.route = route;
     }
   }
 }
 
-function printRouteTree(node: RouteTreeNode, depth: number): string {
-  if (node.route) return JSON.stringify(node.route);
+function printRouteTree(
+  node: RouteTreeNode,
+  depth: number,
+  actions: Map<string, GeneratedActionContract>,
+): string {
+  if (node.route) {
+    const action = actions.get(node.route.name);
+    return action
+      ? `createRustAction<${action.input}, ${action.output}>(${JSON.stringify(node.route.name)})`
+      : JSON.stringify(node.route.name);
+  }
   if (node.children.size === 0) return "{}";
   const indent = "  ".repeat(depth);
   const childIndent = "  ".repeat(depth + 1);
   const children = [...node.children.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, child]) => (
-      `${childIndent}${JSON.stringify(name)}: ${printRouteTree(child, depth + 1)},`
+      `${childIndent}${JSON.stringify(name)}: ${printRouteTree(child, depth + 1, actions)},`
     ));
   return ["{", ...children, `${indent}}`].join("\n");
 }
@@ -691,11 +679,17 @@ function clientModule({ pages, islands, styles }: Discovery): string {
 
 function serverModule(
   { pages, islands }: Discovery,
-  identity?: { assetVersion: string; contractHash: string },
+  generatedContractsFile: string,
+  clientManifestFile?: string,
 ): string {
+  const contractHash = readContractHash(generatedContractsFile);
+  const clientBuild = clientManifestFile
+    ? readClientBuildIdentity(clientManifestFile, contractHash)
+    : undefined;
   const imports: string[] = [
     'import { registerIsland } from "@phoenix/react";',
     'import { startRenderer } from "@phoenix/react-ssr";',
+    `import { contractHash } from ${JSON.stringify(toImportPath(generatedContractsFile))};`,
   ];
   pages.forEach((module, index) => {
     imports.push(`import Page${index} from ${JSON.stringify(toImportPath(module.file))};`);
@@ -711,9 +705,7 @@ function serverModule(
   return [
     ...imports,
     ...registrations,
-    `startRenderer({${identity
-      ? ` assetVersion: ${JSON.stringify(identity.assetVersion)}, contractHash: ${JSON.stringify(identity.contractHash)},`
-      : ""} pages: ${pageRegistry}, islands: ${islandRegistry} });`,
+    `startRenderer({ ${clientBuild ? `assetVersion: ${JSON.stringify(clientBuild.version)}, ` : ""}contractHash, pages: ${pageRegistry}, islands: ${islandRegistry} });`,
   ].join("\n");
 }
 
@@ -743,11 +735,18 @@ function watchForRoutes(
   server: ViteDevServer,
   routesRoot: string,
   generatedRoutesFile: string,
+  contractsRoot: string,
+  generatedContractsFile: string,
 ): void {
-  server.watcher.add(routesRoot);
+  server.watcher.add([routesRoot, contractsRoot]);
   const regenerate = (file: string) => {
-    if (isWithin(file, routesRoot) && extname(file) === ".rs") {
-      generateRouteTypes(routesRoot, generatedRoutesFile);
+    if (isWithin(file, contractsRoot) && extname(file) === ".rs") {
+      generateRouteTypes(
+        routesRoot,
+        generatedRoutesFile,
+        contractsRoot,
+        generatedContractsFile,
+      );
     }
   };
   server.watcher.on("add", regenerate);

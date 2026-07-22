@@ -9,7 +9,8 @@
 - GET、POST、PUT、PATCH、DELETE 路由；
 - 路径参数、命名路由和路由分组；
 - 异步控制器；
-- JSON 请求、字段验证和 JSON 响应；
+- Query、Path、Header、JSON、Form、Multipart 强类型请求提取；
+- 验证后的 DTO、字段错误和 JSON 响应；
 - 全局、单路由和路由组中间件；
 - Toasty SQLite/PostgreSQL CRUD、关系、游标分页与事务；
 - 带 checksum、锁和回滚的迁移；
@@ -19,7 +20,7 @@
 - 明文或可选 AES-256-GCM 页面协议；
 - 业务单元测试和功能测试。
 
-Vite 自动页面/Island 发现、TypeScript 命名路由树、多 worker renderer 池和生产资源版本校验均已实现。本文只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口；各领域的完整配置分别链接到专项文档。
+Vite 自动页面/Island 发现、Rust/TypeScript 字段契约、可调用命名 action、多 worker renderer 池和生产资源版本校验均已实现。本文只使用当前仓库中已经通过 Rust、TypeScript 和 React 测试的接口；各领域的完整配置分别链接到专项文档。
 
 ## 1. 推荐的业务目录
 
@@ -30,7 +31,9 @@ examples/blog/
 ├── app/
 │   ├── controllers/mod.rs   # 控制器
 │   ├── middleware/mod.rs    # 业务中间件
-│   └── requests/mod.rs      # 请求验证规则
+│   ├── props/mod.rs         # 页面与共享 Props
+│   ├── requests/mod.rs      # 请求 DTO 与验证规则
+│   └── resources/mod.rs     # 对浏览器公开的 Resource
 ├── routes/
 │   └── web.rs               # Web 路由
 ├── src/
@@ -299,27 +302,47 @@ let request_id = request
 
 不要在 panic 信息或公开响应中写入密码、令牌、数据库连接信息等敏感数据。
 
-## 6. 接收 JSON 请求
+## 6. 提取强类型请求
 
-`request.json()` 会把 body 反序列化为指定 Rust 类型。当前的验证器直接处理
-`serde_json::Value`：
+控制器参数使用 extractor 后，框架会在进入业务代码前完成反序列化。路由用
+`typed(...)` 挂载这类 handler：
 
 ```rust
-use serde_json::Value;
+use phoenix::prelude::{Query, typed};
+use serde::Deserialize;
 
-let payload: Value = match request.json() {
-    Ok(payload) => payload,
-    Err(rejection) => {
-        return (
-            rejection.status(),
-            Json(serde_json::json!({
-                "message": rejection.to_string(),
-            })),
-        )
-            .into_response();
-    }
-};
+#[derive(Deserialize)]
+struct SearchQuery {
+    page: u32,
+    term: String,
+}
+
+async fn search(Query(query): Query<SearchQuery>) -> Json<SearchResult> {
+    // query.page 和 query.term 已经是 Rust 强类型字段。
+}
+
+Routes::new().get("/search", typed(search));
 ```
+
+可用 extractor：
+
+| 类型 | 数据来源 |
+| --- | --- |
+| `Query<T>` | URL query string |
+| `Path<T>` | `{parameter}` 路径参数 |
+| `Header<T>` | 请求头，字段通常用 `#[serde(rename = "x-...")]` |
+| `Json<T>` | JSON body |
+| `Form<T>` | `application/x-www-form-urlencoded` body |
+| `Multipart<T>` | `multipart/form-data`；`T: FromMultipart` 时直接形成业务 DTO |
+
+一个 handler 最多可以组合四个 extractor。解析失败时框架直接返回稳定的
+400、415 或 422 响应，业务函数不会收到半解析数据。底层 `request.json::<T>()`
+仍然保留，适合中间件或需要自行控制错误映射的代码。
+
+Multipart 默认类型是 `MultipartData`，可以按名称读取或移除 `MultipartField`。
+业务上传 DTO 实现 `FromMultipart` 后可直接写成 `Multipart<UploadInput>`；如果该
+DTO 同时实现 `Validate`，`Validated<Multipart<UploadInput>>` 会复用相同的 422
+字段错误流程。框架只返回客户端文件名和字节，不会把文件名直接当成本地路径。
 
 客户端必须发送下列 JSON Content-Type 之一：
 
@@ -337,41 +360,46 @@ application/vnd.example+json
 | Content-Type 不是 JSON | 415 Unsupported Media Type |
 | JSON 格式错误或无法反序列化 | 400 Bad Request |
 
-业务代码应先处理 JSON 解析错误，再进行字段验证。
+使用 `Json<T>` 时，这些错误由 typed handler 自动映射为 JSON 响应。
 
 ## 7. 验证业务字段
 
-将验证规则放在 `app/requests`，避免控制器同时承担输入规则和业务流程：
+将 DTO 和验证规则放在 `app/requests`，避免控制器同时承担输入规则和业务流程：
 
 ```rust
-use phoenix::prelude::{Validator, min_length, required, rules, string};
-use serde_json::Value;
+use phoenix::prelude::{Validate, ValidationErrors, Validator, max_length, required, rules, string};
+use serde::Deserialize;
 
-pub fn registration_validator(data: &Value) -> Validator<'_> {
-    Validator::new(data)
-        .field("user", rules![required(), string()])
-        .field("password", rules![required(), string(), min_length(8)])
+#[phoenix::contract(input)]
+#[derive(Deserialize)]
+pub struct StoreMemberInput {
+    pub name: String,
+}
+
+impl Validate for StoreMemberInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({ "name": self.name });
+        Validator::new(&data)
+            .field("name", rules![required(), string(), max_length(40)])
+            .validate()
+    }
 }
 ```
 
-在控制器中执行验证并返回 422：
+`Validated<Json<T>>` 先提取 JSON，再执行 `T::validate()`。控制器只处理有效 DTO：
 
 ```rust
-match registration_validator(&payload).validate() {
-    Ok(()) => (
+pub async fn store(
+    Validated(Json(input)): Validated<Json<StoreMemberInput>>,
+) -> (StatusCode, Json<MemberResource>) {
+    (
         StatusCode::CREATED,
-        Json(serde_json::json!({ "created": true })),
+        Json(MemberResource::new(input.name)),
     )
-        .into_response(),
-    Err(errors) => (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(serde_json::json!({ "errors": errors.fields() })),
-    )
-        .into_response(),
 }
 ```
 
-一次验证会收集所有字段错误。错误 JSON 按字段分组，每项包含规则名和消息：
+验证失败自动返回 422。一次验证会收集所有字段错误，每项包含规则名和消息：
 
 ```json
 {
@@ -685,20 +713,37 @@ let response = Response::text("created")
 
 ## 10. 返回 React 页面
 
-后端只传页面名和业务 props，不为三种渲染模式分别设计 API：
+后端只传页面名和业务 props，不为三种渲染模式分别设计 API。页面和共享
+Props 也在 Rust 定义一次：
 
 ```rust
 use phoenix::prelude::{NodeRenderer, Page, Request, Response};
-use serde_json::json;
+
+#[phoenix::contract(page, page = "members/index")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MembersPageProps {
+    pub members: Vec<MemberResource>,
+    pub generated_by: String,
+    pub total: u32,
+}
+
+#[phoenix::contract(shared)]
+#[derive(Serialize)]
+pub struct SharedProps {
+    pub framework: String,
+}
 
 pub async fn show(request: Request, renderer: NodeRenderer) -> Response {
     Page::new(
-        "articles/show",
-        json!({
-            "title": "React meets Phoenix",
-            "summary": "One controller contract, three rendering modes."
-        }),
+        "members/index",
+        MembersPageProps {
+            members: load_members().await,
+            generated_by: "Rust".to_owned(),
+            total: 100,
+        },
     )
+    .shared(SharedProps { framework: "Phoenix".to_owned() })
     .respond_with_renderer(&request, &renderer)
     .await
 }
@@ -719,16 +764,14 @@ Page::new("docs/show", props); // Islands
 页面放在 `views/pages`，交互组件放在 `views/islands`。业务页面只在需要浏览器交互的组件上添加 `client:load`：
 
 ```tsx
-import LikeButton from "../../islands/like-button.js";
+import MemberCreator from "../../islands/member-creator.js";
+import type { MembersPageProps } from "../../generated/contracts.js";
 
-export default function ArticleShow({ title, summary }: ArticleShowProps) {
+export default function MembersIndex({ members, total }: MembersPageProps) {
   return (
     <main>
-      <article>
-        <h1>{title}</h1>
-        <p>{summary}</p>
-      </article>
-      <LikeButton client:load initialLikes={7} />
+      <MemberTable members={members} />
+      <MemberCreator client:load initialTotal={total} />
     </main>
   );
 }
@@ -747,31 +790,50 @@ export default defineConfig({ plugins: [phoenix()] });
 
 ### 从 React 调用 Rust action
 
-先在 Rust 路由上设置稳定名称：
+先定义 Rust 输入和输出契约。数据库模型不要直接导出，返回浏览器的数据使用
+Resource 白名单：
+
+```rust
+#[phoenix::contract(input)]
+#[derive(Deserialize)]
+pub struct StoreMemberInput {
+    pub name: String,
+}
+
+#[phoenix::contract(resource, name = "Member")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberResource {
+    pub id: u32,
+    pub name: String,
+    pub joined_on: String,
+}
+```
+
+路由使用稳定名称，并用 `.action::<Input, Output>()` 绑定浏览器 action 契约：
 
 ```rust
 Routes::new()
-    .post("/api/members", MemberController::store)
+    .post("/api/members", typed(MemberController::store))
     .name("members.store")
+    .action::<StoreMemberInput, MemberResource>()
 ```
 
-React 只传路由名和输入数据：
+React 直接调用生成的函数，不传 URL、路由字符串或泛型：
 
 ```tsx
-import { callRust } from "@phoenix/react";
 import { members } from "../generated/routes.js";
-import type { Member } from "../types/member.js";
 
-const member = await callRust<Member>(members.store, { name });
+const member = await members.store({ name });
 ```
 
-Vite 启动或构建时扫描标准 `routes/**/*.rs`，把字面量 `.name("...")` 生成到只读的 `views/generated/routes.ts`。点分名称会变成 TypeScript 树：
+Vite 启动或构建时扫描 Rust 路由和带 `#[phoenix::contract(...)]` 的 DTO，生成只读的 `views/generated/routes.ts` 与 `contracts.ts`。点分名称会变成 TypeScript 树，action 叶子是带完整输入输出类型的函数：
 
 ```ts
 export const routes = {
   members: {
     index: "members.index",
-    store: "members.store",
+    store: createRustAction<StoreMemberInput, Member>("members.store"),
   },
 } as const;
 
@@ -780,9 +842,11 @@ export const members = routes.members;
 
 业务代码输入 `members.` 时会看到 `index` 和 `store`。Rust 删除或重命名 `.name("members.store")` 后，`members.store` 会在 TypeScript 检查中报错；生成文件由框架维护，不手写、不提交。`RouteGroup::name("admin.")` 会和组内 `.name("dashboard")` 自动合并为 `admin.dashboard`。命名路由必须使用字符串字面量，动态名称会使生成阶段失败，防止前端提示不完整。
 
-框架同时把 Rust 运行时命名路由表加入 `PageEnvelope.routes`。生成的 `members.store` 只保存稳定名称，`callRust` 再把它解析为当前后端路径并发送 JSON POST。因此修改 `/api/members` 不会改前端代码，也不会在 TypeScript 中复制 URL。
+框架同时把 Rust 运行时命名路由表加入 `PageEnvelope.routes`。`members.store()` 在调用时解析当前后端路径并发送 JSON POST。因此修改 `/api/members` 不会改前端代码，也不会在 TypeScript 中复制 URL。
 
-`callRust` 是标准化的 HTTP 传输层，不是在浏览器进程里直接执行 Rust；校验、ID 分配和返回数据仍由 Rust 控制器负责。当前生成器覆盖路由名称，不会从 `Request -> Response` 处理器自动推导 `{ name }` 和 `Member`。这一层需要后续强类型 Request/Resource 契约完成。
+生成器遵守常用 Serde wire 规则，包括方向性的 `rename`、`rename_all`、`default`、`flatten`、`alias`、skip、`skip_serializing_if`、`Option`、集合和 unit enum。输入 alias 作为后端兼容名称参与冲突检查，React 新请求统一使用规范字段名。最终 wire name、flatten 或 alias 冲突会使构建失败；可能超过 JavaScript 安全整数范围的 Rust 整数不会静默转换成 `number`。当前数据 enum、tuple struct、泛型 struct，以及会改变 wire 形态但尚不能准确表达的 Serde 属性会明确拒绝，不能生成一个看似可用但错误的 TypeScript 类型。
+
+`members.store()` 仍然通过 HTTP 调用 Rust，并不是在浏览器进程里执行 Rust。校验、权限、ID 分配和返回数据始终由 Rust 控制器负责。
 
 ### 服务端 React HTML
 
@@ -880,61 +944,34 @@ fn reserved_user_is_rejected() {
 cargo test -p phoenix-blog-example
 ```
 
-## 12. 完整的注册控制器
+## 12. 完整的强类型 action
 
-下面是一个包含 JSON 解析、验证、错误响应和成功响应的完整业务动作：
+一个完整 action 的控制器只接收验证后的 DTO，并返回显式 Resource：
 
 ```rust
-use phoenix::prelude::{IntoResponse, Json, Request, Response, StatusCode};
-use serde_json::{Value, json};
-
-use crate::requests::registration_validator;
-
-pub struct RegistrationController;
-
-impl RegistrationController {
-    pub async fn store(request: Request) -> Response {
-        let payload: Value = match request.json() {
-            Ok(payload) => payload,
-            Err(rejection) => {
-                return (
-                    rejection.status(),
-                    Json(json!({ "message": rejection.to_string() })),
-                )
-                    .into_response();
-            }
-        };
-
-        match registration_validator(&payload).validate() {
-            Ok(()) => (
-                StatusCode::CREATED,
-                Json(json!({ "created": true })),
-            )
-                .into_response(),
-            Err(errors) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({ "errors": errors.fields() })),
-            )
-                .into_response(),
-        }
-    }
+pub async fn store(
+    Validated(Json(input)): Validated<Json<StoreMemberInput>>,
+) -> (StatusCode, Json<MemberResource>) {
+    let member = create_member(input).await;
+    (StatusCode::CREATED, Json(member))
 }
 ```
 
-对应路由：
+对应路由绑定输入和输出契约：
 
 ```rust
 Routes::new()
-    .post("/register", RegistrationController::store)
-    .name("register.store")
+    .post("/api/members", typed(MemberController::store))
+    .name("members.store")
+    .action::<StoreMemberInput, MemberResource>()
 ```
 
 请求示例：
 
 ```bash
-curl -i http://127.0.0.1:3000/register \
+curl -i http://127.0.0.1:3000/api/members \
   -H 'content-type: application/json' \
-  --data '{"user":"phoenix-user","password":"correct-horse"}'
+  --data '{"name":"Ada"}'
 ```
 
 ## 13. 数据库与迁移

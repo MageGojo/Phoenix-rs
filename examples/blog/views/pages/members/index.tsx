@@ -1,13 +1,7 @@
 import MemberCreator from "../../islands/member-creator.js";
-import type { Member } from "../../types/member.js";
+import type { Member, MembersPageProps } from "../../generated/contracts.js";
 
-export interface MembersIndexProps {
-  members: Member[];
-  generatedBy: string;
-  total: number;
-}
-
-export default function MembersIndex({ members, generatedBy, total }: MembersIndexProps) {
+export default function MembersIndex({ members, generatedBy, total }: MembersPageProps) {
   const activeCount = members.filter((member) => member.status === "active").length;
   const projectCount = members.reduce((sum, member) => sum + member.projects, 0);
   const visibleMembers = members.slice(0, 10);

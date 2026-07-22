@@ -106,6 +106,18 @@ impl Routes {
         self
     }
 
+    /// Bind browser action input and output contracts to the most recently
+    /// declared route. The Rust types are consumed by Phoenix's build tooling;
+    /// request extraction and response serialization remain compiler checked
+    /// by the registered handler.
+    #[must_use]
+    pub fn action<Input, Output>(mut self) -> Self {
+        if self.definitions.last().is_none() {
+            self.error = Some(RouteBuildError::NoRouteToConfigure("action"));
+        }
+        self
+    }
+
     #[must_use]
     pub fn middleware<M>(mut self, middleware: M) -> Self
     where

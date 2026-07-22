@@ -37,31 +37,32 @@ describe("Phoenix Vite plugin", () => {
     expect(source).toContain('registerIsland("member-creator", Island0)');
     expect(source).toContain('pages: {"members/index":Page0}');
     expect(source).toContain('islands: {"member-creator":Island0}');
+    expect(source).toContain("import { contractHash }");
+    expect(source).toContain("startRenderer({ contractHash,");
     expect(source).toContain("startRenderer(");
   });
 
-  it("pins a production renderer to the client asset and contract identity", () => {
+  it("pins the production renderer to the client asset and contract identity", () => {
     const root = fixture();
+    const plugin = configuredPlugin(root, { renderer: true });
+    const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
+    const contractHash = contracts.match(/contractHash = "([^"]+)"/)?.[1];
     mkdirSync(join(root, "public/assets"), { recursive: true });
     writeFileSync(join(root, "public/assets/phoenix-manifest.json"), JSON.stringify({
       schema: 1,
       version: "sha256-client-build",
-      contract_hash: "sha256-contract",
+      contract_hash: contractHash,
     }));
-    const plugin = configuredPlugin(root, {
-      contractHash: "sha256-contract",
-      renderer: true,
-    });
     const resolved = invokeHook(plugin.resolveId, phoenixVirtualModules.server) as string;
     const source = invokeHook(plugin.load, resolved) as string;
 
     expect(source).toContain('assetVersion: "sha256-client-build"');
-    expect(source).toContain('contractHash: "sha256-contract"');
+    expect(source).toContain("contractHash");
   });
 
   it("emits a versioned production manifest with contract identity", () => {
     const root = fixture();
-    const plugin = configuredPlugin(root, { contractHash: "sha256-contract" });
+    const plugin = configuredPlugin(root);
     const emitted: Array<{ fileName: string; source: string; type: string }> = [];
     invokeHookWithContext(plugin.generateBundle, {
       emitFile(value: { fileName: string; source: string; type: string }) {
@@ -100,7 +101,7 @@ describe("Phoenix Vite plugin", () => {
     };
     expect(parsed.schema).toBe(1);
     expect(parsed.version).toMatch(/^sha256-[0-9a-f]{24}$/);
-    expect(parsed.contract_hash).toBe("sha256-contract");
+    expect(parsed.contract_hash).toMatch(/^fnv1a-[0-9a-f]{8}$/);
     expect(parsed.entries.client).toEqual({
       file: "phoenix-a1.js",
       css: ["client-b2.css"],
@@ -150,6 +151,130 @@ describe("Phoenix Vite plugin", () => {
 
     expect(() => configuredPlugin(root)).toThrow("route names must be string literals");
   });
+
+  it("generates callable actions and Serde-accurate Rust contracts", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "routes/web.rs"), [
+      "Routes::new()",
+      '  .post("/members", handler).name("members.store")',
+      "  .action::<StoreMemberInput, MemberResource>()",
+    ].join("\n"));
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "#[phoenix::contract(input)]",
+      "#[serde(rename_all = \"camelCase\")]",
+      "pub struct StoreMemberInput {",
+      "  pub display_name: String,",
+      "  #[serde(default)]",
+      "  pub note: Option<String>,",
+      "}",
+      "#[phoenix::contract(resource)]",
+      "#[serde(rename_all = \"camelCase\")]",
+      "pub struct MemberResource {",
+      "  pub member_id: u32,",
+      "  #[serde(rename = \"createdBy\")]",
+      "  pub created_by: String,",
+      "}",
+      "#[phoenix::contract(page, page = \"members/index\")]",
+      "pub struct MembersPageProps {",
+      "  #[serde(flatten)]",
+      "  pub member: MemberResource,",
+      "  pub total: u32,",
+      "}",
+      "#[phoenix::contract(shared)]",
+      "pub struct SharedProps {",
+      "  pub locale: String,",
+      "}",
+    ].join("\n"));
+
+    configuredPlugin(root);
+    const routes = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
+    const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
+
+    expect(routes).toContain('import { createRustAction } from "@phoenix/react";');
+    expect(routes).toContain("createRustAction<StoreMemberInput, MemberResource>(\"members.store\")");
+    expect(contracts).toContain('"displayName": string;');
+    expect(contracts).toContain('"note"?: string | null;');
+    expect(contracts).toContain('"memberId": number;');
+    expect(contracts).toContain('"createdBy": string;');
+    expect(contracts).toContain('"members/index": MembersPageProps;');
+    expect(contracts).toContain("export type PhoenixSharedProps = SharedProps;");
+    expect(contracts).toMatch(/export const contractHash = "fnv1a-[0-9a-f]{8}" as const;/);
+  });
+
+  it("rejects Serde field collisions after flattening", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "pub struct Identity { pub id: u32 }",
+      "#[phoenix::contract(resource)]",
+      "pub struct BrokenResource {",
+      "  #[serde(flatten)] pub identity: Identity,",
+      "  #[serde(rename = \"id\")] pub other_id: u32,",
+      "}",
+    ].join("\n"));
+
+    expect(() => configuredPlugin(root)).toThrow("Serde wire name id collides");
+  });
+
+  it("applies directional Serde defaults, aliases, and skipped enum variants", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "#[phoenix::contract(input)]",
+      "#[serde(default, rename_all(deserialize = \"camelCase\", serialize = \"snake_case\"))]",
+      "pub struct SearchInput {",
+      "  pub page_size: u32,",
+      "}",
+      "#[phoenix::contract(input)]",
+      "#[serde(rename_all = \"snake_case\")]",
+      "pub enum SortOrder {",
+      "  #[serde(alias = \"newest\")] RecentFirst,",
+      "  #[serde(skip_deserializing)] InternalOnly,",
+      "}",
+    ].join("\n"));
+
+    configuredPlugin(root);
+    const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
+
+    expect(contracts).toContain('"pageSize"?: number;');
+    expect(contracts).toContain('export type SortOrder = "recent_first" | "newest";');
+    expect(contracts).not.toContain("internal_only");
+  });
+
+  it("fails closed for Serde wire transforms it cannot represent", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "pub struct BrokenResource {",
+      "  #[serde(serialize_with = \"serialize_as_text\")]",
+      "  pub amount: u32,",
+      "}",
+    ].join("\n"));
+
+    expect(() => configuredPlugin(root)).toThrow(
+      "does not support #[serde(serialize_with)]",
+    );
+  });
+
+  it("rejects marked tuple and generic contracts instead of ignoring them", () => {
+    const tupleRoot = fixture();
+    mkdirSync(join(tupleRoot, "app"), { recursive: true });
+    writeFileSync(join(tupleRoot, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "pub struct TupleResource(pub String);",
+    ].join("\n"));
+    expect(() => configuredPlugin(tupleRoot)).toThrow("require named structs or enums");
+
+    const genericRoot = fixture();
+    mkdirSync(join(genericRoot, "app"), { recursive: true });
+    writeFileSync(join(genericRoot, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "pub struct GenericResource<T> { pub value: T }",
+    ].join("\n"));
+    expect(() => configuredPlugin(genericRoot)).toThrow("does not support generic contract");
+  });
 });
 
 function fixture(): string {
@@ -179,6 +304,13 @@ function configuredPlugin(root: string, options: Parameters<typeof phoenix>[0] =
   return plugin;
 }
 
+function invokeHook(hook: unknown, ...args: unknown[]): unknown {
+  const handler = typeof hook === "function"
+    ? hook
+    : (hook as { handler: (...values: unknown[]) => unknown }).handler;
+  return Reflect.apply(handler, {}, args);
+}
+
 function invokeHookWithContext(
   hook: unknown,
   context: object,
@@ -188,11 +320,4 @@ function invokeHookWithContext(
     ? hook
     : (hook as { handler: (...values: unknown[]) => unknown }).handler;
   return Reflect.apply(handler, context, args);
-}
-
-function invokeHook(hook: unknown, ...args: unknown[]): unknown {
-  const handler = typeof hook === "function"
-    ? hook
-    : (hook as { handler: (...values: unknown[]) => unknown }).handler;
-  return Reflect.apply(handler, {}, args);
 }

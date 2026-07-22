@@ -1,5 +1,10 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    ops::{Deref, DerefMut},
+};
 
+use phoenix_http::{FromRequest, IntoResponse, Json, Request, Response, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
@@ -132,6 +137,80 @@ pub struct ValidationErrors {
     fields: BTreeMap<String, Vec<ValidationError>>,
 }
 
+pub trait Validate: Send + Sync + 'static {
+    /// Validate a deserialized request DTO.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable field-level errors when the DTO is not valid.
+    fn validate(&self) -> Result<(), ValidationErrors>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Validated<T>(pub T);
+
+impl<T> Deref for Validated<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Validated<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug)]
+pub enum ValidatedRejection<R> {
+    Extract(R),
+    Validation(ValidationErrors),
+}
+
+impl<R> IntoResponse for ValidatedRejection<R>
+where
+    R: IntoResponse,
+{
+    fn into_response(self) -> Response {
+        match self {
+            Self::Extract(rejection) => rejection.into_response(),
+            Self::Validation(errors) => {
+                #[derive(Serialize)]
+                struct ValidationBody<'a> {
+                    message: &'static str,
+                    errors: &'a BTreeMap<String, Vec<ValidationError>>,
+                }
+
+                Json(ValidationBody {
+                    message: "The submitted data is invalid.",
+                    errors: errors.fields(),
+                })
+                .into_response()
+                .with_status(StatusCode::UNPROCESSABLE_ENTITY)
+            }
+        }
+    }
+}
+
+impl<E, T> FromRequest for Validated<E>
+where
+    E: FromRequest + Deref<Target = T>,
+    T: Validate,
+{
+    type Rejection = ValidatedRejection<E::Rejection>;
+
+    fn from_request(request: &Request) -> Result<Self, Self::Rejection> {
+        let extracted = E::from_request(request).map_err(ValidatedRejection::Extract)?;
+        extracted
+            .deref()
+            .validate()
+            .map_err(ValidatedRejection::Validation)?;
+        Ok(Self(extracted))
+    }
+}
+
 impl ValidationErrors {
     #[must_use]
     pub fn get(&self, field: &str) -> Option<&[ValidationError]> {
@@ -200,6 +279,32 @@ pub const fn min_length(length: usize) -> MinLength {
     MinLength(length)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct MaxLength(usize);
+
+#[must_use]
+pub const fn max_length(length: usize) -> MaxLength {
+    MaxLength(length)
+}
+
+impl Rule for MaxLength {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("max_length")
+    }
+
+    fn validate(&self, context: RuleContext<'_>) -> Result<(), String> {
+        if let Some(Value::String(value)) = context.value
+            && value.chars().count() > self.0
+        {
+            return Err(format!(
+                "The {} field must not exceed {} characters.",
+                context.field, self.0
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Rule for MinLength {
     fn name(&self) -> Cow<'static, str> {
         Cow::Borrowed("min_length")
@@ -222,4 +327,56 @@ fn value_at_path<'a>(data: &'a Value, field: &str) -> Option<&'a Value> {
     field
         .split('.')
         .try_fold(data, |current, segment| current.get(segment))
+}
+
+#[cfg(test)]
+mod tests {
+    use phoenix_http::{Bytes, Handler, HeaderMap, HeaderValue, Method, Request, header, typed};
+    use serde::Deserialize;
+
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct CreateUserInput {
+        name: String,
+    }
+
+    impl Validate for CreateUserInput {
+        fn validate(&self) -> Result<(), ValidationErrors> {
+            let data = serde_json::json!({ "name": self.name });
+            Validator::new(&data)
+                .field("name", rules![required(), string(), min_length(3)])
+                .validate()
+        }
+    }
+
+    #[tokio::test]
+    async fn validated_extractor_returns_dto_or_field_errors() {
+        let handler = typed(
+            |Validated(Json(input)): Validated<Json<CreateUserInput>>| async move {
+                Json(serde_json::json!({ "name": input.name }))
+            },
+        );
+        let request = |body: &'static [u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            Request::from_parts(
+                Method::POST,
+                "/users".parse().expect("valid URI"),
+                headers,
+                Bytes::from_static(body),
+            )
+        };
+
+        let response = handler.call(request(br#"{"name":"Ada"}"#)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handler.call(request(br#"{"name":"A"}"#)).await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: Value = serde_json::from_slice(response.body()).expect("validation JSON");
+        assert_eq!(body["errors"]["name"][0]["rule"], "min_length");
+    }
 }

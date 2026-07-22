@@ -1,15 +1,19 @@
 // Controllers keep async signatures so database calls can be added without changing routes.
 #![allow(clippy::unused_async)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use phoenix::prelude::{
-    IntoResponse, Json, NodeRenderer, Page, RenderMode, Request, Response, StatusCode,
+    IntoResponse, Json, NodeRenderer, Page, RenderMode, Request, Response, StatusCode, Validated,
 };
-use serde::Deserialize;
 use serde_json::json;
 
-use crate::{middleware::AuthorizedAdmin, requests::registration_validator};
+use crate::{
+    middleware::AuthorizedAdmin,
+    props::{MembersPageProps, SharedProps},
+    requests::{StoreMemberInput, registration_validator},
+    resources::{MemberResource, MemberStatus},
+};
 
 pub struct HealthController;
 
@@ -76,50 +80,31 @@ impl AdminController {
 
 pub struct ReactController;
 
-static NEXT_MEMBER_ID: AtomicUsize = AtomicUsize::new(101);
-
-#[derive(Deserialize)]
-struct CreateMemberInput {
-    name: String,
-}
+static NEXT_MEMBER_ID: AtomicU32 = AtomicU32::new(101);
 
 pub struct MemberController;
 
 impl MemberController {
-    pub async fn store(request: Request) -> Response {
-        let input = match request.json::<CreateMemberInput>() {
-            Ok(input) => input,
-            Err(error) => return error.into_response(),
-        };
+    pub async fn store(
+        Validated(Json(input)): Validated<Json<StoreMemberInput>>,
+    ) -> (StatusCode, Json<MemberResource>) {
         let name = input.name.trim();
-        if name.is_empty() || name.chars().count() > 40 {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({
-                    "message": "成员姓名必须为 1 到 40 个字符。",
-                    "errors": { "name": ["成员姓名必须为 1 到 40 个字符。"] }
-                })),
-            )
-                .into_response();
-        }
-
         let id = NEXT_MEMBER_ID.fetch_add(1, Ordering::Relaxed);
         (
             StatusCode::CREATED,
-            Json(json!({
-                "id": id,
-                "name": name,
-                "email": format!("rust{id}@example.test"),
-                "city": "Rust 服务端",
-                "role": "新成员",
-                "status": "active",
-                "projects": 0,
-                "joinedOn": "2026-07-22",
-                "lastActiveMinutes": 0,
-                "createdBy": "Rust"
-            })),
+            Json(MemberResource {
+                id,
+                name: name.to_owned(),
+                email: format!("rust{id}@example.test"),
+                city: "Rust 服务端".to_owned(),
+                role: "新成员".to_owned(),
+                status: MemberStatus::Active,
+                projects: 0,
+                joined_on: "2026-07-22".to_owned(),
+                last_active_minutes: 0,
+                created_by: Some("Rust".to_owned()),
+            }),
         )
-            .into_response()
     }
 }
 
@@ -148,18 +133,21 @@ impl ReactController {
         let members = fake_members();
         let page = Page::new(
             "members/index",
-            json!({
-                "members": members,
-                "generatedBy": "Rust",
-                "total": 100
-            }),
+            MembersPageProps {
+                members,
+                generated_by: "Rust".to_owned(),
+                total: 100,
+            },
         )
+        .shared(SharedProps {
+            framework: "Phoenix".to_owned(),
+        })
         .islands();
         page.respond_with_renderer(&request, &renderer).await
     }
 }
 
-fn fake_members() -> Vec<serde_json::Value> {
+fn fake_members() -> Vec<MemberResource> {
     const SURNAMES: [&str; 10] = ["林", "陈", "许", "顾", "沈", "周", "宋", "梁", "叶", "陆"];
     const GIVEN_NAMES: [&str; 10] = [
         "知遥", "景川", "清和", "予安", "星野", "书宁", "嘉树", "云舒", "明澈", "若衡",
@@ -174,26 +162,29 @@ fn fake_members() -> Vec<serde_json::Value> {
         "数据分析师",
         "内容编辑",
     ];
-    const STATUSES: [&str; 3] = ["active", "away", "offline"];
+    const STATUSES: [MemberStatus; 3] = [
+        MemberStatus::Active,
+        MemberStatus::Away,
+        MemberStatus::Offline,
+    ];
 
     (0..100)
         .map(|index| {
-            let id = index + 1;
-            json!({
-                "id": id,
-                "name": format!("{}{}", SURNAMES[index % 10], GIVEN_NAMES[index / 10]),
-                "email": format!("member{id:03}@example.test"),
-                "city": CITIES[(index * 3 + index / 10 * 2) % CITIES.len()],
-                "role": ROLES[(index * 2 + index / 10) % ROLES.len()],
-                "status": STATUSES[(index * 11) % STATUSES.len()],
-                "projects": (index * 7) % 18 + 1,
-                "joinedOn": format!(
-                    "2024-{:02}-{:02}",
-                    index % 12 + 1,
-                    (index * 5) % 28 + 1
-                ),
-                "lastActiveMinutes": (index * 37) % 1440
-            })
+            let id = u32::try_from(index + 1).expect("the fixture contains only 100 members");
+            MemberResource {
+                id,
+                name: format!("{}{}", SURNAMES[index % 10], GIVEN_NAMES[index / 10]),
+                email: format!("member{id:03}@example.test"),
+                city: CITIES[(index * 3 + index / 10 * 2) % CITIES.len()].to_owned(),
+                role: ROLES[(index * 2 + index / 10) % ROLES.len()].to_owned(),
+                status: STATUSES[(index * 11) % STATUSES.len()],
+                projects: u32::try_from((index * 7) % 18 + 1)
+                    .expect("fixture project counts are less than 19"),
+                joined_on: format!("2024-{:02}-{:02}", index % 12 + 1, (index * 5) % 28 + 1),
+                last_active_minutes: u32::try_from((index * 37) % 1440)
+                    .expect("fixture activity minutes are less than 1440"),
+                created_by: None,
+            }
         })
         .collect()
 }

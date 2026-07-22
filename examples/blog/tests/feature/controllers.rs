@@ -128,4 +128,29 @@ async fn member_controller_rejects_an_empty_name() {
 
     let response = application.handle(request).await;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value =
+        serde_json::from_slice(response.body()).expect("validation should be JSON");
+    assert_eq!(body["errors"]["name"][0]["rule"], "required");
+}
+
+#[tokio::test]
+async fn member_controller_maps_typed_json_rejections() {
+    let application = phoenix_blog_example::application().expect("routes should build");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let request = Request::from_parts(
+        Method::POST,
+        Uri::from_static("/api/members"),
+        headers,
+        Bytes::from_static(br"{"),
+    );
+
+    let response = application.handle(request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value =
+        serde_json::from_slice(response.body()).expect("rejection should be JSON");
+    assert_eq!(body["message"], "The request body contains invalid JSON.");
 }

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
-use phoenix::prelude::{NodeRenderer, RendererConfig, RouteGroup, Routes, SecurityHeaders};
+use phoenix::prelude::{NodeRenderer, RendererConfig, RouteGroup, Routes, SecurityHeaders, typed};
 
 use crate::{
     controllers::{
@@ -8,6 +8,8 @@ use crate::{
         RegistrationController, UserController,
     },
     middleware::{PoweredByPhoenix, RequireExampleToken},
+    requests::StoreMemberInput,
+    resources::MemberResource,
 };
 
 #[must_use]
@@ -30,8 +32,9 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
         .name("users.show")
         .post("/register", RegistrationController::store)
         .name("register.store")
-        .post("/api/members", MemberController::store)
+        .post("/api/members", typed(MemberController::store))
         .name("members.store")
+        .action::<StoreMemberInput, MemberResource>()
         .get("/react", move |request| {
             ReactController::islands(request, article_islands_renderer.clone())
         })
