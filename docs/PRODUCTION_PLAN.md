@@ -7,7 +7,7 @@
 | TLS/HTTPS 与 ALPN | 已完成首版 | rustls PEM 配置、握手 deadline、`h2`/`http/1.1` ALPN、真实 TLS+HTTP/2 测试、可信 scheme、canonical redirect、HTTPS-only HSTS |
 | RBAC/ABAC | 已完成首版 | 精确角色/权限与继承图、资源属性 policy、deny precedence、typed principal/middleware、401/403、决策审计测试 |
 | JWT refresh/revocation | 已完成首版 | 原子 rotation、并发/reuse detection、hashed refresh secret、access/family revoke、内存/文件 store contract、重启持久化与过期清理 |
-| 分布式 Session | 待实现 | 原子 load/save/rotate/delete、TTL、冲突语义、共享后端适配器与双实例测试 |
+| 分布式 Session | 已完成首版 | 异步 load/create/CAS save/CAS rotate/CAS delete、滑动 TTL、409/503 失败关闭、成功后 Cookie 提交、指标与共享 backend 双 Router 测试 |
 | 分布式限流 | 已完成首版 | 原子 `RateLimitBackend::hit`、可替换有界 key policy、Retry-After、默认失败关闭/显式失败开放、指标与共享 backend 双实例测试 |
 | 指标 exporter | 已完成首版 | HTTP 延迟/状态 middleware、连接/TLS server 接入、renderer snapshot、数据库/队列 hooks、Prometheus 0.0.4 文本端点、固定低基数标签测试 |
 | CSP nonce | 待实现 | 每请求随机 nonce、Header/HTML/renderer 一致、Vite dev/production 策略、缓存边界 |

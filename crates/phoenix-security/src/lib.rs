@@ -621,10 +621,19 @@ struct SessionRecord {
 }
 
 /// In-process server-side session store.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SessionStore {
     records: Arc<Mutex<HashMap<String, SessionRecord>>>,
     ttl: Duration,
+}
+
+impl std::fmt::Debug for SessionStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionStore")
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionStore {
@@ -654,9 +663,12 @@ impl SessionStore {
             });
         (
             Session {
-                id: Arc::new(Mutex::new(id)),
-                records: Arc::clone(&self.records),
-                ttl: self.ttl,
+                inner: SessionInner::Local {
+                    id: Arc::new(Mutex::new(id)),
+                    records: Arc::clone(&self.records),
+                    ttl: self.ttl,
+                    destroyed: Arc::new(Mutex::new(false)),
+                },
             },
             existing.is_none(),
         )
@@ -664,26 +676,107 @@ impl SessionStore {
 }
 
 /// A cloneable handle to one server-side session.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Session {
-    id: Arc<Mutex<String>>,
-    records: Arc<Mutex<HashMap<String, SessionRecord>>>,
-    ttl: Duration,
+    inner: SessionInner,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let storage = match &self.inner {
+            SessionInner::Local { .. } => "local",
+            SessionInner::Distributed(_) => "distributed",
+        };
+        formatter
+            .debug_struct("Session")
+            .field("storage", &storage)
+            .field("id", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SessionInner {
+    Local {
+        id: Arc<Mutex<String>>,
+        records: Arc<Mutex<HashMap<String, SessionRecord>>>,
+        ttl: Duration,
+        destroyed: Arc<Mutex<bool>>,
+    },
+    Distributed(Arc<Mutex<DistributedSessionState>>),
+}
+
+#[derive(Clone, Debug)]
+struct DistributedSessionState {
+    id: String,
+    original_id: Option<String>,
+    version: Option<u64>,
+    values: HashMap<String, Value>,
+    dirty: bool,
+    rotated: bool,
+    destroyed: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DistributedSessionCommit {
+    id: String,
+    original_id: Option<String>,
+    version: Option<u64>,
+    values: HashMap<String, Value>,
+    dirty: bool,
+    rotated: bool,
+    destroyed: bool,
 }
 
 impl Session {
+    fn distributed(id: String, snapshot: Option<SessionSnapshot>) -> Self {
+        let (original_id, version, values) = snapshot.map_or_else(
+            || (None, None, HashMap::new()),
+            |snapshot| (Some(id.clone()), Some(snapshot.version), snapshot.values),
+        );
+        Self {
+            inner: SessionInner::Distributed(Arc::new(Mutex::new(DistributedSessionState {
+                id,
+                original_id,
+                version,
+                values,
+                dirty: false,
+                rotated: false,
+                destroyed: false,
+            }))),
+        }
+    }
+
     #[must_use]
     pub fn id(&self) -> String {
-        self.id
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        match &self.inner {
+            SessionInner::Local { id, .. } => id
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            SessionInner::Distributed(state) => state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .id
+                .clone(),
+        }
     }
 
     #[must_use]
     pub fn get(&self, key: &str) -> Option<Value> {
-        self.with_record(|record| record.values.get(key).cloned())
-            .flatten()
+        match &self.inner {
+            SessionInner::Local { .. } => self
+                .with_local_record(|record| record.values.get(key).cloned())
+                .flatten(),
+            SessionInner::Distributed(state) => {
+                let state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (!state.destroyed)
+                    .then(|| state.values.get(key).cloned())
+                    .flatten()
+            }
+        }
     }
 
     #[must_use]
@@ -693,15 +786,42 @@ impl Session {
     }
 
     pub fn put(&self, key: impl Into<String>, value: impl Into<Value>) {
-        self.with_record_mut(|record| {
-            record.values.insert(key.into(), value.into());
-        });
+        let key = key.into();
+        let value = value.into();
+        match &self.inner {
+            SessionInner::Local { .. } => {
+                self.with_local_record_mut(|record| {
+                    record.values.insert(key, value);
+                });
+            }
+            SessionInner::Distributed(state) => {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !state.destroyed {
+                    state.values.insert(key, value);
+                    state.dirty = true;
+                }
+            }
+        }
     }
 
     pub fn remove(&self, key: &str) {
-        self.with_record_mut(|record| {
-            record.values.remove(key);
-        });
+        match &self.inner {
+            SessionInner::Local { .. } => {
+                self.with_local_record_mut(|record| {
+                    record.values.remove(key);
+                });
+            }
+            SessionInner::Distributed(state) => {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !state.destroyed && state.values.remove(key).is_some() {
+                    state.dirty = true;
+                }
+            }
+        }
     }
 
     /// Replace the public session ID while preserving server-side values.
@@ -714,41 +834,156 @@ impl Session {
         self.rotate(true);
     }
 
-    fn rotate(&self, clear: bool) {
-        let mut id = self
-            .id
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut records = self
-            .records
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let old_id = std::mem::take(&mut *id);
-        let mut record = records.remove(&old_id).unwrap_or_else(|| SessionRecord {
-            values: HashMap::new(),
-            expires_at: Instant::now() + self.ttl,
-        });
-        if clear {
-            record.values.clear();
+    /// Permanently remove this session and expire its public cookie.
+    ///
+    /// Unlike [`Session::invalidate`], this is terminal for the current request and does not
+    /// create a replacement session. Calls to `put` after `destroy` are ignored.
+    pub fn destroy(&self) {
+        match &self.inner {
+            SessionInner::Local {
+                id,
+                records,
+                destroyed,
+                ..
+            } => {
+                let id = id
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&id);
+                *destroyed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            }
+            SessionInner::Distributed(state) => {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.values.clear();
+                state.destroyed = true;
+                state.dirty = false;
+                state.rotated = false;
+            }
         }
-        record.expires_at = Instant::now() + self.ttl;
-        *id = random_token(32);
-        records.insert(id.clone(), record);
     }
 
-    fn with_record<T>(&self, operation: impl FnOnce(&SessionRecord) -> T) -> Option<T> {
-        let id = self.id();
-        let records = self
-            .records
+    fn rotate(&self, clear: bool) {
+        match &self.inner {
+            SessionInner::Local {
+                id,
+                records,
+                ttl,
+                destroyed,
+            } => {
+                if *destroyed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                {
+                    return;
+                }
+                let mut id = id.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut records = records
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let old_id = std::mem::take(&mut *id);
+                let mut record = records.remove(&old_id).unwrap_or_else(|| SessionRecord {
+                    values: HashMap::new(),
+                    expires_at: Instant::now() + *ttl,
+                });
+                if clear {
+                    record.values.clear();
+                }
+                record.expires_at = Instant::now() + *ttl;
+                *id = random_token(32);
+                records.insert(id.clone(), record);
+            }
+            SessionInner::Distributed(state) => {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.destroyed {
+                    return;
+                }
+                if clear {
+                    state.values.clear();
+                    state.dirty = true;
+                }
+                state.id = random_token(32);
+                state.rotated = state.version.is_some();
+            }
+        }
+    }
+
+    fn is_destroyed(&self) -> bool {
+        match &self.inner {
+            SessionInner::Local { destroyed, .. } => *destroyed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            SessionInner::Distributed(state) => {
+                state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .destroyed
+            }
+        }
+    }
+
+    fn distributed_commit(&self) -> Option<DistributedSessionCommit> {
+        let SessionInner::Distributed(state) = &self.inner else {
+            return None;
+        };
+        let state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(DistributedSessionCommit {
+            id: state.id.clone(),
+            original_id: state.original_id.clone(),
+            version: state.version,
+            values: state.values.clone(),
+            dirty: state.dirty,
+            rotated: state.rotated,
+            destroyed: state.destroyed,
+        })
+    }
+
+    fn replace_distributed_id(&self, id: String) {
+        if let SessionInner::Distributed(state) = &self.inner {
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .id = id;
+        }
+    }
+
+    fn with_local_record<T>(&self, operation: impl FnOnce(&SessionRecord) -> T) -> Option<T> {
+        let SessionInner::Local { id, records, .. } = &self.inner else {
+            return None;
+        };
+        let id = id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let records = records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         records.get(&id).map(operation)
     }
 
-    fn with_record_mut<T>(&self, operation: impl FnOnce(&mut SessionRecord) -> T) -> Option<T> {
-        let id = self.id();
-        let mut records = self
-            .records
+    fn with_local_record_mut<T>(
+        &self,
+        operation: impl FnOnce(&mut SessionRecord) -> T,
+    ) -> Option<T> {
+        let SessionInner::Local { id, records, .. } = &self.inner else {
+            return None;
+        };
+        let id = id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut records = records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         records.get_mut(&id).map(operation)
@@ -798,38 +1033,294 @@ impl SameSite {
     }
 }
 
+#[derive(Clone)]
+enum SessionStorage {
+    Local(SessionStore),
+    Distributed(Arc<dyn SessionBackend>),
+}
+
+impl std::fmt::Debug for SessionStorage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(store) => formatter.debug_tuple("Local").field(store).finish(),
+            Self::Distributed(_) => formatter.write_str("Distributed(<session backend>)"),
+        }
+    }
+}
+
 /// Loads and persists server-side sessions through a secure ID cookie.
+///
+/// [`SessionMiddleware::new`] preserves the single-process [`SessionStore`] path. Use
+/// [`SessionMiddleware::distributed`] with a shared atomic [`SessionBackend`] when multiple
+/// application instances must observe and update the same sessions.
 #[derive(Clone, Debug)]
 pub struct SessionMiddleware {
-    store: SessionStore,
+    storage: SessionStorage,
     config: Arc<SessionConfig>,
+    metrics: Option<Metrics>,
 }
 
 impl SessionMiddleware {
     #[must_use]
     pub fn new(store: SessionStore, config: SessionConfig) -> Self {
         Self {
-            store,
+            storage: SessionStorage::Local(store),
             config: Arc::new(config),
+            metrics: None,
         }
+    }
+
+    /// Use a shared backend with atomic compare-and-swap session mutations.
+    #[must_use]
+    pub fn distributed(backend: Arc<dyn SessionBackend>, config: SessionConfig) -> Self {
+        Self {
+            storage: SessionStorage::Distributed(backend),
+            config: Arc::new(config),
+            metrics: None,
+        }
+    }
+
+    /// Alias for [`SessionMiddleware::distributed`] following the other backend middleware APIs.
+    #[must_use]
+    pub fn with_backend(config: SessionConfig, backend: Arc<dyn SessionBackend>) -> Self {
+        Self::distributed(backend, config)
+    }
+
+    /// Record backend conflicts and failures without session IDs or other high-cardinality labels.
+    #[must_use]
+    pub fn metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
 impl Middleware for SessionMiddleware {
     fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
-        let store = self.store.clone();
+        let storage = self.storage.clone();
         let config = Arc::clone(&self.config);
+        let metrics = self.metrics.clone();
         Box::pin(async move {
-            let id = cookie_value(request.headers(), &config.cookie_name);
-            let (session, _created) = store.open(id.as_deref());
-            request.extensions_mut().insert(session.clone());
-            let mut response = next.run(request).await;
-            if let Ok(cookie) = HeaderValue::from_str(&session_cookie(&session, &config)) {
-                response.headers_mut().append(header::SET_COOKIE, cookie);
+            match storage {
+                SessionStorage::Local(store) => {
+                    let id = cookie_value(request.headers(), &config.cookie_name);
+                    let (session, _created) = store.open(id.as_deref());
+                    request.extensions_mut().insert(session.clone());
+                    let response = next.run(request).await;
+                    append_session_cookie(response, &session, &config)
+                }
+                SessionStorage::Distributed(backend) => {
+                    handle_distributed_session(request, next, backend, config, metrics).await
+                }
             }
-            response
         })
     }
+}
+
+const SESSION_ID_BYTES: usize = 32;
+const SESSION_ID_ATTEMPTS: usize = 4;
+
+async fn handle_distributed_session(
+    mut request: Request,
+    next: Next,
+    backend: Arc<dyn SessionBackend>,
+    config: Arc<SessionConfig>,
+    metrics: Option<Metrics>,
+) -> Response {
+    let supplied_id =
+        cookie_value(request.headers(), &config.cookie_name).filter(|id| valid_session_id(id));
+    let now = unix_timestamp();
+    let expires_at = now.saturating_add(config.max_age.as_secs());
+    let (id, snapshot) = if let Some(id) = supplied_id {
+        let Ok(snapshot) = backend.load(id.clone(), now, expires_at).await else {
+            record_session_store_error(metrics.as_ref());
+            return session_unavailable_response();
+        };
+        snapshot.map_or_else(
+            || (random_token(SESSION_ID_BYTES), None),
+            |snapshot| (id, Some(snapshot)),
+        )
+    } else {
+        (random_token(SESSION_ID_BYTES), None)
+    };
+
+    let session = Session::distributed(id, snapshot);
+    request.extensions_mut().insert(session.clone());
+    let response = next.run(request).await;
+    match commit_distributed_session(&backend, &session, config.max_age).await {
+        SessionCommitResult::Persisted => append_session_cookie(response, &session, &config),
+        SessionCommitResult::Conflict => {
+            if let Some(metrics) = metrics {
+                metrics.record_session_conflict();
+            }
+            Response::text("Session conflict").with_status(StatusCode::CONFLICT)
+        }
+        SessionCommitResult::StoreError => {
+            record_session_store_error(metrics.as_ref());
+            session_unavailable_response()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionCommitResult {
+    Persisted,
+    Conflict,
+    StoreError,
+}
+
+async fn commit_distributed_session(
+    backend: &Arc<dyn SessionBackend>,
+    session: &Session,
+    ttl: Duration,
+) -> SessionCommitResult {
+    let Some(commit) = session.distributed_commit() else {
+        return SessionCommitResult::StoreError;
+    };
+    if commit.destroyed {
+        return delete_distributed_session(backend, commit).await;
+    }
+
+    let expires_at = unix_timestamp().saturating_add(ttl.as_secs());
+    let Some(version) = commit.version else {
+        return create_distributed_session(backend, session, commit, expires_at).await;
+    };
+    let Some(original_id) = commit.original_id.clone() else {
+        return SessionCommitResult::StoreError;
+    };
+
+    if commit.rotated {
+        return rotate_distributed_session(
+            backend,
+            session,
+            original_id,
+            version,
+            commit,
+            expires_at,
+        )
+        .await;
+    }
+    if !commit.dirty {
+        return SessionCommitResult::Persisted;
+    }
+    classify_session_write(
+        backend
+            .save(commit.id, version, commit.values, expires_at)
+            .await,
+    )
+}
+
+async fn create_distributed_session(
+    backend: &Arc<dyn SessionBackend>,
+    session: &Session,
+    mut commit: DistributedSessionCommit,
+    expires_at: u64,
+) -> SessionCommitResult {
+    for _ in 0..SESSION_ID_ATTEMPTS {
+        match backend
+            .create(commit.id.clone(), commit.values.clone(), expires_at)
+            .await
+        {
+            Ok(SessionWrite::Saved { .. }) => return SessionCommitResult::Persisted,
+            Ok(SessionWrite::Collision) => {
+                commit.id = random_token(SESSION_ID_BYTES);
+                session.replace_distributed_id(commit.id.clone());
+            }
+            Ok(SessionWrite::Conflict | SessionWrite::Missing) => {
+                return SessionCommitResult::Conflict;
+            }
+            Err(_) => return SessionCommitResult::StoreError,
+        }
+    }
+    SessionCommitResult::StoreError
+}
+
+async fn rotate_distributed_session(
+    backend: &Arc<dyn SessionBackend>,
+    session: &Session,
+    original_id: String,
+    version: u64,
+    mut commit: DistributedSessionCommit,
+    expires_at: u64,
+) -> SessionCommitResult {
+    for _ in 0..SESSION_ID_ATTEMPTS {
+        match backend
+            .rotate(
+                original_id.clone(),
+                commit.id.clone(),
+                version,
+                commit.values.clone(),
+                expires_at,
+            )
+            .await
+        {
+            Ok(SessionWrite::Saved { .. }) => return SessionCommitResult::Persisted,
+            Ok(SessionWrite::Collision) => {
+                commit.id = random_token(SESSION_ID_BYTES);
+                session.replace_distributed_id(commit.id.clone());
+            }
+            Ok(SessionWrite::Conflict | SessionWrite::Missing) => {
+                return SessionCommitResult::Conflict;
+            }
+            Err(_) => return SessionCommitResult::StoreError,
+        }
+    }
+    SessionCommitResult::StoreError
+}
+
+async fn delete_distributed_session(
+    backend: &Arc<dyn SessionBackend>,
+    commit: DistributedSessionCommit,
+) -> SessionCommitResult {
+    let (Some(id), Some(version)) = (commit.original_id, commit.version) else {
+        return SessionCommitResult::Persisted;
+    };
+    classify_session_write(backend.delete(id, version).await)
+}
+
+fn classify_session_write(
+    result: Result<SessionWrite, SessionBackendError>,
+) -> SessionCommitResult {
+    match result {
+        Ok(SessionWrite::Saved { .. }) => SessionCommitResult::Persisted,
+        Ok(SessionWrite::Conflict | SessionWrite::Missing) => SessionCommitResult::Conflict,
+        Ok(SessionWrite::Collision) => SessionCommitResult::StoreError,
+        Err(error) => {
+            drop(error);
+            SessionCommitResult::StoreError
+        }
+    }
+}
+
+fn record_session_store_error(metrics: Option<&Metrics>) {
+    if let Some(metrics) = metrics {
+        metrics.record_session_store_error();
+    }
+}
+
+fn session_unavailable_response() -> Response {
+    Response::text("Session unavailable").with_status(StatusCode::SERVICE_UNAVAILABLE)
+}
+
+fn valid_session_id(id: &str) -> bool {
+    id.len() == SESSION_ID_BYTES * 2 && id.as_bytes().iter().all(u8::is_ascii_hexdigit)
+}
+
+fn append_session_cookie(
+    mut response: Response,
+    session: &Session,
+    config: &SessionConfig,
+) -> Response {
+    let cookie = if session.is_destroyed() {
+        expired_session_cookie(config)
+    } else {
+        session_cookie(session, config)
+    };
+    let Ok(cookie) = HeaderValue::from_str(&cookie) else {
+        return Response::text("Session cookie configuration is invalid")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    response.headers_mut().append(header::SET_COOKIE, cookie);
+    response
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -849,6 +1340,26 @@ fn session_cookie(session: &Session, config: &SessionConfig) -> String {
         session.id(),
         config.path,
         config.max_age.as_secs(),
+        config.same_site.as_str()
+    );
+    if let Some(domain) = &config.domain {
+        cookie.push_str("; Domain=");
+        cookie.push_str(domain);
+    }
+    if config.secure || config.same_site == SameSite::None {
+        cookie.push_str("; Secure");
+    }
+    if config.http_only {
+        cookie.push_str("; HttpOnly");
+    }
+    cookie
+}
+
+fn expired_session_cookie(config: &SessionConfig) -> String {
+    let mut cookie = format!(
+        "{}=; Path={}; Max-Age=0; SameSite={}",
+        config.cookie_name,
+        config.path,
         config.same_site.as_str()
     );
     if let Some(domain) = &config.domain {
@@ -1119,6 +1630,367 @@ mod tests {
         );
     }
 
+    fn request_with_cookie(method: Method, path: &str, cookie: &str) -> Request {
+        let mut request = request(method, path);
+        request.headers_mut().insert(
+            header::COOKIE,
+            HeaderValue::from_str(cookie.split(';').next().unwrap()).unwrap(),
+        );
+        request
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn two_session_routers_share_create_save_rotate_and_delete() {
+        let memory = MemorySessionBackend::new();
+        let backend: Arc<dyn SessionBackend> = Arc::new(memory.clone());
+        let config = SessionConfig {
+            secure: false,
+            max_age: Duration::from_hours(1),
+            ..SessionConfig::default()
+        };
+        let build = || {
+            Routes::new()
+                .get("/write/{name}", |request: Request| async move {
+                    let name = request.param("name").unwrap().to_owned();
+                    request
+                        .extensions()
+                        .get::<Session>()
+                        .unwrap()
+                        .put("user", name);
+                    "written"
+                })
+                .get("/read", |request: Request| async move {
+                    request
+                        .extensions()
+                        .get::<Session>()
+                        .unwrap()
+                        .get("user")
+                        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                        .unwrap_or_else(|| "missing".to_owned())
+                })
+                .get("/rotate", |request: Request| async move {
+                    request.extensions().get::<Session>().unwrap().regenerate();
+                    "rotated"
+                })
+                .get("/destroy", |request: Request| async move {
+                    request.extensions().get::<Session>().unwrap().destroy();
+                    "destroyed"
+                })
+                .with_middleware(SessionMiddleware::distributed(
+                    Arc::clone(&backend),
+                    config.clone(),
+                ))
+                .build()
+                .unwrap()
+        };
+        let first = build();
+        let second = build();
+
+        let attacker_id = "a".repeat(SESSION_ID_BYTES * 2);
+        let unknown = handle(
+            &first,
+            request_with_cookie(
+                Method::GET,
+                "/read",
+                &format!("phoenix_session={attacker_id}"),
+            ),
+        )
+        .await;
+        let unknown_cookie = unknown.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(!unknown_cookie.starts_with(&format!("phoenix_session={attacker_id};")));
+
+        let created = handle(&first, request(Method::GET, "/write/Ada")).await;
+        assert_eq!(created.status(), StatusCode::OK);
+        let first_cookie = created.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let created_id = first_cookie
+            .split(';')
+            .next()
+            .unwrap()
+            .split_once('=')
+            .unwrap()
+            .1
+            .to_owned();
+        let now = unix_timestamp();
+        let snapshot = memory.load(created_id, now, 0).await.unwrap().unwrap();
+        assert!(snapshot.expires_at > now);
+        assert!(snapshot.expires_at <= now.saturating_add(config.max_age.as_secs()));
+        assert_eq!(
+            handle(
+                &second,
+                request_with_cookie(Method::GET, "/read", &first_cookie)
+            )
+            .await
+            .body(),
+            "Ada"
+        );
+
+        let saved = handle(
+            &second,
+            request_with_cookie(Method::GET, "/write/Grace", &first_cookie),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(
+            handle(
+                &first,
+                request_with_cookie(Method::GET, "/read", &first_cookie)
+            )
+            .await
+            .body(),
+            "Grace"
+        );
+
+        let rotated = handle(
+            &first,
+            request_with_cookie(Method::GET, "/rotate", &first_cookie),
+        )
+        .await;
+        assert_eq!(rotated.status(), StatusCode::OK);
+        let rotated_cookie = rotated.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(
+            first_cookie.split(';').next(),
+            rotated_cookie.split(';').next()
+        );
+        assert_eq!(
+            handle(
+                &second,
+                request_with_cookie(Method::GET, "/read", &rotated_cookie)
+            )
+            .await
+            .body(),
+            "Grace"
+        );
+        assert_eq!(
+            handle(
+                &second,
+                request_with_cookie(Method::GET, "/read", &first_cookie)
+            )
+            .await
+            .body(),
+            "missing"
+        );
+
+        let destroyed = handle(
+            &second,
+            request_with_cookie(Method::GET, "/destroy", &rotated_cookie),
+        )
+        .await;
+        assert_eq!(destroyed.status(), StatusCode::OK);
+        assert!(
+            destroyed.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        let destroyed_id = rotated_cookie
+            .split(';')
+            .next()
+            .unwrap()
+            .split_once('=')
+            .unwrap()
+            .1
+            .to_owned();
+        assert!(
+            memory
+                .load(
+                    destroyed_id,
+                    unix_timestamp(),
+                    unix_timestamp().saturating_add(3_600),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_session_writes_fail_closed_without_a_cookie() {
+        let backend: Arc<dyn SessionBackend> = Arc::new(MemorySessionBackend::new());
+        let metrics = Metrics::new();
+        let config = SessionConfig {
+            secure: false,
+            ..SessionConfig::default()
+        };
+        let bootstrap = Routes::new()
+            .get("/", |request: Request| async move {
+                request
+                    .extensions()
+                    .get::<Session>()
+                    .unwrap()
+                    .put("value", "initial");
+                "created"
+            })
+            .with_middleware(
+                SessionMiddleware::distributed(Arc::clone(&backend), config.clone())
+                    .metrics(metrics.clone()),
+            )
+            .build()
+            .unwrap();
+        let created = handle(&bootstrap, request(Method::GET, "/")).await;
+        let cookie = created.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let build = || {
+            let barrier = Arc::clone(&barrier);
+            Routes::new()
+                .get("/", move |request: Request| {
+                    let barrier = Arc::clone(&barrier);
+                    async move {
+                        request
+                            .extensions()
+                            .get::<Session>()
+                            .unwrap()
+                            .put("value", random_token(4));
+                        barrier.wait().await;
+                        "updated"
+                    }
+                })
+                .with_middleware(
+                    SessionMiddleware::distributed(Arc::clone(&backend), config.clone())
+                        .metrics(metrics.clone()),
+                )
+                .build()
+                .unwrap()
+        };
+        let first = build();
+        let second = build();
+        let first_request = request_with_cookie(Method::GET, "/", &cookie);
+        let second_request = request_with_cookie(Method::GET, "/", &cookie);
+        let (left, right) = tokio::join!(
+            handle(&first, first_request),
+            handle(&second, second_request)
+        );
+        let responses = [left, right];
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| response.status() == StatusCode::OK)
+                .count(),
+            1
+        );
+        let conflict = responses
+            .iter()
+            .find(|response| response.status() == StatusCode::CONFLICT)
+            .unwrap();
+        assert!(!conflict.headers().contains_key(header::SET_COOKIE));
+        assert!(
+            metrics
+                .render()
+                .contains("phoenix_session_conflicts_total 1\n")
+        );
+    }
+
+    #[derive(Debug)]
+    struct FailingSessionBackend;
+
+    impl FailingSessionBackend {
+        fn failed<T>() -> BoxFuture<Result<T, SessionBackendError>> {
+            Box::pin(async { Err(SessionBackendError("unavailable".to_owned())) })
+        }
+    }
+
+    impl SessionBackend for FailingSessionBackend {
+        fn load(
+            &self,
+            _id: String,
+            _now: u64,
+            _refresh_expires_at: u64,
+        ) -> BoxFuture<Result<Option<SessionSnapshot>, SessionBackendError>> {
+            Self::failed()
+        }
+
+        fn create(
+            &self,
+            _id: String,
+            _values: HashMap<String, Value>,
+            _expires_at: u64,
+        ) -> BoxFuture<Result<SessionWrite, SessionBackendError>> {
+            Self::failed()
+        }
+
+        fn save(
+            &self,
+            _id: String,
+            _expected_version: u64,
+            _values: HashMap<String, Value>,
+            _expires_at: u64,
+        ) -> BoxFuture<Result<SessionWrite, SessionBackendError>> {
+            Self::failed()
+        }
+
+        fn rotate(
+            &self,
+            _old_id: String,
+            _new_id: String,
+            _expected_version: u64,
+            _values: HashMap<String, Value>,
+            _expires_at: u64,
+        ) -> BoxFuture<Result<SessionWrite, SessionBackendError>> {
+            Self::failed()
+        }
+
+        fn delete(
+            &self,
+            _id: String,
+            _expected_version: u64,
+        ) -> BoxFuture<Result<SessionWrite, SessionBackendError>> {
+            Self::failed()
+        }
+    }
+
+    #[tokio::test]
+    async fn session_backend_errors_fail_closed_before_cookie_commit() {
+        let backend: Arc<dyn SessionBackend> = Arc::new(FailingSessionBackend);
+        let metrics = Metrics::new();
+        let router = Routes::new()
+            .get("/", |request: Request| async move {
+                request
+                    .extensions()
+                    .get::<Session>()
+                    .unwrap()
+                    .put("user", "Ada");
+                "handler response"
+            })
+            .with_middleware(
+                SessionMiddleware::distributed(backend, SessionConfig::default())
+                    .metrics(metrics.clone()),
+            )
+            .build()
+            .unwrap();
+
+        let create_failed = handle(&router, request(Method::GET, "/")).await;
+        assert_eq!(create_failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(create_failed.body(), "Session unavailable");
+        assert!(!create_failed.headers().contains_key(header::SET_COOKIE));
+
+        let load_failed = handle(
+            &router,
+            request_with_cookie(
+                Method::GET,
+                "/",
+                &format!("phoenix_session={}", "a".repeat(64)),
+            ),
+        )
+        .await;
+        assert_eq!(load_failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!load_failed.headers().contains_key(header::SET_COOKIE));
+        assert!(
+            metrics
+                .render()
+                .contains("phoenix_session_store_errors_total 2\n")
+        );
+    }
+
     #[tokio::test]
     async fn trusts_forwarding_chain_only_from_configured_peer() {
         let proxy: IpAddr = "10.0.0.2".parse().unwrap();
@@ -1362,6 +2234,9 @@ mod tests {
         let store = SessionStore::memory(Duration::from_hours(1));
         let (session, _) = store.open(None);
         session.put("user", "Ada");
+        let debug = format!("{session:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("Ada"));
         let original_id = session.id();
         session.regenerate();
         assert_ne!(session.id(), original_id);
@@ -1369,6 +2244,12 @@ mod tests {
         let regenerated_id = session.id();
         session.invalidate();
         assert_ne!(session.id(), regenerated_id);
+        assert_eq!(session.get("user"), None);
+        let destroyed_id = session.id();
+        session.destroy();
+        session.regenerate();
+        session.put("user", "ignored");
+        assert_eq!(session.id(), destroyed_id);
         assert_eq!(session.get("user"), None);
         let config = SessionConfig {
             secure: false,

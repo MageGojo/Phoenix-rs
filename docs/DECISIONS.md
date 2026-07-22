@@ -134,7 +134,7 @@
 - 状态：已接受
 - 决定：默认 Session Cookie 只携带高熵随机 ID，业务值保存在 `SessionStore`；登录或权限变化使用 `regenerate()`，注销使用 `invalidate()`。转发 IP 只有在 Hyper 写入的直连 TCP peer 被显式信任时才解析。
 - 原因：服务端 Session 便于撤销和敏感数据隔离；从不可伪造的连接元数据开始逐 hop 验证，避免直接相信客户端提供的 XFF。
-- 边界：内置 store 是单进程内存实现，适合开发和单实例服务。多实例部署必须接入共享持久化 store；TLS 终止与可信 scheme 仍由部署层和后续中间件负责。
+- 边界：`SessionMiddleware::new(SessionStore, ...)` 保留单进程兼容路径；多实例部署使用 `SessionMiddleware::distributed` 注入原子共享 backend。内置 memory backend 是 contract reference，不跨进程；TLS 终止与可信 scheme 仍由部署层负责。
 
 ## ADR-025：约定路由在编译期发现，开发进程按组回收
 
@@ -240,3 +240,4 @@
 - 决定：共享 Session backend 对 create/save/rotate/delete 返回明确 collision/conflict/missing 结果；业务写入携带读取版本，登录/权限变化把旧 ID 到新 ID 的迁移作为单个原子操作。只读 load 可延长 TTL 而不提升版本。
 - 原因：最后写入者覆盖会在并行请求中静默丢失 Session/CSRF/权限状态；分步删除旧 ID、创建新 ID 会产生 fixation 或双 ID 窗口。
 - 边界：memory backend 是 contract reference，不跨进程。HTTP middleware 遇到冲突或 backend 故障必须失败关闭且不得发送未持久化的新 Cookie；业务外部副作用仍需应用自行保证幂等或事务一致性。
+- 验证结果：middleware 已把请求级快照接入异步 load/create/CAS save/CAS rotate/CAS delete；冲突映射为 409、存储故障映射为 503，并仅在持久化成功后提交 Cookie。共享 memory backend 的双 Router 测试覆盖跨实例读写、旧 ID 失效、删除、并行写冲突和指标。

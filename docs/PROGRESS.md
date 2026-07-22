@@ -252,4 +252,6 @@
 - 新增版本化 `SessionBackend`，原子定义 load/create/CAS save/CAS rotate/CAS delete、ID collision、missing、conflict 与绝对 TTL 语义。
 - `load` 可在不提升版本的前提下延长滑动 TTL，避免并行只读请求相互制造写冲突；业务修改必须携带读取版本。
 - `MemorySessionBackend` 作为共享参考实现；双 handle 测试固定 stale write 冲突、旧 ID 原子失效、删除和过期清理。
-- 下一检查点把 Cookie `SessionMiddleware` 的本地记录实现切换到该 contract，并固定冲突 HTTP 语义和指标。
+- `SessionMiddleware::distributed` 已把 Cookie 生命周期接入异步 load/create/CAS save/CAS rotate/CAS delete；旧 `SessionMiddleware::new(SessionStore, ...)` 保持兼容。
+- handler 只修改请求级快照，冲突返回 409、backend 故障返回 503；持久化失败或冲突不会发送 `Set-Cookie`，成功 load/commit 后才刷新 Cookie。
+- 双 Router 测试覆盖跨实例 create/load/save、原子 ID 轮换、终结式 destroy、并行写冲突、滑动 TTL 以及无 ID 的 conflict/store-error 指标。

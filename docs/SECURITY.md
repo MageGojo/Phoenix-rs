@@ -119,6 +119,24 @@ let session_config = SessionConfig {
 
 生产环境必须保留 `secure: true`。`SameSite=None` 会强制附加 `Secure`，跨站 Cookie 同时需要精确 CORS allowlist 和 `allow_credentials: true`，不能使用通配 Origin。
 
+多实例应用使用共享 `SessionBackend`，而不是为每个进程创建独立 `SessionStore`：
+
+```rust
+use std::sync::Arc;
+
+use phoenix::prelude::*;
+
+// MemorySessionBackend 只用于本地契约测试；生产环境应注入 Redis、数据库或其他
+// 能原子实现 SessionBackend CAS contract 的共享适配器。
+let backend: Arc<dyn SessionBackend> = Arc::new(MemorySessionBackend::new());
+let sessions = SessionMiddleware::distributed(
+    backend,
+    SessionConfig::default(),
+);
+```
+
+中间件先异步 `load`，业务 handler 只修改请求级 Session 快照；handler 返回后再执行原子 `create`、CAS `save`、CAS `rotate` 或 CAS `delete`。`regenerate()` 保留值并原子轮换 ID，`invalidate()` 清空值并原子轮换 ID，`destroy()` 删除记录并过期 Cookie。冲突返回通用 409，backend 故障返回通用 503；两者都不会发送未持久化的 `Set-Cookie`。默认 `SessionConfig.max_age` 同时控制共享记录的滑动 TTL 和 Cookie `Max-Age`。可通过 `.metrics(metrics)` 记录不含 Session ID 的冲突/故障计数。
+
 ### 在控制器中使用 Session 和 request ID
 
 ```rust
@@ -235,7 +253,7 @@ let plaintext = encryptor.open(&sealed, b"APP_A|users|7|email")?;
 
 ## 3.3 尚未实现的安全能力
 
-- 分布式 `TokenStore`/`SessionStore` 生产适配器，以及多密钥 Cookie session；限流已有原子共享 backend contract，但内置 backend 仍只面向单进程/契约测试。
+- 分布式 `TokenStore`/`SessionBackend` 生产适配器，以及多密钥 Cookie session；Session 与限流已有原子共享 backend contract 和双实例测试，但内置 memory backend 仍只面向单进程/契约测试。
 - CSP nonce 与 Vite 开发模式的自动策略切换；当前 CSP/HSTS 由应用按环境显式配置。
 - Multipart 已在全局 body 上限内解析为内存字段；上传存储、文件名净化、静态文件路径与下载响应尚未实现。
 - 依赖漏洞/许可证 CI 与正式发布前的独立安全评审。

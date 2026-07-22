@@ -7,11 +7,22 @@ use phoenix_http::BoxFuture;
 use serde_json::Value;
 
 /// Versioned server-side session state returned by a shared backend.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct SessionSnapshot {
     pub values: HashMap<String, Value>,
     pub version: u64,
     pub expires_at: u64,
+}
+
+impl std::fmt::Debug for SessionSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionSnapshot")
+            .field("values", &"[REDACTED]")
+            .field("version", &self.version)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Result of an atomic session mutation.
@@ -78,9 +89,17 @@ pub trait SessionBackend: Send + Sync + 'static {
 }
 
 /// Shared in-memory reference backend used by local applications and contract tests.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct MemorySessionBackend {
     records: Arc<Mutex<HashMap<String, SessionSnapshot>>>,
+}
+
+impl std::fmt::Debug for MemorySessionBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MemorySessionBackend")
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemorySessionBackend {

@@ -76,6 +76,7 @@ const member = await members.store({ name });
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - 开发文本/生产 JSON 两种结构化日志格式、`PHOENIX_LOG` 过滤和脱敏访问日志。
 - Prometheus exporter：HTTP 延迟/状态、TCP 连接、TLS、renderer、数据库、队列及安全状态指标，标签集合固定且不包含用户输入。
+- 版本化共享 Session backend：异步 load/create/save/rotate/delete、CAS 冲突、滑动 TTL、默认失败关闭、成功后 Cookie 提交和双实例共享测试。
 - HS256 JWT、refresh rotation、reuse detection、access/family 撤销和持久化 token store，以及 AES-256-GCM 应用数据加密与 Argon2id 密码哈希。
 - 默认拒绝的 RBAC/ABAC：角色继承、直接 allow/deny、资源属性 policy、决策审计、JWT principal 映射和 401/403 权限中间件。
 - 单进程多应用：官网、用户前台、管理后台可按 Host/路径独立挂载，拥有路由命名空间与强类型 State。
@@ -83,7 +84,7 @@ const member = await members.store({ name });
 - Laravel 风格 `px new` 与控制器、模型、迁移、Request、Resource、中间件、页面和 Island 生成器。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供 TLS/HTTPS/ALPN、服务端 Session、JWT token 生命周期、RBAC/ABAC、自动 action CSRF、精确 CORS、可信代理、Host allowlist、限流、安全头、request ID、日志脱敏以及安全重定向/下载响应。分布式 Session/限流、指标 exporter、CSP nonce、实时协议和独立安全评审仍是生产发布前置条件。
+React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供 TLS/HTTPS/ALPN、服务端 Session、JWT token 生命周期、RBAC/ABAC、自动 action CSRF、精确 CORS、可信代理、Host allowlist、分布式 Session/限流 contract、指标 exporter、安全头、request ID、日志脱敏以及安全重定向/下载响应。CSP nonce、实时协议、生产共享存储适配器和独立安全评审仍是生产发布前置条件。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
