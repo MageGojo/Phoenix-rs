@@ -242,6 +242,13 @@ mod tests {
                 .unwrap(),
             SessionWrite::Saved { version: 1 }
         );
+        assert_eq!(
+            second
+                .create("old".to_owned(), HashMap::new(), 200)
+                .await
+                .unwrap(),
+            SessionWrite::Collision
+        );
         let left = first
             .load("old".to_owned(), 100, 250)
             .await
@@ -283,6 +290,10 @@ mod tests {
         assert_eq!(
             first.delete("new".to_owned(), 3).await.unwrap(),
             SessionWrite::Saved { version: 4 }
+        );
+        assert_eq!(
+            second.delete("new".to_owned(), 3).await.unwrap(),
+            SessionWrite::Missing
         );
         first
             .create("expired".to_owned(), HashMap::new(), 10)
