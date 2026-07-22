@@ -59,14 +59,21 @@ describe("blog React case", () => {
     const html = renderPage(
       {
         ...envelope,
-        render_mode: "ssr",
+        render_mode: "islands",
         page: "members/index",
         props: { members, generatedBy: "Rust", total: 100 },
+        islands: [{
+          id: "member-directory",
+          component: "member-directory",
+          props: { initialMembers: members, initialTotal: 100 },
+        }],
       },
       { "members/index": MembersIndex },
     ).html;
 
     expect(html).toContain("团队成员目录");
+    expect(html).toContain('data-phoenix-island="member-directory"');
+    expect(html).toContain("动态添加成员");
     expect(html.match(/@example\.test/g)).toHaveLength(10);
     expect(html).toContain("member001@example.test");
     expect(html).not.toContain("member011@example.test");

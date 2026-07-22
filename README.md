@@ -82,7 +82,7 @@ npm run dev -w phoenix-blog-react-example
 cargo run -p phoenix-blog-example
 ```
 
-`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条假数据由 Rust 生成；常驻 Node renderer 输出首屏 HTML，浏览器中的 React hydration 接管搜索、筛选、排序和分页。
+`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条假数据由 Rust 生成；常驻 Node renderer 输出完整首屏 HTML，浏览器只加载成员目录 island，接管动态添加、搜索、筛选、排序和分页。
 
 运行完整检查：
 

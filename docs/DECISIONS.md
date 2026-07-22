@@ -91,7 +91,7 @@
 - 状态：部分验证
 - 决定：使用长期运行的 Node.js renderer，通过内部版本化协议与 Rust 服务通信；不按请求启动进程。第一版固定一个 worker，以共享 deadline 实现容量等待和快速背压，进程退出时重启并重试一次。
 - 原因：React 官方服务端能力首先存在于 JavaScript 运行时，持久进程能控制延迟和资源成本。
-- 已验证：完整 SSR HTML、超时、单 worker 背压、崩溃恢复、版本握手和 hydration 数据安全编码。
+- 已验证：完整 SSR HTML、成员目录 Islands HTML 与逐岛 hydration、超时、单 worker 背压、崩溃恢复、版本握手和 hydration 数据安全编码。
 - 剩余验证：多 worker、streaming、Head、CSP nonce、hydration 诊断和部署观测。
 
 ## ADR-014：首个路由器使用 matchit 作为内部路径树

@@ -91,16 +91,26 @@ impl ReactController {
     }
 
     pub async fn members(request: Request, renderer: NodeRenderer) -> Response {
+        let members = fake_members();
+        let island_props = json!({
+            "initialMembers": &members,
+            "initialTotal": 100
+        });
         let page = Page::new(
             "members/index",
             json!({
-                "members": fake_members(),
+                "members": members,
                 "generatedBy": "Rust",
                 "total": 100
             }),
         )
-        .ssr()
-        .script_src(frontend_entry());
+        .islands()
+        .island(Island::new(
+            "member-directory",
+            "member-directory",
+            island_props,
+        ))
+        .script_src(members_islands_entry());
         render_server_page(page, &request, &renderer).await
     }
 }
@@ -127,6 +137,15 @@ fn frontend_entry() -> String {
     let vite_url =
         std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
     format!("{}/views/entry.tsx", vite_url.trim_end_matches('/'))
+}
+
+fn members_islands_entry() -> String {
+    let vite_url =
+        std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+    format!(
+        "{}/views/members-islands-entry.tsx",
+        vite_url.trim_end_matches('/')
+    )
 }
 
 fn fake_members() -> Vec<serde_json::Value> {

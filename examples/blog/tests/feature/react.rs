@@ -62,14 +62,24 @@ async fn member_directory_receives_one_hundred_unique_rust_records() {
         .collect::<std::collections::HashSet<_>>();
 
     assert_eq!(envelope.page, "members/index");
-    assert_eq!(envelope.render_mode, phoenix::prelude::RenderMode::Ssr);
+    assert_eq!(envelope.render_mode, phoenix::prelude::RenderMode::Islands);
+    assert_eq!(envelope.islands.len(), 1);
+    assert_eq!(envelope.islands[0].id, "member-directory");
+    assert_eq!(envelope.islands[0].component, "member-directory");
+    assert_eq!(
+        envelope.islands[0].props["initialMembers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        100
+    );
     assert_eq!(members.len(), 100);
     assert_eq!(names.len(), 100);
     assert_eq!(envelope.props["generatedBy"], "Rust");
 }
 
 #[tokio::test]
-async fn member_directory_ssr_contains_dynamic_business_html() {
+async fn member_directory_islands_contains_server_html_and_hydration_root() {
     let application = test_application();
     let response = application
         .handle(Request::new(Method::GET, Uri::from_static("/members")))
@@ -79,10 +89,13 @@ async fn member_directory_ssr_contains_dynamic_business_html() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get("x-phoenix-render-mode"),
-        Some(&HeaderValue::from_static("ssr"))
+        Some(&HeaderValue::from_static("islands"))
     );
     assert!(html.contains("团队成员目录"));
     assert!(html.contains("member001@example.test"));
+    assert!(html.contains("data-phoenix-island=\"member-directory\""));
+    assert!(html.contains("动态添加成员"));
+    assert!(html.contains("views/members-islands-entry.tsx"));
     assert!(html.contains("id=\"phoenix-page\""));
 }
 

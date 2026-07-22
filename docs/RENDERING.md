@@ -139,7 +139,7 @@ Vite 至少生成：
 
 ## 9. 分阶段交付
 
-1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器、持久单 worker renderer、超时和崩溃恢复。
+1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器、持久单 worker renderer、超时、崩溃恢复，以及成员目录逐岛 hydration 验证。
 2. 下一步：Vite 页面发现、生产 manifest、多 worker renderer 池、Head 和结构化错误处理。
 3. 稳定前：独立 island 入口、bundle 预算、缓存、CSP nonce 和部署验证。
 4. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。

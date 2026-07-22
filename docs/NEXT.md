@@ -37,7 +37,7 @@ views/**/*.tsx
 
 1. 用 `phoenix-vite` 自动发现页面和 islands，生成浏览器入口、服务端 bundle 与版本化 manifest。
 2. 将现有单 worker renderer 扩展为可配置 worker 数量，增加健康状态、队列指标与优雅关闭。
-3. 让 Islands 也完全使用 renderer 结果，移除博客 Islands 控制器中的静态演示 HTML。
+3. 将文章 Islands 路由也接入 renderer 结果，移除其静态演示 HTML；成员目录已完成真实 renderer 验证。
 4. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并复用现有错误语义。
 5. 创建契约 spike，验证 Serde 映射、重名诊断、敏感字段和自动 TypeScript 生成。
 6. 创建 Toasty spike，验证模型定义、CRUD、关系、事务、分页与迁移 API。
@@ -45,7 +45,7 @@ views/**/*.tsx
 ## 下一切片验收标准
 
 - TSX 页面与 island 不需要手写注册表。
-- SSR 的 HTML 已来自持久 renderer；下一切片要求 Islands 也走相同路径，renderer 不可用时继续快速失败且不静默切换模式。
+- SSR 与成员目录 Islands 的 HTML 已来自持久 renderer；下一切片要求文章 Islands 也走相同路径，renderer 不可用时继续快速失败且不静默切换模式。
 - 浏览器 bundle 只包含当前模式需要的代码，Islands 只加载页面实际出现的岛。
 - 页面 manifest、资源版本和协议版本不一致时启动失败。
 - `cargo test`、严格 Clippy 和格式检查全部通过。
