@@ -1,6 +1,7 @@
 /target/
 **/node_modules/
 **/dist/
+examples/blog/public/ssr/
 **/.vite/
 **/views/generated/*
 !**/views/generated/.gitkeep

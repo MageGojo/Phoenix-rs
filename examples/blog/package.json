@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "build:ssr": "vite build --config vite.ssr.config.ts",
     "test": "vitest run views/rendering.test.tsx",
     "typecheck": "tsc --noEmit"
   },

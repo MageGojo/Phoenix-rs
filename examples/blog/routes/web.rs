@@ -1,4 +1,6 @@
-use phoenix::prelude::{RouteGroup, Routes, SecurityHeaders};
+use std::{path::PathBuf, time::Duration};
+
+use phoenix::prelude::{NodeRenderer, RendererConfig, RouteGroup, Routes, SecurityHeaders};
 
 use crate::{
     controllers::{
@@ -9,6 +11,14 @@ use crate::{
 
 #[must_use]
 pub fn routes() -> Routes {
+    routes_with_renderer(&ssr_renderer())
+}
+
+#[must_use]
+pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
+    let article_renderer = renderer.clone();
+    let member_renderer = renderer.clone();
+
     Routes::new()
         .with_middleware(SecurityHeaders)
         .with_middleware(PoweredByPhoenix)
@@ -22,9 +32,13 @@ pub fn routes() -> Routes {
         .name("react.islands")
         .get("/react/spa", ReactController::spa)
         .name("react.spa")
-        .get("/react/ssr", ReactController::ssr)
+        .get("/react/ssr", move |request| {
+            ReactController::ssr(request, article_renderer.clone())
+        })
         .name("react.ssr")
-        .get("/members", ReactController::members)
+        .get("/members", move |request| {
+            ReactController::members(request, member_renderer.clone())
+        })
         .name("members.index")
         .group(
             RouteGroup::new()
@@ -37,4 +51,12 @@ pub fn routes() -> Routes {
                     .name("dashboard")
             },
         )
+}
+
+fn ssr_renderer() -> NodeRenderer {
+    let entrypoint = std::env::var_os("PHOENIX_SSR_ENTRY").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public/ssr/renderer.js"),
+        PathBuf::from,
+    );
+    NodeRenderer::new(RendererConfig::node(entrypoint).with_timeout(Duration::from_secs(2)))
 }

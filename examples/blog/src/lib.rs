@@ -9,7 +9,7 @@ pub mod requests;
 #[path = "../routes/web.rs"]
 mod web_routes;
 
-use phoenix::prelude::{Application, RouteBuildError, Routes};
+use phoenix::prelude::{Application, NodeRenderer, RouteBuildError, Routes};
 
 #[must_use]
 pub fn routes() -> Routes {
@@ -22,7 +22,20 @@ pub fn routes() -> Routes {
 ///
 /// Returns a route build error when the example route table is invalid.
 pub fn application() -> Result<Application, RouteBuildError> {
-    Application::new(routes()).map(|application| {
+    configured_application(routes())
+}
+
+/// Build the example with an injected SSR renderer, primarily for isolated tests.
+///
+/// # Errors
+///
+/// Returns a route build error when the example route table is invalid.
+pub fn application_with_renderer(renderer: &NodeRenderer) -> Result<Application, RouteBuildError> {
+    configured_application(web_routes::routes_with_renderer(renderer))
+}
+
+fn configured_application(routes: Routes) -> Result<Application, RouteBuildError> {
+    Application::new(routes).map(|application| {
         application
             .max_body_size(64 * 1024)
             .header_read_timeout(Duration::from_secs(5))

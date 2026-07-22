@@ -88,10 +88,11 @@
 
 ## ADR-013：SSR 与 Islands 默认使用持久 JS renderer
 
-- 状态：待验证
-- 决定：优先验证长期运行的 Node.js renderer 池，通过内部版本化协议与 Rust 服务通信；不按请求启动进程。
+- 状态：部分验证
+- 决定：使用长期运行的 Node.js renderer，通过内部版本化协议与 Rust 服务通信；不按请求启动进程。第一版固定一个 worker，以共享 deadline 实现容量等待和快速背压，进程退出时重启并重试一次。
 - 原因：React 官方服务端能力首先存在于 JavaScript 运行时，持久进程能控制延迟和资源成本。
-- 验证条件：streaming、超时、崩溃恢复、背压、版本握手、CSP、hydration 一致性和部署观测全部通过。
+- 已验证：完整 SSR HTML、超时、单 worker 背压、崩溃恢复、版本握手和 hydration 数据安全编码。
+- 剩余验证：多 worker、streaming、Head、CSP nonce、hydration 诊断和部署观测。
 
 ## ADR-014：首个路由器使用 matchit 作为内部路径树
 

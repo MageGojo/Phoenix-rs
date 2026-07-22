@@ -49,7 +49,7 @@ export default function Show({ user }: UserShowProps) {
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、浏览器启动器、React 服务端 renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。Vite 自动发现/生产清单、持久 renderer 进程池、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
+React 页面协议、三种渲染模式、浏览器启动器、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；多 worker 池、Vite 自动发现/生产清单、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
@@ -77,11 +77,12 @@ curl http://127.0.0.1:3000/users/Ada
 React 案例需要同时启动 Vite：
 
 ```bash
+npm run build:ssr
 npm run dev -w phoenix-blog-react-example
 cargo run -p phoenix-blog-example
 ```
 
-成员目录位于 `http://127.0.0.1:3000/members`，100 条假数据由 Rust 生成，React 负责搜索、筛选、排序和分页。
+`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条假数据由 Rust 生成；常驻 Node renderer 输出首屏 HTML，浏览器中的 React hydration 接管搜索、筛选、排序和分页。
 
 运行完整检查：
 
@@ -90,6 +91,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 npm run build:react
+npm run build:ssr
 npm run typecheck:example
 npm run test:react
 ```

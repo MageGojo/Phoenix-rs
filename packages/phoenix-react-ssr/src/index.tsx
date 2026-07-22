@@ -8,6 +8,8 @@ export interface RenderResult {
   mode: PageEnvelope["render_mode"];
 }
 
+export const RENDERER_PROTOCOL = 1;
+
 export function renderPage(
   envelope: PageEnvelope,
   pages: ComponentRegistry,

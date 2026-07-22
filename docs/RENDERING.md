@@ -51,7 +51,9 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> renderer 池
 浏览器 -> hydrateRoot -> 后续 SPA 导航
 ```
 
-默认方案是一个长期运行、带健康检查和超时的 Node.js renderer 池，而不是每个请求启动 Node 进程。Phoenix 通过版本化内部协议传入页面名、props、URL、locale、资源版本和契约 hash。
+当前实现是一个长期运行的单 worker Node.js renderer，而不是每个请求启动 Node 进程。Phoenix 使用按行 JSON 的版本化内部协议传入完整 `PageEnvelope`、URL 和 locale；`asset_version` 与 `contract_hash` 随信封传递。子进程启动时完成协议握手，渲染中退出会自动重启并重试一次。
+
+单 worker 同时也是明确的第一版并发上限。请求等待渲染槽位和 Node 响应共用 2 秒 deadline，超过后返回 `503 Service Unavailable`，不会静默切换为 SPA。应用可以通过 `PHOENIX_SSR_ENTRY` 覆盖服务端 bundle 路径。
 
 SSR 必须定义：
 
@@ -137,8 +139,8 @@ Vite 至少生成：
 
 ## 9. 分阶段交付
 
-1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器和参考服务端 renderer。
-2. 下一步：Vite 页面发现、生产 manifest、持久 renderer 池、Head、错误与超时处理。
+1. 当前：统一 `PageEnvelope`、三种渲染语义、局部导航、React 启动器、持久单 worker renderer、超时和崩溃恢复。
+2. 下一步：Vite 页面发现、生产 manifest、多 worker renderer 池、Head 和结构化错误处理。
 3. 稳定前：独立 island 入口、bundle 预算、缓存、CSP nonce 和部署验证。
 4. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 

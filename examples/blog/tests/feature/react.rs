@@ -1,13 +1,13 @@
 use phoenix::{
     http::{HeaderValue, Method, Request, Uri},
-    prelude::{Aes256GcmCodec, Page, PageEnvelope, StatusCode},
+    prelude::{Aes256GcmCodec, NodeRenderer, Page, PageEnvelope, RendererConfig, StatusCode},
     view::EncryptedPayload,
 };
 use serde_json::json;
 
 #[tokio::test]
 async fn react_pages_default_to_islands_and_offer_spa_and_ssr() {
-    let application = phoenix_blog_example::application().expect("routes should build");
+    let application = test_application();
 
     for (path, expected_mode) in [
         ("/react", "islands"),
@@ -62,10 +62,37 @@ async fn member_directory_receives_one_hundred_unique_rust_records() {
         .collect::<std::collections::HashSet<_>>();
 
     assert_eq!(envelope.page, "members/index");
-    assert_eq!(envelope.render_mode, phoenix::prelude::RenderMode::Spa);
+    assert_eq!(envelope.render_mode, phoenix::prelude::RenderMode::Ssr);
     assert_eq!(members.len(), 100);
     assert_eq!(names.len(), 100);
     assert_eq!(envelope.props["generatedBy"], "Rust");
+}
+
+#[tokio::test]
+async fn member_directory_ssr_contains_dynamic_business_html() {
+    let application = test_application();
+    let response = application
+        .handle(Request::new(Method::GET, Uri::from_static("/members")))
+        .await;
+    let html = String::from_utf8_lossy(response.body());
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("x-phoenix-render-mode"),
+        Some(&HeaderValue::from_static("ssr"))
+    );
+    assert!(html.contains("团队成员目录"));
+    assert!(html.contains("member001@example.test"));
+    assert!(html.contains("id=\"phoenix-page\""));
+}
+
+fn test_application() -> phoenix::prelude::Application {
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/renderer.mjs");
+    phoenix_blog_example::application_with_renderer(&NodeRenderer::new(RendererConfig::node(
+        fixture,
+    )))
+    .expect("routes should build")
 }
 
 #[test]

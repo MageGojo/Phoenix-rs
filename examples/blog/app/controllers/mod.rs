@@ -2,7 +2,8 @@
 #![allow(clippy::unused_async)]
 
 use phoenix::prelude::{
-    IntoResponse, Island, Json, Page, RenderMode, Request, Response, StatusCode,
+    IntoResponse, Island, Json, NodeRenderer, Page, RenderContext, RenderMode, Request, Response,
+    StatusCode,
 };
 use serde_json::json;
 
@@ -85,15 +86,12 @@ impl ReactController {
             .into_response()
     }
 
-    pub async fn ssr(request: Request) -> Response {
-        article_page()
-            .mode(RenderMode::Ssr)
-            .respond_to(&request, None)
-            .into_response()
+    pub async fn ssr(request: Request, renderer: NodeRenderer) -> Response {
+        render_server_page(article_page().mode(RenderMode::Ssr), &request, &renderer).await
     }
 
-    pub async fn members(request: Request) -> Response {
-        Page::new(
+    pub async fn members(request: Request, renderer: NodeRenderer) -> Response {
+        let page = Page::new(
             "members/index",
             json!({
                 "members": fake_members(),
@@ -101,10 +99,27 @@ impl ReactController {
                 "total": 100
             }),
         )
-        .spa()
-        .script_src(frontend_entry())
-        .respond_to(&request, None)
-        .into_response()
+        .ssr()
+        .script_src(frontend_entry());
+        render_server_page(page, &request, &renderer).await
+    }
+}
+
+async fn render_server_page(page: Page, request: &Request, renderer: &NodeRenderer) -> Response {
+    if Page::is_page_request(request.headers()) {
+        return page.respond_to(request, None).into_response();
+    }
+
+    let context = RenderContext::new(request.uri().to_string()).locale("zh-CN");
+    match renderer.render(page.envelope(), &context).await {
+        Ok(result) => page
+            .trusted_server_html(result.html)
+            .respond_to(request, None)
+            .into_response(),
+        Err(error) => {
+            eprintln!("SSR renderer failed: {error}");
+            Response::text("SSR renderer unavailable").with_status(StatusCode::SERVICE_UNAVAILABLE)
+        }
     }
 }
 

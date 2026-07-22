@@ -9,6 +9,10 @@ use serde_json::{Map, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+mod renderer;
+
+pub use renderer::{NodeRenderer, RenderContext, RenderResult, RendererConfig, RendererError};
+
 const PAGE_MEDIA_TYPE: &str = "application/vnd.phoenix.page+json";
 const PAGE_REQUEST_HEADER: &str = "x-phoenix-page";
 const ENVELOPE_PURPOSE: &str = "page-navigation";
@@ -64,6 +68,25 @@ pub struct PageEnvelope {
     pub asset_version: Option<String>,
     pub request_id: Option<String>,
     pub islands: Vec<Island>,
+}
+
+#[cfg(test)]
+impl PageEnvelope {
+    fn new_for_test(props: Value) -> Self {
+        Self {
+            protocol: 1,
+            render_mode: RenderMode::Ssr,
+            page: "test/page".to_owned(),
+            props,
+            shared: Map::new(),
+            errors: Map::new(),
+            flash: Map::new(),
+            contract_hash: None,
+            asset_version: None,
+            request_id: None,
+            islands: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -16,7 +16,8 @@ pub mod prelude {
         min_length, required, rules, string,
     };
     pub use phoenix_view::{
-        Aes256GcmCodec, EncryptionError, Island, Page, PageEnvelope, PageResponseError,
-        PayloadCodec, RenderMode,
+        Aes256GcmCodec, EncryptionError, Island, NodeRenderer, Page, PageEnvelope,
+        PageResponseError, PayloadCodec, RenderContext, RenderMode, RenderResult, RendererConfig,
+        RendererError,
     };
 }
