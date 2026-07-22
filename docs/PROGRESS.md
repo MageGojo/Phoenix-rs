@@ -167,6 +167,14 @@
 - `docs/RENDERING.md` 增加 client/SSR 构建顺序、manifest、renderer 预热、流式页面、静态资源、健康指标与关闭流程。
 - `docs/DX.md` 和 `docs/BUSINESS_GUIDE.md` 记录自动路由、resource routes、中间件别名、模型绑定与 `phoenix dev` 的当前公开用法。
 
+## 2026-07-22：HTTP/2 与结构化日志基础
+
+- Hyper 与 hyper-util 启用 HTTP/2 server-auto；默认监听器按连接 preface 自动服务 HTTP/1.1 或 HTTP/2。
+- `HttpProtocol` 提供 `Auto`、`Http1Only` 和 `Http2Only` 三种策略，保留原有 `Application::new(routes)` 调用兼容性。
+- 真实 TCP 测试使用 Hyper HTTP/2 客户端完成握手和请求，并验证 HTTP/1-only 模式拒绝 HTTP/2；原 HTTP/1.1 chunked 流测试继续通过。
+- 新增 `phoenix-logging`，支持 compact 文本、逐行 JSON、`PHOENIX_LOG` 环境过滤、ANSI/target 配置和重复初始化错误。
+- TLS/ALPN 仍属于部署/TLS 适配层；当前 HTTP/2 验证是明文 prior-knowledge 连接，不虚假宣称已交付 HTTPS。
+
 ## 2026-07-22：应用状态、页面外围协议与安全响应
 
 - `StateMiddleware<T>` 与 `State<T>` 让数据库、配置和外部客户端以可克隆强类型依赖进入控制器；缺失状态返回不泄露内部类型的 500。

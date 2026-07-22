@@ -63,7 +63,7 @@ const member = await members.store({ name });
 
 当前已实现第一版底层垂直切片：
 
-- Hyper HTTP/1.1 服务启动、请求 body 限制、优雅关闭和测试用临时端口。
+- Hyper HTTP/1.1 + HTTP/2 自动识别、协议限制、请求 body 限制、优雅关闭和测试用临时端口。
 - Phoenix Request、Response、Handler、JSON 响应和异步控制器。
 - Query、Path、Header、JSON、Form、Multipart 与 `State<T>` extractor，以及验证后的强类型 DTO handler。
 - GET、POST、PUT、PATCH、DELETE、HEAD/OPTIONS、路径参数和 404/405。
@@ -74,6 +74,7 @@ const member = await members.store({ name });
 - Rust Input、Resource、Page Props 与 Shared Props 自动生成 TypeScript，并生成可直接调用的命名 action。
 - JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
+- 开发文本/生产 JSON 两种结构化日志格式、`PHOENIX_LOG` 过滤和脱敏访问日志。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
 React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供服务端 Session、自动 action CSRF、精确 CORS、可信代理、Host allowlist、限流、安全头、request ID、日志脱敏以及安全重定向/下载响应。TLS 终止、认证授权、分布式 Session、CSP nonce 和独立安全评审仍是生产发布前置条件。
@@ -130,6 +131,7 @@ npm run test:react
 
 ```text
 crates/phoenix-http/    请求、响应、Handler 与中间件
+crates/phoenix-logging/ tracing 文本/JSON 初始化与日志过滤
 crates/phoenix-routing/ 路由、分组和命名 URL
 crates/phoenix-core/    Hyper 服务与应用生命周期
 crates/phoenix-database/ Toasty、迁移与测试隔离

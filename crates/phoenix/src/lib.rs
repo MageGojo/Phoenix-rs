@@ -3,6 +3,7 @@ pub use phoenix_database as database;
 pub use phoenix_dx as dx;
 pub use phoenix_dx::mount_routes;
 pub use phoenix_http as http;
+pub use phoenix_logging as logging;
 pub use phoenix_macros::contract;
 pub use phoenix_routing as routing;
 pub use phoenix_security as security;
@@ -10,7 +11,7 @@ pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
 pub mod prelude {
-    pub use phoenix_core::{Application, Server, ServerError, ServerHandle};
+    pub use phoenix_core::{Application, HttpProtocol, Server, ServerError, ServerHandle};
     pub use phoenix_database::{Backend, Database, DatabaseBuilder, DatabaseError, TestDatabase};
     pub use phoenix_dx::{
         Bound, MiddlewareAliasError, MiddlewareAliases, ModelBinding, Resource, ResourceAction,
@@ -24,6 +25,7 @@ pub mod prelude {
         SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode, TypedHandler, Uri,
         middleware_fn, typed,
     };
+    pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_security::{
         AccessLog, ClientIp, Cors, CorsConfig, Csrf, HostAllowlist, RateLimit, RateLimitConfig,

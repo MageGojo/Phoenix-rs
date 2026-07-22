@@ -7,6 +7,7 @@ members = [
     "crates/phoenix-dx",
     "crates/phoenix-dx-macros",
     "crates/phoenix-http",
+    "crates/phoenix-logging",
     "crates/phoenix-macros",
     "crates/phoenix-routing",
     "crates/phoenix-security",
@@ -29,8 +30,8 @@ bytes = "1"
 futures-util = "0.3"
 http = "1"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper = { version = "1", features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["http1", "http2", "server", "server-auto", "tokio"] }
 matchit = "0.8"
 mime = "0.3"
 percent-encoding = "2"
@@ -41,6 +42,7 @@ serde_urlencoded = "0.7"
 sha2 = "0.11"
 thiserror = "2"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toasty = { version = "0.8", features = ["migration", "postgresql", "serde", "sqlite"] }
 

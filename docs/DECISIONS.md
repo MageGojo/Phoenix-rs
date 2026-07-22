@@ -169,6 +169,20 @@
 - 原因：过程宏不能安全地直接向业务源码目录写文件；Vite 已经负责页面和路由发现，把生成阶段集中在同一个可观察构建入口可以免除业务 build script。
 - 边界：已支持的 Rust/Serde 形态必须生成准确类型；尚未支持的数据 enum、tuple/generic struct、无法解析的嵌套类型和可能越过 JavaScript 安全范围的整数必须中止构建，不允许退化成静默 `any`。生产 client 与 renderer manifest 携带同一 contract hash，Rust worker 握手不一致时失败关闭。
 
+## ADR-026：内置监听器默认自动服务 HTTP/1.1 与 HTTP/2
+
+- 状态：已接受
+- 决定：使用 hyper-util `server::conn::auto` 在同一 TCP 监听器识别 HTTP/1.1 与 HTTP/2 preface；应用可显式限制为单一协议。
+- 原因：默认升级不破坏现有 HTTP/1.1 应用，同时让反向代理或受控内网客户端直接使用 HTTP/2。
+- 边界：明文自动识别不是 TLS/ALPN。HTTPS 证书、ALPN、cipher policy 与外部终止配置必须由独立 TLS/部署层完成。
+
+## ADR-027：日志初始化与 HTTP 访问事件保持分层
+
+- 状态：已接受
+- 决定：`phoenix-logging` 只安装和配置 tracing subscriber；`phoenix-security::AccessLog` 负责产生经过隐私约束的请求事件。
+- 原因：输出目的地/格式与业务事件是不同职责，分层后应用可以替换 collector 而不复制 HTTP 脱敏规则。
+- 边界：默认日志不得记录 query、Header 值、Cookie、Authorization、JWT 或业务 payload。需要额外字段时由应用显式添加并承担脱敏责任。
+
 ## ADR-026：应用状态与页面外围协议使用显式强类型 API
 
 - 状态：已接受

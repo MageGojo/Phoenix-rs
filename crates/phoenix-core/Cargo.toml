@@ -18,5 +18,8 @@ phoenix-routing = { path = "../phoenix-routing" }
 thiserror.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+hyper = { workspace = true, features = ["client"] }
+
 [lints]
 workspace = true

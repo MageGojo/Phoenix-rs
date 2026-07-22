@@ -55,7 +55,7 @@ Toasty + migrations
 
 1. TLS/认证授权接入文档与部署模板。
 2. 分布式 Session store、限流后端和指标 exporter。
-3. CSP nonce、HTTP/2、流中错误语义与 hydration 诊断。
+3. CSP nonce、流中错误语义与 hydration 诊断。
 4. PostgreSQL CI 服务与迁移并发压力测试。
 5. 技术预览前完成项目名称、公共 API 和安全评审。
 
@@ -67,6 +67,14 @@ Toasty + migrations
 - P0 是否只承诺 SQLite + PostgreSQL，把 MySQL 标为实验性。
 - 模型绑定是否在 P0 只提供显式 binder，还是为 Toasty 模型增加 derive 门面。
 - 工作名称 Phoenix 是否在技术预览前更换。
+
+## 当前增强路线
+
+1. （已完成）同端口 HTTP/1.1 + HTTP/2 自动识别、协议限制和结构化日志初始化。
+2. JWT 签发/校验、Bearer 提取、密钥轮换与成熟密码学门面。
+3. 兼容现有 `Application::new(routes)` 的多应用挂载、Host/路径分派与应用级状态。
+4. 在稳定运行时 API 上提供应用、路由组、控制器与中间件宏，保证展开结果可读。
+5. 把官网、前台、后台写入同一示例项目，并补齐端到端测试与迁移文档。
 
 ## Definition of Done
 

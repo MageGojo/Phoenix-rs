@@ -124,7 +124,14 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - 中间件核心先围绕 Phoenix 请求/响应实现。Tower 互操作可作为后续适配器，不作为 P0 架构前提。
 - 流式响应已通过框架 `ResponseBody::Stream` 接入 Hyper；升级、流式请求、SSE 和 WebSocket 仍需要受控逃生口。
 
-当前实现检查点只启用 Hyper HTTP/1.1，并已验证 chunked 流式响应。HTTP/2、升级连接和流式请求仍待实现，不能把规划能力当作已交付能力。
+当前实现检查点使用 Hyper/hyper-util 在同一明文 TCP 监听器自动识别 HTTP/1.1 与 HTTP/2 preface，并允许应用限制为 `Http1Only` 或 `Http2Only`。HTTP/1.1 chunked 流式响应与 HTTP/2 客户端握手/请求均有真实 TCP 测试。生产 TLS、ALPN、升级连接和流式请求仍待实现，不能把协议支持等同于完整 TLS 部署能力。
+
+### 结构化日志
+
+- `phoenix-logging` 负责安装进程级 tracing subscriber；开发默认 compact 文本，生产可以选择逐行 JSON。
+- `PHOENIX_LOG` 控制过滤规则，缺失时使用显式安全默认值 `info,hyper=warn`。
+- `phoenix-security::AccessLog` 继续负责 HTTP 请求事件，只记录无 query 的 path、状态、耗时、request ID 与可信客户端 IP，不记录 Header 值。
+- 应用必须在启动异步任务前初始化一次日志；重复初始化和非法 filter 都返回显式错误。
 
 当前服务默认限制 body 为 2 MiB、请求头读取为 10 秒、body 读取为 30 秒、优雅关闭等待为 10 秒。应用可以收紧这些值；博客案例分别使用 64 KiB、5 秒、10 秒和 5 秒。路由器在全局与业务处理器边界捕获 panic，只返回通用 500，避免单个业务请求终止服务任务或泄露 panic 内容。
 

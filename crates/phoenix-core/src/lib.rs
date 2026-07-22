@@ -10,7 +10,10 @@ use hyper::{
     body::{Frame, Incoming},
     service::service_fn,
 };
-use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo, TokioTimer},
+    server::conn::auto,
+};
 use phoenix_http::{Request, Response, ResponseBody};
 use phoenix_routing::{RouteBuildError, Router, Routes};
 use thiserror::Error;
@@ -25,6 +28,18 @@ const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// HTTP protocol versions accepted by the built-in TCP server.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum HttpProtocol {
+    /// Detect HTTP/1.1 or HTTP/2 from the connection preface.
+    #[default]
+    Auto,
+    /// Accept only HTTP/1.1 connections.
+    Http1Only,
+    /// Accept only HTTP/2 connections.
+    Http2Only,
+}
+
 #[derive(Clone)]
 pub struct Application {
     router: Router,
@@ -32,6 +47,7 @@ pub struct Application {
     header_read_timeout: Duration,
     body_read_timeout: Duration,
     graceful_shutdown_timeout: Duration,
+    http_protocol: HttpProtocol,
 }
 
 impl Application {
@@ -47,6 +63,7 @@ impl Application {
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+            http_protocol: HttpProtocol::Auto,
         })
     }
 
@@ -71,6 +88,13 @@ impl Application {
     #[must_use]
     pub fn graceful_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.graceful_shutdown_timeout = timeout;
+        self
+    }
+
+    /// Select which HTTP protocol versions the built-in TCP server accepts.
+    #[must_use]
+    pub const fn http_protocol(mut self, protocol: HttpProtocol) -> Self {
+        self.http_protocol = protocol;
         self
     }
 
@@ -226,15 +250,22 @@ async fn serve_connection(
 ) {
     let peer_addr = stream.peer_addr().ok();
     let header_read_timeout = application.header_read_timeout;
+    let http_protocol = application.http_protocol;
     let service = service_fn(move |request| {
         let application = Arc::clone(&application);
         async move { handle_hyper_request(application, request, peer_addr).await }
     });
     let io = TokioIo::new(stream);
-    let mut builder = hyper::server::conn::http1::Builder::new();
+    let mut builder = auto::Builder::new(TokioExecutor::new());
     builder
+        .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(header_read_timeout);
+    let builder = match http_protocol {
+        HttpProtocol::Auto => builder,
+        HttpProtocol::Http1Only => builder.http1_only(),
+        HttpProtocol::Http2Only => builder.http2_only(),
+    };
     let connection = builder.serve_connection(io, service);
     tokio::pin!(connection);
 
@@ -304,6 +335,8 @@ pub enum ServerError {
 mod tests {
     use super::*;
     use futures_util::stream;
+    use http_body_util::Empty;
+    use hyper::client::conn::http2;
     use std::future::{Ready, ready};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -336,6 +369,60 @@ mod tests {
         assert!(response.contains("first-"));
         assert!(response.contains("second"));
 
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_protocol_serves_http2_over_cleartext() {
+        let server =
+            Application::new(Routes::new().get("/version", |_request: Request| async { "h2" }))
+                .unwrap()
+                .spawn("127.0.0.1:0")
+                .await
+                .unwrap();
+        let stream = TcpStream::connect(server.local_addr()).await.unwrap();
+        let (mut sender, connection) =
+            http2::handshake::<_, _, Empty<Bytes>>(TokioExecutor::new(), TokioIo::new(stream))
+                .await
+                .unwrap();
+        let connection_task = tokio::spawn(connection);
+        let request = HyperRequest::builder()
+            .uri("http://localhost/version")
+            .body(Empty::new())
+            .unwrap();
+
+        let response = sender.send_request(request).await.unwrap();
+        assert_eq!(response.version(), http::Version::HTTP_2);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            "h2"
+        );
+
+        drop(sender);
+        server.shutdown().await.unwrap();
+        connection_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn protocol_can_be_restricted_to_http1() {
+        let server = Application::new(Routes::new().get("/", |_request: Request| async { "ok" }))
+            .unwrap()
+            .http_protocol(HttpProtocol::Http1Only)
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let stream = TcpStream::connect(server.local_addr()).await.unwrap();
+        let (mut sender, connection) =
+            http2::handshake::<_, _, Empty<Bytes>>(TokioExecutor::new(), TokioIo::new(stream))
+                .await
+                .unwrap();
+        let connection_task = tokio::spawn(connection);
+        let request = HyperRequest::builder()
+            .uri("http://localhost/")
+            .body(Empty::new())
+            .unwrap();
+        assert!(sender.send_request(request).await.is_err());
+        connection_task.await.unwrap().unwrap_err();
         server.shutdown().await.unwrap();
     }
 }

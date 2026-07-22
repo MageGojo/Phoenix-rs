@@ -11,6 +11,7 @@ phoenix-core = { path = "../phoenix-core" }
 phoenix-database = { path = "../phoenix-database" }
 phoenix-dx = { path = "../phoenix-dx" }
 phoenix-http = { path = "../phoenix-http" }
+phoenix-logging = { path = "../phoenix-logging" }
 phoenix-macros = { path = "../phoenix-macros" }
 phoenix-routing = { path = "../phoenix-routing" }
 phoenix-security = { path = "../phoenix-security" }
