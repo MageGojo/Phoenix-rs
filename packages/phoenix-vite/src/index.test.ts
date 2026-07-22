@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -59,6 +59,29 @@ describe("Phoenix Vite plugin", () => {
     expect(result.code).toContain("<__PhoenixIslandBoundary><MemberCreator initialTotal={100} /></__PhoenixIslandBoundary>");
     expect(result.code).not.toContain("client:load");
   });
+
+  it("generates an autocomplete-safe TypeScript tree from Rust route names", () => {
+    const root = fixture();
+    configuredPlugin(root);
+    const source = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
+
+    expect(source).toContain('"members": {');
+    expect(source).toContain('"store": "members.store"');
+    expect(source).toContain('"dashboard": "admin.dashboard"');
+    expect(source).toContain("export const members = routes[\"members\"];");
+    expect(source).toContain('export type PhoenixRouteName = "admin.dashboard" | "health" | "members.store";');
+    expect(source).not.toContain('"dashboard": "dashboard"');
+  });
+
+  it("rejects dynamic Rust route names that cannot produce TypeScript hints", () => {
+    const root = fixture();
+    writeFileSync(join(root, "routes/web.rs"), [
+      'let route_name = "members.store";',
+      'Routes::new().post("/members", handler).name(route_name)',
+    ].join("\n"));
+
+    expect(() => configuredPlugin(root)).toThrow("route names must be string literals");
+  });
 });
 
 function fixture(): string {
@@ -66,9 +89,19 @@ function fixture(): string {
   temporaryDirectories.push(root);
   mkdirSync(join(root, "views/pages/members"), { recursive: true });
   mkdirSync(join(root, "views/islands"), { recursive: true });
+  mkdirSync(join(root, "routes"), { recursive: true });
   writeFileSync(join(root, "views/pages/members/index.tsx"), "export default () => null;");
   writeFileSync(join(root, "views/islands/member-creator.tsx"), "export default () => null;");
   writeFileSync(join(root, "views/styles.css"), "body {}");
+  writeFileSync(join(root, "routes/web.rs"), [
+    "Routes::new()",
+    '  .get("/health", handler).name("health")',
+    '  .post("/members", handler).name("members.store")',
+    "  .group(",
+    '    RouteGroup::new().prefix("/admin").name("admin."),',
+    "    |routes| routes.get(\"/dashboard\", handler).name(\"dashboard\"),",
+    "  )",
+  ].join("\n"));
   return root;
 }
 

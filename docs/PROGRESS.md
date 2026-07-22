@@ -100,3 +100,11 @@
 - SSR renderer 自动收集实际 island 的组件名、稳定实例 ID 与 JSON props，Rust 通过 `Page::rendered` 合并结果；控制器不再手写 `.island(...)`。
 - SSR 模式移除局部 wrapper 并整页 hydration；Islands 模式只加载页面信封中实际出现的动态组件。
 - 成员案例拆成静态概览/表格 SSR 与 `member-creator` 表单 island，浏览器新增仍通过 Rust 命名 action 完成。
+
+## 2026-07-22：TypeScript 命名路由树
+
+- `phoenix-vite` 自动扫描标准 Rust 路由目录，把字面量 `.name("...")` 生成到只读 `views/generated/routes.ts`。
+- 点分路由名生成嵌套属性，静态 `RouteGroup` 名称前缀自动合并；动态名称、重复名称和 TypeScript 树冲突在生成阶段失败。
+- 成员 Island 从裸字符串升级为 `callRust<Member>(members.store, { name })`，获得编辑器补全和 Rust 路由重命名检查。
+- 生成常量只保存稳定名称，浏览器仍使用 Rust 注入的运行时路由表解析 URL；接口输入/输出自动推导明确留给强类型契约切片。
+- 生成器 5 个测试和博客 React 6 个测试通过；真实浏览器使用生成属性创建成员成功，控制台无错误，SSR 表格继续位于唯一 Island 之外。

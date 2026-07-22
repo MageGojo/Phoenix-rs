@@ -687,10 +687,31 @@ Routes::new()
 React 只传路由名和输入数据：
 
 ```tsx
-const member = await callRust<Member>("members.store", { name });
+import { callRust } from "@phoenix/react";
+import { members } from "../generated/routes.js";
+import type { Member } from "../types/member.js";
+
+const member = await callRust<Member>(members.store, { name });
 ```
 
-框架会把 Rust 命名路由表自动加入 `PageEnvelope.routes`，`callRust` 将 `members.store` 解析为当前后端路径并发送 JSON POST。它是标准化的 HTTP 传输层，不是在浏览器进程里直接执行 Rust；校验、ID 分配和返回数据仍由 Rust 控制器负责。
+Vite 启动或构建时扫描标准 `routes/**/*.rs`，把字面量 `.name("...")` 生成到只读的 `views/generated/routes.ts`。点分名称会变成 TypeScript 树：
+
+```ts
+export const routes = {
+  members: {
+    index: "members.index",
+    store: "members.store",
+  },
+} as const;
+
+export const members = routes.members;
+```
+
+业务代码输入 `members.` 时会看到 `index` 和 `store`。Rust 删除或重命名 `.name("members.store")` 后，`members.store` 会在 TypeScript 检查中报错；生成文件由框架维护，不手写、不提交。`RouteGroup::name("admin.")` 会和组内 `.name("dashboard")` 自动合并为 `admin.dashboard`。命名路由必须使用字符串字面量，动态名称会使生成阶段失败，防止前端提示不完整。
+
+框架同时把 Rust 运行时命名路由表加入 `PageEnvelope.routes`。生成的 `members.store` 只保存稳定名称，`callRust` 再把它解析为当前后端路径并发送 JSON POST。因此修改 `/api/members` 不会改前端代码，也不会在 TypeScript 中复制 URL。
+
+`callRust` 是标准化的 HTTP 传输层，不是在浏览器进程里直接执行 Rust；校验、ID 分配和返回数据仍由 Rust 控制器负责。当前生成器覆盖路由名称，不会从 `Request -> Response` 处理器自动推导 `{ name }` 和 `Member`。这一层需要后续强类型 Request/Resource 契约完成。
 
 ### 服务端 React HTML
 

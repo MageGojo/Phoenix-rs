@@ -301,6 +301,16 @@ export default function DocsPage({ article }: DocsPageProps) {
 
 `phoenix-vite` 自动发现页面和 islands、生成浏览器动态加载器与服务端 renderer 入口。开发者不维护注册表；没有 `client:load` 的组件只参与 SSR。
 
+命名 Rust 路由也由 Vite 生成 TypeScript 路由树。业务代码不再写无提示的字符串：
+
+```tsx
+import { members } from "../generated/routes.js";
+
+const member = await callRust<Member>(members.store, { name });
+```
+
+`members.store` 在编辑器中可补全，并在 Rust 路由重命名后触发 TypeScript 错误。它只代表稳定路由名；浏览器仍通过页面协议中的 Rust 路由表解析真实 URL。请求和响应结构的自动推导属于类型化契约切片，当前仍需显式 TypeScript 类型。
+
 ## 7. 模型与查询
 
 下面表达的是目标体验，不保证与 Toasty 当前 derive/API 完全一致：

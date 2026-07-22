@@ -132,3 +132,10 @@
 - 决定：业务页面使用 `<Component client:load />` 标记交互边界。`phoenix-vite` 编译该指令，按目录生成页面/island 注册表和入口；SSR renderer 自动收集实际边界的组件名、ID 与 props，Rust 控制器不重复声明 island。
 - 原因：让组件保持普通 React 代码，把打包、注册和页面协议元数据收回框架，同时保证 Islands 页面只加载实际使用的交互代码。
 - 边界：island props 必须可 JSON 序列化，island 不允许嵌套。共享同一 React 状态的交互必须处于同一边界；SSR 模式继续整页 hydration，不创建局部 root。
+
+## ADR-021：Rust 命名路由生成 TypeScript 属性树
+
+- 状态：已接受
+- 决定：`phoenix-vite` 从标准路由目录中的字面量 `.name("...")` 生成 `views/generated/routes.ts`。点分路由名映射为嵌套只读对象，并为安全的顶层名称生成直接导出；路由组的静态名称前缀在生成时合并。
+- 原因：裸字符串没有编辑器补全，Rust 路由重命名也不会触发前端错误。生成属性让 `members.store` 可导航、可补全，同时保留 Rust 命名路由作为唯一声明。
+- 边界：生成常量只携带稳定路由名，真实 URL 仍从 `PageEnvelope.routes` 解析。动态路由名在构建时拒绝。Input/Resource 类型需要后续强类型 action 契约，当前不能从 `Request -> Response` 自动推导。

@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { callRust } from "@phoenix/react";
 
+import { members } from "../generated/routes.js";
 import type { Member } from "../types/member.js";
 
 export interface MemberCreatorProps {
@@ -24,7 +25,7 @@ export default function MemberCreator({ initialTotal }: MemberCreatorProps) {
     setSubmitting(true);
     setFeedback(null);
     try {
-      const member = await callRust<Member>("members.store", { name });
+      const member = await callRust<Member>(members.store, { name });
       setCreatedMembers((current) => [member, ...current]);
       setDraftName("");
       setFeedback({ type: "success", message: `Rust 已创建 ${member.name}` });

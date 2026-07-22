@@ -23,11 +23,11 @@ cargo fmt --all -- --check
 
 ## 当前目标
 
-把已经验证的自动页面/island 发现和持久单 worker renderer 扩展到版本化生产资源与多 worker 容量，同时继续推进类型化请求：
+把已经验证的自动页面/island 发现、TypeScript 命名路由树和持久单 worker renderer 扩展到类型化 action 契约、版本化生产资源与多 worker 容量：
 
 ```text
 views/**/*.tsx
-  -> Vite 页面与 island 发现
+  -> Vite 页面、island 与 Rust 命名路由发现
   -> browser/server manifests
   -> 版本化 manifest + 多 worker renderer 池
   -> phoenix-view HTML
@@ -35,16 +35,17 @@ views/**/*.tsx
 
 ## 建议执行顺序
 
-1. 为 `phoenix-vite` 产物增加版本化 manifest、资源 hash 校验和生产静态资源解析。
-2. 将现有单 worker renderer 扩展为可配置 worker 数量，增加健康状态、队列指标与优雅关闭。
-3. 为 `client:visible`、`client:idle` 等延迟 hydration 策略定义可访问的加载语义和测试。
-4. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并复用现有错误语义。
-5. 创建契约 spike，验证 Serde 映射、重名诊断、敏感字段和自动 TypeScript 生成。
+1. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并把 action Input/Resource 绑定到已生成的命名路由属性。
+2. 创建契约 spike，验证 Serde 映射、重名诊断、敏感字段和自动 TypeScript 生成，使 `members.store({ name })` 可完整推导输入与返回值。
+3. 为 `phoenix-vite` 产物增加版本化 manifest、资源 hash 校验和生产静态资源解析。
+4. 将现有单 worker renderer 扩展为可配置 worker 数量，增加健康状态、队列指标与优雅关闭。
+5. 为 `client:visible`、`client:idle` 等延迟 hydration 策略定义可访问的加载语义和测试。
 6. 创建 Toasty spike，验证模型定义、CRUD、关系、事务、分页与迁移 API。
 
 ## 下一切片验收标准
 
 - TSX 页面与 island 已不需要手写注册表；下一切片要求新增/删除文件时 manifest 与开发服务稳定刷新。
+- Rust 命名路由已生成可补全 TypeScript 树；下一切片要求 action 输入、输出和路径参数也由 Rust 契约推导。
 - SSR 与文章、成员目录 Islands 的 HTML 均来自持久 renderer；renderer 不可用时继续快速失败且不静默切换模式。
 - 浏览器 bundle 只包含当前模式需要的代码，Islands 只加载页面实际出现的岛。
 - 页面 manifest、资源版本和协议版本不一致时启动失败。

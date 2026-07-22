@@ -51,8 +51,12 @@ Routes::new()
 ```
 
 ```tsx
-const member = await callRust<Member>("members.store", { name });
+import { members } from "../generated/routes.js";
+
+const member = await callRust<Member>(members.store, { name });
 ```
+
+`phoenix-vite` 会从 `routes/**/*.rs` 的字面量命名路由生成只读 TypeScript 路由树。输入 `members.` 可以得到 `index`、`store` 等补全；Rust 删除或重命名路由后，旧属性会在 TypeScript 检查中失败。真实 URL 仍来自 Rust 注入的运行时路由表，生成文件不复制 `/api/members`。
 
 ## 当前状态
 
@@ -68,7 +72,7 @@ const member = await callRust<Member>("members.store", { name });
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、自动页面/island 发现、按需浏览器入口、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；多 worker 池、版本化生产 manifest、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
+React 页面协议、三种渲染模式、自动页面/island 发现、TypeScript 命名路由树、按需浏览器入口、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；路由输入/输出契约、多 worker 池、版本化生产 manifest、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)

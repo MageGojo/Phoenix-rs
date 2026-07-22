@@ -1,5 +1,11 @@
-import { existsSync, readdirSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import ts from "typescript";
@@ -11,7 +17,9 @@ const RESOLVED_SERVER_ID = `\0${SERVER_ID}`;
 const COMPONENT_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx"]);
 
 export interface PhoenixViteOptions {
+  generatedRoutes?: string;
   renderer?: boolean;
+  routes?: string;
   views?: string;
 }
 
@@ -27,6 +35,8 @@ interface Discovery {
 }
 
 export function phoenix(options: PhoenixViteOptions = {}): Plugin {
+  let generatedRoutesFile = "";
+  let routesRoot = "";
   let viewsRoot = "";
 
   return {
@@ -67,6 +77,12 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
 
     configResolved(resolved) {
       viewsRoot = resolve(resolved.root, options.views ?? "views");
+      routesRoot = resolve(resolved.root, options.routes ?? "routes");
+      generatedRoutesFile = resolve(
+        resolved.root,
+        options.generatedRoutes ?? "views/generated/routes.ts",
+      );
+      generateRouteTypes(routesRoot, generatedRoutesFile);
     },
 
     resolveId(id) {
@@ -92,13 +108,346 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
 
     configureServer(server) {
       watchForNewModules(server, viewsRoot);
+      watchForRoutes(server, routesRoot, generatedRoutesFile);
     },
 
     handleHotUpdate({ file, server }) {
+      if (isWithin(file, routesRoot) && extname(file) === ".rs") {
+        generateRouteTypes(routesRoot, generatedRoutesFile);
+        server.ws.send({ type: "full-reload" });
+        return;
+      }
       if (!isWithin(file, viewsRoot)) return;
       invalidateVirtualModules(server);
     },
   };
+}
+
+interface RustToken {
+  kind: "identifier" | "punctuation" | "string";
+  value: string;
+}
+
+interface RustNameCall {
+  name: string;
+  tokenIndex: number;
+}
+
+interface RustGroup {
+  bodyEnd: number;
+  bodyStart: number;
+  prefix: string;
+  prefixCall: number;
+}
+
+interface RouteTreeNode {
+  children: Map<string, RouteTreeNode>;
+  route?: string;
+}
+
+export function generateRouteTypes(routesRoot: string, outputFile: string): string[] {
+  const names = discoverRouteNames(routesRoot);
+  const source = routeTypesModule(names);
+  mkdirSync(dirname(outputFile), { recursive: true });
+  if (!existsSync(outputFile) || readFileSync(outputFile, "utf8") !== source) {
+    writeFileSync(outputFile, source);
+  }
+  return names;
+}
+
+function discoverRouteNames(routesRoot: string): string[] {
+  if (!existsSync(routesRoot)) return [];
+  const names = walk(routesRoot)
+    .filter((file) => extname(file) === ".rs")
+    .flatMap((file) => routeNamesFromRust(readFileSync(file, "utf8"), file))
+    .sort((left, right) => left.localeCompare(right));
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) {
+      throw new Error(`Phoenix discovered duplicate Rust route name: ${name}`);
+    }
+    seen.add(name);
+  }
+  return names;
+}
+
+function routeNamesFromRust(source: string, file: string): string[] {
+  const tokens = tokenizeRust(source);
+  const pairs = delimiterPairs(tokens, file);
+  const calls = nameCalls(tokens, file);
+  const groups = routeGroups(tokens, pairs, calls);
+  const prefixCalls = new Set(groups.map((group) => group.prefixCall));
+
+  return calls
+    .filter((call) => !prefixCalls.has(call.tokenIndex))
+    .map((call) => {
+      const prefix = groups
+        .filter((group) => call.tokenIndex > group.bodyStart && call.tokenIndex < group.bodyEnd)
+        .sort((left, right) => right.bodyEnd - right.bodyStart - (left.bodyEnd - left.bodyStart))
+        .map((group) => group.prefix)
+        .join("");
+      return `${prefix}${call.name}`;
+    });
+}
+
+function tokenizeRust(source: string): RustToken[] {
+  const tokens: RustToken[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith("//", index)) {
+      index = source.indexOf("\n", index + 2);
+      if (index === -1) break;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      index = skipBlockComment(source, index);
+      continue;
+    }
+    const rawString = readRawRustString(source, index);
+    if (rawString) {
+      tokens.push({ kind: "string", value: rawString.value });
+      index = rawString.end;
+      continue;
+    }
+    if (character === '"') {
+      const string = readRustString(source, index);
+      tokens.push({ kind: "string", value: string.value });
+      index = string.end;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(character)) {
+      let end = index + 1;
+      while (end < source.length && /[A-Za-z0-9_]/.test(source[end])) end += 1;
+      tokens.push({ kind: "identifier", value: source.slice(index, end) });
+      index = end;
+      continue;
+    }
+    tokens.push({ kind: "punctuation", value: character });
+    index += 1;
+  }
+  return tokens;
+}
+
+function skipBlockComment(source: string, start: number): number {
+  let depth = 1;
+  let index = start + 2;
+  while (index < source.length && depth > 0) {
+    if (source.startsWith("/*", index)) {
+      depth += 1;
+      index += 2;
+    } else if (source.startsWith("*/", index)) {
+      depth -= 1;
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function readRawRustString(source: string, start: number): { end: number; value: string } | null {
+  if (source[start] !== "r") return null;
+  let quote = start + 1;
+  while (source[quote] === "#") quote += 1;
+  if (source[quote] !== '"') return null;
+  const hashes = source.slice(start + 1, quote);
+  const terminator = `"${hashes}`;
+  const end = source.indexOf(terminator, quote + 1);
+  if (end === -1) throw new Error("Phoenix found an unterminated Rust raw string");
+  return { end: end + terminator.length, value: source.slice(quote + 1, end) };
+}
+
+function readRustString(source: string, start: number): { end: number; value: string } {
+  let index = start + 1;
+  let value = "";
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '"') return { end: index + 1, value };
+    if (character !== "\\") {
+      value += character;
+      index += 1;
+      continue;
+    }
+    const escaped = source[index + 1];
+    const replacements: Record<string, string> = {
+      "\\": "\\",
+      '"': '"',
+      n: "\n",
+      r: "\r",
+      t: "\t",
+    };
+    value += replacements[escaped] ?? escaped;
+    index += 2;
+  }
+  throw new Error("Phoenix found an unterminated Rust string");
+}
+
+function delimiterPairs(tokens: RustToken[], file: string): Map<number, number> {
+  const pairs = new Map<number, number>();
+  const stack: Array<{ index: number; value: string }> = [];
+  const closing: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  for (const [index, token] of tokens.entries()) {
+    if (["(", "[", "{"].includes(token.value)) {
+      stack.push({ index, value: token.value });
+    } else if (token.value in closing) {
+      const opening = stack.pop();
+      if (!opening || opening.value !== closing[token.value]) {
+        throw new Error(`Phoenix could not parse Rust route delimiters in ${file}`);
+      }
+      pairs.set(opening.index, index);
+    }
+  }
+  if (stack.length > 0) throw new Error(`Phoenix found an unclosed Rust delimiter in ${file}`);
+  return pairs;
+}
+
+function nameCalls(tokens: RustToken[], file: string): RustNameCall[] {
+  const calls: RustNameCall[] = [];
+  for (let index = 1; index < tokens.length - 2; index += 1) {
+    if (tokens[index - 1].value !== "." || tokens[index].value !== "name"
+      || tokens[index + 1].value !== "(") continue;
+    if (tokens[index + 2].kind !== "string" || tokens[index + 3]?.value !== ")") {
+      throw new Error(
+        `Phoenix route names must be string literals so TypeScript routes can be generated (${file})`,
+      );
+    }
+    calls.push({ name: tokens[index + 2].value, tokenIndex: index });
+  }
+  return calls;
+}
+
+function routeGroups(
+  tokens: RustToken[],
+  pairs: Map<number, number>,
+  calls: RustNameCall[],
+): RustGroup[] {
+  const groups: RustGroup[] = [];
+  for (let index = 1; index < tokens.length - 1; index += 1) {
+    if (tokens[index - 1].value !== "." || tokens[index].value !== "group"
+      || tokens[index + 1].value !== "(") continue;
+    const callEnd = pairs.get(index + 1);
+    if (callEnd === undefined) continue;
+    const comma = firstTopLevelComma(tokens, pairs, index + 2, callEnd);
+    if (comma === undefined) continue;
+    const firstArgumentCalls = calls.filter(
+      (call) => call.tokenIndex > index + 1 && call.tokenIndex < comma,
+    );
+    const prefixCall = firstArgumentCalls.at(-1);
+    if (!prefixCall) continue;
+    const closureBlock = findToken(tokens, "{", comma + 1, callEnd);
+    const bodyStart = closureBlock ?? comma;
+    const bodyEnd = closureBlock === undefined ? callEnd : pairs.get(closureBlock);
+    if (bodyEnd === undefined) continue;
+    groups.push({
+      bodyEnd,
+      bodyStart,
+      prefix: prefixCall.name,
+      prefixCall: prefixCall.tokenIndex,
+    });
+  }
+  return groups;
+}
+
+function firstTopLevelComma(
+  tokens: RustToken[],
+  pairs: Map<number, number>,
+  start: number,
+  end: number,
+): number | undefined {
+  let index = start;
+  while (index < end) {
+    if (tokens[index].value === ",") return index;
+    const pair = pairs.get(index);
+    index = pair === undefined ? index + 1 : pair + 1;
+  }
+  return undefined;
+}
+
+function findToken(
+  tokens: RustToken[],
+  value: string,
+  start: number,
+  end: number,
+): number | undefined {
+  for (let index = start; index < end; index += 1) {
+    if (tokens[index].value === value) return index;
+  }
+  return undefined;
+}
+
+function routeTypesModule(names: string[]): string {
+  const root: RouteTreeNode = { children: new Map() };
+  for (const name of names) addRoute(root, name);
+  const exports = [...root.children.keys()]
+    .filter(isSafeBindingName)
+    .map((name) => `export const ${name} = routes[${JSON.stringify(name)}];`);
+  const routeNameType = names.length === 0
+    ? "never"
+    : names.map((name) => JSON.stringify(name)).join(" | ");
+  return [
+    "// This file is generated by @phoenix/vite from Rust named routes. Do not edit.",
+    `export const routes = ${printRouteTree(root, 0)} as const;`,
+    "",
+    `export type PhoenixRouteName = ${routeNameType};`,
+    ...(exports.length > 0 ? ["", ...exports] : []),
+    "",
+  ].join("\n");
+}
+
+function addRoute(root: RouteTreeNode, route: string): void {
+  const segments = route.split(".");
+  if (segments.some((segment) => segment.length === 0)) {
+    throw new Error(`Phoenix route name cannot contain an empty segment: ${route}`);
+  }
+  let node = root;
+  for (const [index, segment] of segments.entries()) {
+    if (node.route) {
+      throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${node.route}`);
+    }
+    let child = node.children.get(segment);
+    if (!child) {
+      child = { children: new Map() };
+      node.children.set(segment, child);
+    }
+    node = child;
+    if (index === segments.length - 1) {
+      if (node.children.size > 0) {
+        throw new Error(`Phoenix route name cannot also be a TypeScript namespace: ${route}`);
+      }
+      node.route = route;
+    }
+  }
+}
+
+function printRouteTree(node: RouteTreeNode, depth: number): string {
+  if (node.route) return JSON.stringify(node.route);
+  if (node.children.size === 0) return "{}";
+  const indent = "  ".repeat(depth);
+  const childIndent = "  ".repeat(depth + 1);
+  const children = [...node.children.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, child]) => (
+      `${childIndent}${JSON.stringify(name)}: ${printRouteTree(child, depth + 1)},`
+    ));
+  return ["{", ...children, `${indent}}`].join("\n");
+}
+
+const RESERVED_BINDINGS = new Set([
+  "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+  "default", "delete", "do", "else", "enum", "export", "extends", "false",
+  "finally", "for", "function", "if", "implements", "import", "in", "instanceof",
+  "interface", "let", "new", "null", "package", "private", "protected", "public",
+  "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof",
+  "var", "void", "while", "with", "yield",
+]);
+
+function isSafeBindingName(name: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) && !RESERVED_BINDINGS.has(name);
 }
 
 function transformClientDirectives(source: string, id: string): { code: string; map: null } | null {
@@ -268,6 +617,21 @@ function watchForNewModules(server: ViteDevServer, viewsRoot: string): void {
   };
   server.watcher.on("add", restart);
   server.watcher.on("unlink", restart);
+}
+
+function watchForRoutes(
+  server: ViteDevServer,
+  routesRoot: string,
+  generatedRoutesFile: string,
+): void {
+  server.watcher.add(routesRoot);
+  const regenerate = (file: string) => {
+    if (isWithin(file, routesRoot) && extname(file) === ".rs") {
+      generateRouteTypes(routesRoot, generatedRoutesFile);
+    }
+  };
+  server.watcher.on("add", regenerate);
+  server.watcher.on("unlink", regenerate);
 }
 
 function invalidateVirtualModules(server: ViteDevServer): void {

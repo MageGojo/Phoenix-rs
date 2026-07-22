@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderPage } from "@phoenix/react-ssr";
 import type { PageEnvelope } from "@phoenix/react";
 
+import { routes } from "./generated/routes.js";
 import ArticleShow from "./pages/articles/show.js";
 import MembersIndex from "./pages/members/index.js";
 
@@ -24,6 +25,17 @@ const envelope: PageEnvelope = {
 };
 
 describe("blog React case", () => {
+  it("generates every Rust route name as a TypeScript property tree", () => {
+    expect(routes).toEqual({
+      admin: { dashboard: "admin.dashboard" },
+      health: "health",
+      members: { index: "members.index", store: "members.store" },
+      react: { islands: "react.islands", spa: "react.spa", ssr: "react.ssr" },
+      register: { store: "register.store" },
+      users: { show: "users.show" },
+    });
+  });
+
   it("discovers article islands while rendering server HTML", () => {
     const result = renderPage(envelope, { "articles/show": ArticleShow });
 

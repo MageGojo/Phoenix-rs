@@ -158,7 +158,8 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - 大小写、扩展名冲突和重复页面在构建时失败。
 - `views/components/` 与 `views/layouts/` 由页面正常 import，不作为服务端可寻址页面。
 - `views/islands/` 包含可选择性激活的组件；页面通过 `client:load` 标记边界，Vite 自动生成动态加载器与服务端注册表。
-- `views/generated/` 是只读构建产物，不进入版本控制。
+- `phoenix-vite` 从标准 `routes/**/*.rs` 字面量命名路由生成嵌套 TypeScript 路由树，并合并静态路由组名称前缀。
+- `views/generated/` 是只读构建产物，不进入版本控制；当前包含命名路由常量，后续继续承载 Request/Resource 契约。
 
 ### 渲染模式
 
