@@ -22,10 +22,18 @@
 
 ## ADR-004：Toasty 位于 Phoenix 数据库适配层之后
 
-- 状态：待验证
+- 状态：已接受
 - 决定：以 Toasty 为 ORM 基础，但应用示例优先依赖 Phoenix 重导出和扩展接口。
 - 原因：满足产品方向，同时隔离 Toasty 在早期版本中的 API 波动。
-- 验证条件：完成 SQLite/PostgreSQL CRUD、关系、事务、分页、迁移和测试隔离 spike。
+- 验证结果：Toasty 0.8 的 SQLite CRUD、关系、事务和游标分页已通过真实集成测试；PostgreSQL 使用相同测试契约并由环境变量启用真实实例。Phoenix 只封装连接、后端元数据、迁移和测试隔离，不复制查询构建器。
+- 迁移边界：Toasty 0.8 原生迁移运行时只有 apply/status，不覆盖 down、校验和或互斥锁。Phoenix 因此维护独立的 `phoenix_migrations` 状态表与执行器；模型查询仍完全使用 Toasty。
+
+## ADR-022：迁移锁与事务按数据库能力实现
+
+- 状态：已接受
+- 决定：SQLite 在专用连接上用 `BEGIN IMMEDIATE` 包裹一次命令的全部迁移；PostgreSQL 使用固定 advisory lock，并让每个迁移在独立事务中提交。迁移定义的 SHA-256 覆盖 ID、名称和 up/down 全部语句。
+- 原因：SQLite 的数据库级写锁适合整批原子执行；PostgreSQL advisory lock 可跨多个迁移事务保持会话级互斥，避免长事务持有全部 schema 变更。
+- 边界：迁移 SQL 是目标数据库 SQL，不承诺同一 DDL 文本跨数据库可移植。生产 PostgreSQL 契约测试需要显式提供隔离测试库 URL。
 
 ## ADR-005：HTTP 核心直接使用 Hyper
 

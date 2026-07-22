@@ -108,3 +108,13 @@
 - 成员 Island 从裸字符串升级为 `callRust<Member>(members.store, { name })`，获得编辑器补全和 Rust 路由重命名检查。
 - 生成常量只保存稳定名称，浏览器仍使用 Rust 注入的运行时路由表解析 URL；接口输入/输出自动推导明确留给强类型契约切片。
 - 生成器 5 个测试和博客 React 6 个测试通过；真实浏览器使用生成属性创建成员成功，控制台无错误，SSR 表格继续位于唯一 Island 之外。
+
+## 2026-07-22：Toasty 数据库与迁移系统
+
+- 新增 `phoenix-database`，固定 Toasty `0.8.0`，支持 SQLite 与 PostgreSQL URL、连接池配置和顶层 Phoenix 重导出。
+- 保留 Toasty 原生强类型模型 API，并以集成测试验证 SQLite CRUD、has-many/belongs-to、游标分页和事务 commit/rollback。
+- 新增每测试独享的内存 SQLite `TestDatabase`，创建即初始化 schema，drop 即丢弃全部状态，不依赖测试顺序或共享清理。
+- 新增 Phoenix 迁移执行器，支持有序 ID、up/down、状态查询、计划、SHA-256 校验和、batch 和不可逆迁移失败关闭。
+- SQLite 使用 `BEGIN IMMEDIATE` 同时实现迁移锁和整批原子回滚；PostgreSQL 使用 advisory lock，并逐迁移事务提交。
+- 空数据库会自动创建 `phoenix_migrations`；失败 SQL 测试验证同批已执行 DDL 与状态记录均被回滚。
+- PostgreSQL 复用同一 CRUD/关系/分页契约测试，设置 `PHOENIX_TEST_POSTGRES_URL` 时连接真实实例执行。

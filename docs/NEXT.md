@@ -40,7 +40,7 @@ views/**/*.tsx
 3. 为 `phoenix-vite` 产物增加版本化 manifest、资源 hash 校验和生产静态资源解析。
 4. 将现有单 worker renderer 扩展为可配置 worker 数量，增加健康状态、队列指标与优雅关闭。
 5. 为 `client:visible`、`client:idle` 等延迟 hydration 策略定义可访问的加载语义和测试。
-6. 创建 Toasty spike，验证模型定义、CRUD、关系、事务、分页与迁移 API。
+6. （已完成）创建 Toasty spike，验证模型定义、CRUD、关系、事务、分页与迁移 API。
 
 ## 下一切片验收标准
 

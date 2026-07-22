@@ -2,6 +2,7 @@
 members = [
     "crates/phoenix",
     "crates/phoenix-core",
+    "crates/phoenix-database",
     "crates/phoenix-http",
     "crates/phoenix-routing",
     "crates/phoenix-validation",
@@ -30,8 +31,10 @@ mime = "0.3"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toasty = { version = "0.8", features = ["migration", "postgresql", "serde", "sqlite"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
