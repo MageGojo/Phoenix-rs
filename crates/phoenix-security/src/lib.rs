@@ -208,7 +208,7 @@ impl std::fmt::Display for HttpsRedirectError {
 
 impl std::error::Error for HttpsRedirectError {}
 
-/// Rejects requests whose HTTP Host is not explicitly allowed.
+/// Rejects requests whose HTTP Host or URI authority is not explicitly allowed.
 #[derive(Clone, Debug)]
 pub struct HostAllowlist {
     allowed: Arc<HashSet<String>>,
@@ -222,7 +222,7 @@ impl HostAllowlist {
                 hosts
                     .into_iter()
                     .map(Into::into)
-                    .map(|host: String| host.to_ascii_lowercase())
+                    .filter_map(|host: String| normalize_host(&host))
                     .collect(),
             ),
         }
@@ -233,11 +233,7 @@ impl Middleware for HostAllowlist {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
         let allowed = Arc::clone(&self.allowed);
         Box::pin(async move {
-            let host = request
-                .headers()
-                .get(header::HOST)
-                .and_then(|value| value.to_str().ok())
-                .and_then(normalize_host);
+            let host = request_host(&request);
             if !host.is_some_and(|host| allowed.contains(&host)) {
                 return Response::text("Invalid Host").with_status(StatusCode::BAD_REQUEST);
             }
@@ -246,9 +242,34 @@ impl Middleware for HostAllowlist {
     }
 }
 
+fn request_host(request: &Request) -> Option<String> {
+    let header_host = match request.headers().get(header::HOST) {
+        Some(value) => Some(normalize_host(value.to_str().ok()?)?),
+        None => None,
+    };
+    let uri_host = match request.uri().authority() {
+        Some(authority) => Some(normalize_authority(authority)?),
+        None => None,
+    };
+
+    match (header_host, uri_host) {
+        (Some(header), Some(uri)) if header == uri => Some(header),
+        (Some(_), Some(_)) | (None, None) => None,
+        (Some(host), None) | (None, Some(host)) => Some(host),
+    }
+}
+
 fn normalize_host(host: &str) -> Option<String> {
-    let authority = host.parse::<http::uri::Authority>().ok()?;
-    Some(authority.host().trim_end_matches('.').to_ascii_lowercase())
+    let authority = host.parse::<Authority>().ok()?;
+    normalize_authority(&authority)
+}
+
+fn normalize_authority(authority: &Authority) -> Option<String> {
+    if authority.as_str().contains('@') {
+        return None;
+    }
+    let host = authority.host().trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 /// Cross-origin policy for browser requests.
@@ -2257,6 +2278,70 @@ mod tests {
             HeaderValue::from_static("10.0.0.7, 10.0.0.8"),
         );
         assert_eq!(handle(&router, all_trusted).await.body(), "10.0.0.7");
+    }
+
+    #[tokio::test]
+    async fn host_allowlist_reconciles_host_and_http2_authority() {
+        let router = Routes::new()
+            .get("/", |_request: Request| async { "ok" })
+            .with_middleware(HostAllowlist::new([
+                "App.Invalid.:8443",
+                "[2001:DB8::1]:443",
+            ]))
+            .build()
+            .unwrap();
+
+        let mut host_only = request(Method::GET, "/");
+        host_only
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("APP.INVALID.:443"));
+        assert_eq!(handle(&router, host_only).await.status(), StatusCode::OK);
+
+        let authority_only = request(Method::GET, "https://APP.INVALID.:9443/");
+        assert_eq!(
+            handle(&router, authority_only).await.status(),
+            StatusCode::OK
+        );
+
+        let mut consistent = request(Method::GET, "https://app.invalid:8443/");
+        consistent
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("APP.INVALID.:443"));
+        assert_eq!(handle(&router, consistent).await.status(), StatusCode::OK);
+
+        let mut ipv6 = request(Method::GET, "https://[2001:db8::1]:8443/");
+        ipv6.headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("[2001:DB8::1]:443"));
+        assert_eq!(handle(&router, ipv6).await.status(), StatusCode::OK);
+
+        let mut conflict = request(Method::GET, "https://app.invalid/");
+        conflict
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("evil.invalid"));
+        assert_eq!(
+            handle(&router, conflict).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut invalid_header = request(Method::GET, "https://app.invalid/");
+        invalid_header
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("user@app.invalid"));
+        assert_eq!(
+            handle(&router, invalid_header).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        assert_eq!(
+            handle(&router, request(Method::GET, "https://evil.invalid/"))
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            handle(&router, request(Method::GET, "/")).await.status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]
