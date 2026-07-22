@@ -1,6 +1,7 @@
 use std::{collections::HashMap, convert::Infallible, future::Future, pin::Pin, sync::Arc};
 
 pub use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
 pub use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -159,11 +160,30 @@ impl JsonRejection {
     }
 }
 
-#[derive(Clone, Debug)]
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send + 'static>>;
+
+pub enum ResponseBody {
+    Buffered(Bytes),
+    Stream(ByteStream),
+}
+
+impl std::fmt::Debug for ResponseBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Buffered(bytes) => formatter
+                .debug_tuple("Buffered")
+                .field(&bytes.len())
+                .finish(),
+            Self::Stream(_) => formatter.write_str("Stream(<body>)"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Response {
     status: StatusCode,
     headers: HeaderMap,
-    body: Bytes,
+    body: ResponseBody,
 }
 
 impl Response {
@@ -172,7 +192,19 @@ impl Response {
         Self {
             status,
             headers: HeaderMap::new(),
-            body: body.into(),
+            body: ResponseBody::Buffered(body.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn stream<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Bytes> + Send + 'static,
+    {
+        Self {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body: ResponseBody::Stream(Box::pin(stream.map(Ok))),
         }
     }
 
@@ -209,9 +241,23 @@ impl Response {
         &mut self.headers
     }
 
+    /// Return a buffered response body.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called for a streaming response. Use [`Self::is_streaming`]
+    /// before inspecting responses that may stream.
     #[must_use]
     pub fn body(&self) -> &Bytes {
-        &self.body
+        match &self.body {
+            ResponseBody::Buffered(body) => body,
+            ResponseBody::Stream(_) => panic!("streaming response bodies are not buffered"),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_streaming(&self) -> bool {
+        matches!(self.body, ResponseBody::Stream(_))
     }
 
     #[must_use]
@@ -238,7 +284,7 @@ impl Response {
     }
 
     #[doc(hidden)]
-    pub fn into_parts(self) -> (StatusCode, HeaderMap, Bytes) {
+    pub fn into_parts(self) -> (StatusCode, HeaderMap, ResponseBody) {
         (self.status, self.headers, self.body)
     }
 }

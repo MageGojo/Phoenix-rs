@@ -23,43 +23,41 @@ cargo fmt --all -- --check
 
 ## 当前目标
 
-把已经验证的自动页面/island 发现、TypeScript 命名路由树和持久单 worker renderer 扩展到类型化 action 契约、版本化生产资源与多 worker 容量：
+完成 Laravel 风格开发体验，使应用只维护约定式路由文件和控制器：
 
 ```text
-views/**/*.tsx
-  -> Vite 页面、island 与 Rust 命名路由发现
-  -> browser/server manifests
-  -> 版本化 manifest + 多 worker renderer 池
-  -> phoenix-view HTML
+routes/web.rs + routes/api.rs
+  -> 自动挂载 + 中间件别名
+  -> resource routes + 模型绑定
+  -> Rust/Vite 统一 dev 生命周期
 ```
 
 ## 建议执行顺序
 
-1. 为 Query、Path、JSON 和 Form 实现类型化 extractor，并把 action Input/Resource 绑定到已生成的命名路由属性。
-2. 创建契约 spike，验证 Serde 映射、重名诊断、敏感字段和自动 TypeScript 生成，使 `members.store({ name })` 可完整推导输入与返回值。
-3. 为 `phoenix-vite` 产物增加版本化 manifest、资源 hash 校验和生产静态资源解析。
-4. 将现有单 worker renderer 扩展为可配置 worker 数量，增加健康状态、队列指标与优雅关闭。
-5. 为 `client:visible`、`client:idle` 等延迟 hydration 策略定义可访问的加载语义和测试。
-6. （已完成）创建 Toasty spike，验证模型定义、CRUD、关系、事务、分页与迁移 API。
+1. （已完成）Toasty SQLite/PostgreSQL CRUD、关系、分页、事务、隔离测试与可靠迁移执行器。
+2. （已完成）Session/CSRF/CORS/限流/可信代理/Host/安全头/request ID/日志脱敏。
+3. （已完成）生产 manifest 解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR 运行时。
+4. 实现约定式 `routes/web.rs`、`routes/api.rs` 自动挂载与确定性冲突诊断。
+5. 实现 REST resource routes、中间件别名注册/解析和异步模型绑定。
+6. 提供统一启动 Rust server 与 Vite、转发退出信号并回收子进程的开发命令。
 
 ## 下一切片验收标准
 
-- TSX 页面与 island 已不需要手写注册表；下一切片要求新增/删除文件时 manifest 与开发服务稳定刷新。
-- Rust 命名路由已生成可补全 TypeScript 树；下一切片要求 action 输入、输出和路径参数也由 Rust 契约推导。
-- SSR 与文章、成员目录 Islands 的 HTML 均来自持久 renderer；renderer 不可用时继续快速失败且不静默切换模式。
-- 浏览器 bundle 只包含当前模式需要的代码，Islands 只加载页面实际出现的岛。
-- 页面 manifest、资源版本和协议版本不一致时启动失败。
+- 标准路由文件无需在 `main.rs` 手工逐个合并，缺失文件、重复名称和重复 method/path 有稳定诊断。
+- resource routes 生成 index/create/store/show/edit/update/destroy 的标准集合，并允许 only/except。
+- 中间件别名未知时构建失败；模型不存在映射为 404，加载失败映射为通用 500。
+- 单个 dev 命令同时拉起 Rust 与 Vite，任一进程失败会终止另一进程，Ctrl-C 不遗留子进程。
 - `cargo test`、严格 Clippy 和格式检查全部通过。
 
 ## 待验证决策
 
-- Extractor trait 如何在不暴露 Hyper body 泛型的情况下组合 Path、State 和 body。
+- Extractor 已在归一化 Request 上组合；后续需决定 State extractor 和多个 body extractor 的编译期互斥方式。
 - 异步规则采用 boxed future、关联 future 还是宏生成，哪种编译错误对新手最清楚。
-- Toasty 迁移 API 是否足够稳定，是否需要 Phoenix 自有迁移描述层。
-- 契约层采用现有类型导出库还是自研 derive，哪种能完整遵守 Serde。
+- 数据 enum、tuple/generic struct 的契约表达。
 - P0 是否只承诺 SQLite + PostgreSQL，把 MySQL 标为实验性。
+- 模型绑定是否在 P0 只提供显式 binder，还是为 Toasty 模型增加 derive 门面。
 - 工作名称 Phoenix 是否在技术预览前更换。
 
 ## Definition of Done
 
-下一切片完成时，案例控制器不再手工解析 JSON，也不手工把验证错误拼成响应；框架会从请求到强类型 DTO 再到稳定错误响应完成整条链路。
+下一切片完成时，博客案例应只通过标准路由文件、resource 声明、别名中间件和模型绑定表达常用 CRUD，并能由一个 dev 命令完整启动和停止 Rust/Vite。

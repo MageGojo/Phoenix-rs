@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
 
 import { createElement, type ComponentType } from "react";
-import { renderToString } from "react-dom/server";
+import { renderToPipeableStream, renderToString } from "react-dom/server";
 
 import {
   PhoenixRenderProvider,
@@ -18,6 +19,8 @@ export interface RenderResult {
 }
 
 export interface RendererOptions {
+  assetVersion?: string;
+  contractHash?: string;
   pages: ComponentRegistry;
   islands?: ComponentRegistry;
 }
@@ -25,7 +28,9 @@ export interface RendererOptions {
 interface RendererRequest {
   protocol: number;
   id: number;
-  kind: "hello" | "render";
+  asset_version?: string;
+  contract_hash?: string;
+  kind: "hello" | "render" | "stream";
   envelope?: PageEnvelope;
 }
 
@@ -38,6 +43,39 @@ export function renderPage(
   if (envelope.render_mode === "spa") {
     return { html: "", islands: [], mode: "spa" };
   }
+  const { element, islands } = renderElement(envelope, pages);
+  return {
+    html: renderToString(element),
+    islands,
+    mode: envelope.render_mode,
+  };
+}
+
+async function streamPage(
+  envelope: PageEnvelope,
+  pages: ComponentRegistry,
+  chunk: (html: string) => void,
+): Promise<Omit<RenderResult, "html">> {
+  if (envelope.render_mode === "spa") {
+    return { islands: [], mode: "spa" };
+  }
+  const { element, islands } = renderElement(envelope, pages);
+  await new Promise<void>((resolve, reject) => {
+    const output = new PassThrough();
+    output.setEncoding("utf8");
+    output.on("data", (value: string) => chunk(value));
+    output.on("end", resolve);
+    output.on("error", reject);
+    const rendered = renderToPipeableStream(element, {
+      onError: reject,
+      onShellError: reject,
+      onShellReady: () => rendered.pipe(output),
+    });
+  });
+  return { islands, mode: envelope.render_mode };
+}
+
+function renderElement(envelope: PageEnvelope, pages: ComponentRegistry) {
   const Page = pages[envelope.page] as ComponentType<any> | undefined;
   if (!Page) {
     throw new Error(`Phoenix page is not registered: ${envelope.page}`);
@@ -65,19 +103,20 @@ export function renderPage(
     { mode: envelope.render_mode, collect },
     createElement(Page, props),
   );
-  return {
-    html: renderToString(element),
-    islands,
-    mode: envelope.render_mode,
-  };
+  return { element, islands };
 }
 
-export function startRenderer({ pages, islands = {} }: RendererOptions): void {
+export function startRenderer({
+  assetVersion,
+  contractHash,
+  pages,
+  islands = {},
+}: RendererOptions): void {
   for (const [name, Component] of Object.entries(islands)) {
     registerIsland(name, Component);
   }
 
-  createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
+  createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", async (line) => {
     let request: RendererRequest | undefined;
     try {
       request = JSON.parse(line) as RendererRequest;
@@ -85,11 +124,39 @@ export function startRenderer({ pages, islands = {} }: RendererOptions): void {
         throw new Error(`unsupported renderer protocol: ${request.protocol}`);
       }
       if (request.kind === "hello") {
-        write({ protocol: RENDERER_PROTOCOL, id: request.id, ok: true });
+        write({
+          protocol: RENDERER_PROTOCOL,
+          id: request.id,
+          ok: true,
+          contract_hash: contractHash,
+          asset_version: assetVersion,
+        });
         return;
       }
-      if (request.kind !== "render" || !request.envelope) {
+      if (!request.envelope || !["render", "stream"].includes(request.kind)) {
         throw new Error("invalid renderer request");
+      }
+      if (contractHash && request.envelope.contract_hash !== contractHash) {
+        throw new Error("Phoenix renderer contract hash mismatch");
+      }
+
+      if (request.kind === "stream") {
+        const result = await streamPage(request.envelope, pages, (chunk) => write({
+          protocol: RENDERER_PROTOCOL,
+          id: request!.id,
+          ok: true,
+          kind: "chunk",
+          chunk,
+        }));
+        write({
+          protocol: RENDERER_PROTOCOL,
+          id: request.id,
+          ok: true,
+          kind: "complete",
+          islands: result.islands,
+          head: [],
+        });
+        return;
       }
 
       const result = renderPage(request.envelope, pages);
@@ -106,6 +173,7 @@ export function startRenderer({ pages, islands = {} }: RendererOptions): void {
         protocol: RENDERER_PROTOCOL,
         id: request?.id ?? 0,
         ok: false,
+        kind: request?.kind === "stream" ? "error" : undefined,
         error: error instanceof Error ? error.message : "renderer failed",
       });
     }

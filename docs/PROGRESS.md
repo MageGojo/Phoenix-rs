@@ -126,3 +126,11 @@
 - 新增可配置 CSP/HSTS 安全策略、随机 request ID、无 query/无 Header 值的结构化访问日志和敏感 Header 脱敏辅助函数。
 - 5 个路由级测试覆盖 Cookie 属性与 CSRF 往返、会话轮换、代理欺骗边界、Host/CORS/限流拒绝、安全头、request ID 唯一性和日志脱敏。
 - `cargo test -p phoenix-security`、严格 Clippy 和 `phoenix-core` 测试通过。
+
+## 2026-07-22：生产资源运行时与流式 SSR
+
+- `AssetManifest`/`RendererManifest` 校验 schema、相对路径、入口和 client/renderer contract hash；静态解析只接受清单明确拥有的文件。
+- `Page::production_assets` 从 manifest 注入真实脚本、样式、asset version 和 contract hash；renderer worker 握手同时校验 client asset version 与 contract hash。
+- `NodeRenderer` 支持可配置 worker 池、预热、健康快照、超时淘汰、故障替换和显式优雅关闭；两 worker 并发测试固定容量行为。
+- React `renderToPipeableStream` 通过分帧协议连接 `ResponseBody::Stream` 与 Hyper，真实 TCP 测试验证无 Content-Length 的 chunked 响应，hydration 信封在完成帧后安全写入。
+- Rust 15 个 view 测试、真实 Hyper 流测试、严格 Clippy和 SSR 包测试通过。

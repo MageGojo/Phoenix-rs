@@ -1,12 +1,17 @@
 use std::{convert::Infallible, future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use futures_util::TryStreamExt;
+use http_body_util::{
+    BodyExt, Full, LengthLimitError, Limited, StreamBody, combinators::UnsyncBoxBody,
+};
 use hyper::{
-    Request as HyperRequest, Response as HyperResponse, body::Incoming, service::service_fn,
+    Request as HyperRequest, Response as HyperResponse,
+    body::{Frame, Incoming},
+    service::service_fn,
 };
 use hyper_util::rt::{TokioIo, TokioTimer};
-use phoenix_http::{Request, Response};
+use phoenix_http::{Request, Response, ResponseBody};
 use phoenix_routing::{RouteBuildError, Router, Routes};
 use thiserror::Error;
 use tokio::{
@@ -248,7 +253,7 @@ async fn handle_hyper_request(
     application: Arc<Application>,
     request: HyperRequest<Incoming>,
     peer_addr: Option<SocketAddr>,
-) -> Result<HyperResponse<Full<Bytes>>, Infallible> {
+) -> Result<HyperResponse<UnsyncBoxBody<Bytes, Infallible>>, Infallible> {
     let (parts, body) = request.into_parts();
     let body = tokio::time::timeout(
         application.body_read_timeout,
@@ -275,9 +280,13 @@ async fn handle_hyper_request(
     Ok(into_hyper_response(response))
 }
 
-fn into_hyper_response(response: Response) -> HyperResponse<Full<Bytes>> {
+fn into_hyper_response(response: Response) -> HyperResponse<UnsyncBoxBody<Bytes, Infallible>> {
     let (status, headers, body) = response.into_parts();
-    let mut response = HyperResponse::new(Full::new(body));
+    let body = match body {
+        ResponseBody::Buffered(bytes) => Full::new(bytes).boxed_unsync(),
+        ResponseBody::Stream(stream) => StreamBody::new(stream.map_ok(Frame::data)).boxed_unsync(),
+    };
+    let mut response = HyperResponse::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     response
@@ -289,4 +298,44 @@ pub enum ServerError {
     Io(#[from] std::io::Error),
     #[error("server task failed: {0}")]
     Task(#[from] tokio::task::JoinError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::stream;
+    use std::future::{Ready, ready};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn streaming_handler(_request: Request) -> Ready<Response> {
+        ready(Response::stream(stream::iter([
+            Bytes::from_static(b"first-"),
+            Bytes::from_static(b"second"),
+        ])))
+    }
+
+    #[tokio::test]
+    async fn hyper_forwards_response_chunks_without_content_length() {
+        let server = Application::new(Routes::new().get("/stream", streaming_handler))
+            .unwrap()
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(b"GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8(response).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("transfer-encoding: chunked"));
+        assert!(!response.contains("content-length:"));
+        assert!(response.contains("first-"));
+        assert!(response.contains("second"));
+
+        server.shutdown().await.unwrap();
+    }
 }

@@ -3,20 +3,29 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use futures_util::stream;
 use phoenix_http::{
-    HeaderValue, IntoResponse, Request, Response, RouteManifest, StatusCode, header,
+    Bytes, HeaderValue, IntoResponse, Request, Response, RouteManifest, StatusCode, header,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
+    fmt::Write as _,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 
+mod assets;
 mod renderer;
 
-pub use renderer::{NodeRenderer, RenderContext, RenderResult, RendererConfig, RendererError};
+pub use assets::{
+    ASSET_MANIFEST_SCHEMA, AssetEntry, AssetManifest, AssetManifestError, RendererManifest,
+};
+pub use renderer::{
+    NodeRenderer, RenderContext, RenderFrame, RenderResult, RendererConfig, RendererError,
+    RendererHealth, RendererStream,
+};
 
 const PAGE_MEDIA_TYPE: &str = "application/vnd.phoenix.page+json";
 const PAGE_REQUEST_HEADER: &str = "x-phoenix-page";
@@ -115,6 +124,7 @@ pub struct Page {
     envelope: PageEnvelope,
     server_html: Option<String>,
     script_src: String,
+    stylesheets: Vec<String>,
 }
 
 impl Page {
@@ -137,6 +147,7 @@ impl Page {
             },
             server_html: None,
             script_src: default_script_src(),
+            stylesheets: Vec::new(),
         }
     }
 
@@ -231,6 +242,32 @@ impl Page {
         self
     }
 
+    /// Apply one entry from a validated production asset manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the entry is missing or references an undeclared
+    /// asset.
+    pub fn production_assets(
+        mut self,
+        manifest: &AssetManifest,
+        entry_name: &str,
+    ) -> Result<Self, AssetManifestError> {
+        manifest.validate()?;
+        let entry = manifest
+            .entry(entry_name)
+            .ok_or_else(|| AssetManifestError::UnknownAsset(entry_name.to_owned()))?;
+        self.script_src = manifest.url(&entry.file)?;
+        self.stylesheets = entry
+            .css
+            .iter()
+            .map(|asset| manifest.url(asset))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.envelope.contract_hash = Some(manifest.contract_hash.clone());
+        self.envelope.asset_version = Some(manifest.version.clone());
+        Ok(self)
+    }
+
     /// Render an SSR or Islands page and select the document or page-protocol response.
     pub async fn respond_with_renderer(
         self,
@@ -249,6 +286,81 @@ impl Page {
                     .with_status(StatusCode::SERVICE_UNAVAILABLE)
             }
         }
+    }
+
+    /// Stream an SSR/Islands document as renderer chunks arrive. Page-protocol
+    /// navigation requests still return the normal atomic JSON envelope.
+    pub fn respond_streaming_with_renderer(
+        mut self,
+        request: &Request,
+        renderer: &NodeRenderer,
+    ) -> Response {
+        if let Some(manifest) = request.extensions().get::<RouteManifest>() {
+            self.envelope.routes.clone_from(manifest.routes());
+        }
+        if Self::is_page_request(request.headers()) {
+            return self
+                .respond(true, None)
+                .unwrap_or_else(PageResponseError::into_response);
+        }
+
+        let context = RenderContext::new(request.uri().to_string());
+        let Ok(mut frame_stream) = renderer.render_stream(&self.envelope, &context) else {
+            return Response::text("SSR renderer unavailable")
+                .with_status(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        let prefix = document_prefix(&self.envelope, &self.stylesheets);
+        let render_mode = self.envelope.render_mode;
+        let script_src = self.script_src;
+        let mut envelope = self.envelope;
+        let (sender, receiver) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move {
+            if sender.send(Bytes::from(prefix)).await.is_err() {
+                return;
+            }
+            let mut completed = false;
+            while let Some(frame) = frame_stream.recv().await {
+                match frame {
+                    Ok(RenderFrame::Chunk(chunk)) => {
+                        if sender.send(Bytes::from(chunk)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Ok(RenderFrame::Complete { islands, .. }) => {
+                        envelope.islands = islands;
+                        completed = true;
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            if !completed {
+                let _ = sender
+                    .send(Bytes::from_static(
+                        b"<!-- Phoenix SSR stream interrupted -->",
+                    ))
+                    .await;
+            }
+            if let Ok(suffix) = document_suffix(&envelope, &script_src) {
+                let _ = sender.send(Bytes::from(suffix)).await;
+            }
+        });
+        let body = stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|chunk| (chunk, receiver))
+        });
+        let mut response = Response::stream(body);
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        response.headers_mut().insert(
+            "x-phoenix-render-mode",
+            HeaderValue::from_static(render_mode.as_str()),
+        );
+        response
+            .headers_mut()
+            .insert("x-phoenix-ssr-stream", HeaderValue::from_static("1"));
+        response
     }
 
     /// Override the browser entrypoint, for example when using a Vite dev server.
@@ -302,6 +414,7 @@ impl Page {
             &self.envelope,
             self.server_html.as_deref(),
             &self.script_src,
+            &self.stylesheets,
         )
     }
 
@@ -534,17 +647,17 @@ fn document_response(
     envelope: &PageEnvelope,
     server_html: Option<&str>,
     script_src: &str,
+    stylesheets: &[String],
 ) -> Result<Response, PageResponseError> {
-    let payload = json_for_html(envelope)?;
     let root_html = if envelope.render_mode == RenderMode::Spa {
         ""
     } else {
         server_html.unwrap_or_default()
     };
-    let script_src = html_attribute(script_src);
     let html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">{root_html}</div><script id=\"phoenix-page\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"{script_src}\"></script></body></html>",
-        envelope.render_mode.as_str()
+        "{}{root_html}{}",
+        document_prefix(envelope, stylesheets),
+        document_suffix(envelope, script_src)?
     );
     let mut response = Response::new(StatusCode::OK, html);
     response.headers_mut().insert(
@@ -556,6 +669,31 @@ fn document_response(
         HeaderValue::from_static(envelope.render_mode.as_str()),
     );
     Ok(response)
+}
+
+fn document_prefix(envelope: &PageEnvelope, stylesheets: &[String]) -> String {
+    let styles = stylesheets
+        .iter()
+        .fold(String::new(), |mut styles, source| {
+            let _ = write!(
+                styles,
+                "<link rel=\"stylesheet\" href=\"{}\">",
+                html_attribute(source)
+            );
+            styles
+        });
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
+        envelope.render_mode.as_str()
+    )
+}
+
+fn document_suffix(envelope: &PageEnvelope, script_src: &str) -> Result<String, PageResponseError> {
+    let payload = json_for_html(envelope)?;
+    let script_src = html_attribute(script_src);
+    Ok(format!(
+        "</div><script id=\"phoenix-page\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"{script_src}\"></script></body></html>"
+    ))
 }
 
 fn html_attribute(value: &str) -> String {
@@ -579,7 +717,10 @@ fn json_for_html(value: &impl Serialize) -> Result<String, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
+    use phoenix_http::{Method, ResponseBody};
     use serde_json::json;
+    use std::ffi::OsString;
 
     #[test]
     fn islands_is_the_default_and_html_payload_is_context_safe() {
@@ -631,6 +772,85 @@ mod tests {
         assert!(
             html.contains("src=\"http://localhost/app.js?mode=dev&amp;name=&quot;test&quot;\"")
         );
+    }
+
+    #[test]
+    fn production_manifest_selects_hashed_scripts_styles_and_identity() {
+        let manifest = AssetManifest {
+            schema: ASSET_MANIFEST_SCHEMA,
+            version: "sha256-build".to_owned(),
+            contract_hash: "fnv1a-contract".to_owned(),
+            public_path: "/assets/".to_owned(),
+            entries: HashMap::from([(
+                "client".to_owned(),
+                AssetEntry {
+                    file: "phoenix-a1.js".to_owned(),
+                    css: vec!["client-b2.css".to_owned()],
+                    imports: Vec::new(),
+                },
+            )]),
+        };
+        let response = Page::new("dashboard/show", json!({}))
+            .production_assets(&manifest, "client")
+            .unwrap()
+            .into_response();
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(html.contains("src=\"/assets/phoenix-a1.js\""));
+        assert!(html.contains("href=\"/assets/client-b2.css\""));
+        assert!(html.contains("\"contract_hash\":\"fnv1a-contract\""));
+        assert!(html.contains("\"asset_version\":\"sha256-build\""));
+    }
+
+    #[tokio::test]
+    async fn page_response_forwards_renderer_chunks_before_hydration_payload() {
+        let source = r"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.kind === 'hello') {
+              console.log(JSON.stringify({protocol: 1, id: request.id, ok: true})); return;
+            }
+            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: '<h1>'}));
+            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: 'Streamed</h1>'}));
+            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'complete',
+              islands: [{id: 'counter', component: 'counter', props: {value: 1}}]}));
+          });
+        ";
+        let node = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join("node"))
+                    .find(|candidate| candidate.is_file())
+            })
+            .expect("Node.js is required for streaming tests");
+        let renderer = NodeRenderer::new(RendererConfig::command(
+            node,
+            [OsString::from("--eval"), OsString::from(source)],
+        ));
+        let request = Request::new(Method::GET, "/stream".parse().unwrap());
+        let response = Page::new("test/page", json!({ "ready": true }))
+            .ssr()
+            .respond_streaming_with_renderer(&request, &renderer);
+        assert!(response.is_streaming());
+        assert_eq!(response.headers()["x-phoenix-ssr-stream"], "1");
+        let (_, _, body) = response.into_parts();
+        let ResponseBody::Stream(stream) = body else {
+            panic!("expected streaming body");
+        };
+        let chunks = stream.collect::<Vec<_>>().await;
+        let html = chunks
+            .into_iter()
+            .map(Result::unwrap)
+            .fold(Vec::new(), |mut output, chunk| {
+                output.extend_from_slice(&chunk);
+                output
+            });
+        let html = String::from_utf8(html).unwrap();
+
+        assert!(html.contains("<h1>Streamed</h1>"));
+        assert!(html.contains("\"component\":\"counter\""));
+        assert!(html.find("<h1>").unwrap() < html.find("phoenix-page").unwrap());
     }
 
     #[test]

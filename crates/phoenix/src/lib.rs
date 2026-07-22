@@ -10,8 +10,9 @@ pub mod prelude {
     pub use phoenix_core::{Application, Server, ServerError, ServerHandle};
     pub use phoenix_database::{Backend, Database, DatabaseBuilder, DatabaseError, TestDatabase};
     pub use phoenix_http::{
-        BoxFuture, Handler, IntoResponse, Json, JsonRejection, Method, Middleware, Next, Request,
-        Response, RouteManifest, SecurityHeaders, StatusCode, Uri, middleware_fn,
+        BoxFuture, ByteStream, Handler, IntoResponse, Json, JsonRejection, Method, Middleware, Next,
+        Request, Response, ResponseBody, RouteManifest, SecurityHeaders, StatusCode, Uri,
+        middleware_fn,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_security::{
@@ -24,8 +25,9 @@ pub mod prelude {
         min_length, required, rules, string,
     };
     pub use phoenix_view::{
-        Aes256GcmCodec, EncryptionError, Island, NodeRenderer, Page, PageEnvelope,
-        PageResponseError, PayloadCodec, RenderContext, RenderMode, RenderResult, RendererConfig,
-        RendererError,
+        ASSET_MANIFEST_SCHEMA, Aes256GcmCodec, AssetEntry, AssetManifest, AssetManifestError,
+        EncryptionError, Island, NodeRenderer, Page, PageEnvelope, PageResponseError, PayloadCodec,
+        RenderContext, RenderFrame, RenderMode, RenderResult, RendererConfig, RendererError,
+        RendererHealth, RendererManifest, RendererStream,
     };
 }

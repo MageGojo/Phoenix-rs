@@ -72,7 +72,7 @@ const member = await callRust<Member>(members.store, { name });
 - 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、自动页面/island 发现、按需浏览器入口、持久 Node SSR renderer 和可选 AES-256-GCM 页面信封已经完成第一版垂直切片。当前 renderer 使用单 worker、2 秒 deadline、启动握手与一次崩溃恢复；多 worker 池、版本化生产 manifest、Toasty、迁移、TLS、会话、CSRF、可信代理和限流尚未实现。当前版本不能直接视为完整的生产安全栈。
+React 页面协议、三种渲染模式、自动页面/island 发现、生产 manifest 解析、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供服务端 Session、CSRF、精确 CORS、可信代理、Host allowlist、限流、安全头、request ID 与日志脱敏。TLS 终止、认证授权、分布式 Session、CSP nonce 和独立安全评审仍是生产发布前置条件。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)

@@ -9,6 +9,7 @@ version.workspace = true
 [dependencies]
 aes-gcm.workspace = true
 base64.workspace = true
+futures-util.workspace = true
 phoenix-http = { path = "../phoenix-http" }
 serde.workspace = true
 serde_json.workspace = true

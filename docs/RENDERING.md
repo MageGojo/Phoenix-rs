@@ -51,14 +51,14 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> renderer 池
 浏览器 -> hydrateRoot -> 后续 SPA 导航
 ```
 
-当前实现是一个长期运行的单 worker Node.js renderer，而不是每个请求启动 Node 进程。Phoenix 使用按行 JSON 的版本化内部协议传入完整 `PageEnvelope`、URL 和 locale；`asset_version` 与 `contract_hash` 随信封传递。子进程启动时完成协议握手，渲染中退出会自动重启并重试一次。
+当前实现使用可配置数量的长期 Node.js renderer worker，而不是每个请求启动 Node 进程。Phoenix 使用版本化按行 JSON 与流式分帧协议传入完整 `PageEnvelope`、URL 和 locale；`asset_version` 与 `contract_hash` 随信封传递。每个子进程启动时校验浏览器资源版本与契约 hash，完整渲染发生 I/O 故障时会替换 worker 并重试一次。
 
-单 worker 同时也是明确的第一版并发上限。请求等待渲染槽位和 Node 响应共用 2 秒 deadline，超过后返回 `503 Service Unavailable`，不会静默切换为 SPA。应用可以通过 `PHOENIX_SSR_ENTRY` 覆盖服务端 bundle 路径。
+`RendererConfig::with_workers` 设置池容量；等待 worker 和 Node 响应共用 deadline，超过后淘汰协议状态不确定的 worker并快速失败，不会静默切换为 SPA。`warm_up()` 在接流量前完成全部握手，`health()` 返回 ready/active/rendered/failure/restart/timeout 指标，`shutdown()` 停止接单并回收子进程。
+
+`Page::respond_streaming_with_renderer` 使用 React `renderToPipeableStream`，把 HTML chunk 通过 `ResponseBody::Stream` 直接交给 Hyper；真实 TCP 测试固定了 chunked response。renderer 完成帧携带 island 描述，Phoenix 随后写入上下文安全的 hydration 信封和版本化浏览器入口。
 
 SSR 必须定义：
 
-- renderer 超时、崩溃、重启、并发上限与背压。
-- React streaming 能力与 Hyper response body 的连接方式。
 - `Head`、HTTP 状态码、重定向和错误页的合并规则。
 - hydration 数据的安全编码与 CSP nonce。
 - 浏览器与服务端输出不一致时的诊断信息。
@@ -146,10 +146,11 @@ Vite 至少生成：
 
 ## 9. 分阶段交付
 
-1. 当前：统一 `PageEnvelope`、三种渲染语义、`client:load`、Vite 自动发现与按需加载、持久单 worker renderer、超时和崩溃恢复。
-2. 下一步：版本化生产 manifest、多 worker renderer 池、Head 和结构化错误处理。
-3. 稳定前：独立 island 入口、bundle 预算、缓存、CSP nonce 和部署验证。
-4. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
+1. 已完成：统一 `PageEnvelope`、三种渲染语义、`client:load`、Vite 自动发现与按需加载。
+2. 已完成：版本化生产 manifest、多 worker renderer 池、contract/resource 握手、健康指标、优雅关闭和流式 SSR。
+3. 下一步：Head、结构化流错误、CSP nonce 和 hydration 诊断。
+4. 稳定前：独立 island 入口、bundle 预算、缓存和部署验证。
+5. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 
 ## 10. 验收标准
 
