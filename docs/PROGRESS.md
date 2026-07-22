@@ -25,3 +25,16 @@
 - crate 元数据显示 Rust version 为 `1.95`。
 
 以上仅证明发布元数据，不证明 API 已满足 Phoenix 的模型、关系、事务和迁移要求；这些能力必须通过下一阶段 spike 验证。
+
+## 2026-07-22：Hyper 基础服务检查点
+
+- 建立 Rust `1.95`、edition 2024 的 Cargo workspace 和锁文件。
+- 实现 Phoenix Request、Response、JSON、Handler、IntoResponse 与中间件链。
+- 实现 Hyper HTTP/1.1 监听、2 MiB 默认 body 上限、临时端口启动和优雅关闭。
+- 实现 GET/POST/PUT/PATCH/DELETE、HEAD 回退、OPTIONS、路径参数、404 与 405。
+- 实现 Laravel 风格 `.name()`、`RouteGroup` 路径/名称前缀、命名 URL 和冲突诊断。
+- 实现 `required`、`string`、`min_length`、`Rule` trait 与闭包式 `custom_rule`。
+- 在 `examples/blog` 实现健康、用户、注册和管理控制器，以及全局/组中间件。
+- 11 个案例测试通过，其中 1 个通过真实 TCP socket 验证服务启动。
+- `cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- 实际启动案例并验证 `/health`、`/users/{user}`、`/admin/dashboard` 和 `/register` 响应。

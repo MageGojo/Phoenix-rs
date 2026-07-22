@@ -23,6 +23,8 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 当前查询到的 Toasty 公开版本为 `0.8.0`，其 crate 元数据显示需要 Rust `1.95`，并提供 SQLite、PostgreSQL、MySQL、Turso、DynamoDB 相关驱动以及 `migration` feature。版本和 API 在采用前必须通过本地 spike 验证，不能仅依赖文档描述。
 
+首个实现检查点的锁定依赖包括 Hyper `1.11.0`、Tokio `1.53.1` 和 matchit `0.8.6`。matchit 只负责路径匹配树，路由声明、命名、分组、中间件与错误语义属于 Phoenix API。
+
 ## 3. 模块边界
 
 ```text
@@ -111,6 +113,8 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 - Phoenix 自己定义 `Handler`、`IntoResponse`、提取器、路由树和中间件接口，公共 API 不要求应用直接实现 Hyper trait。
 - 中间件核心先围绕 Phoenix 请求/响应实现。Tower 互操作可作为后续适配器，不作为 P0 架构前提。
 - 升级、流式响应、SSE 和 WebSocket 需要保留 Hyper 原始请求的受控逃生口，但不进入首个垂直切片。
+
+当前实现检查点只启用 Hyper HTTP/1.1。HTTP/2、升级连接和流式请求/响应仍待实现，不能把规划能力当作已交付能力。
 
 ## 5. 跨端数据契约
 

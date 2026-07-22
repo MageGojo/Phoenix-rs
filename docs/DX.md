@@ -1,6 +1,6 @@
 # 开发者体验草案
 
-本文定义期望中的应用写法，用于指导 API 设计与技术验证。所有代码均为草案，尚不可运行。
+本文同时记录已实现 API 与后续目标。标注“当前已实现”的代码由 `examples/blog` 测试验证；React、Toasty、derive 和迁移示例仍是设计草案。
 
 ## 1. 目录约定
 
@@ -32,29 +32,62 @@ tests/
 
 ## 2. 路由
 
+当前已实现：
+
 ```rust
 use phoenix::prelude::*;
 
 pub fn routes() -> Routes {
     Routes::new()
         .get("/", HomeController::index)
+            .name("home")
         .get("/posts", PostController::index)
             .name("posts.index")
-        .get("/posts/:post", PostController::show)
+        .get("/posts/{post}", PostController::show)
             .name("posts.show")
         .post("/posts", PostController::store)
-            .middleware(Auth::required())
             .name("posts.store")
+            .middleware(Auth::required())
+        .group(
+            RouteGroup::new()
+                .prefix("/admin")
+                .name("admin.")
+                .middleware(Auth::required()),
+            |routes| routes
+                .get("/dashboard", AdminController::dashboard)
+                .name("dashboard"),
+        )
 }
 ```
 
 设计要求：
 
 - 路由 API 必须能在 IDE 中补全，不依赖解析字符串形式的控制器名称。
-- 模型绑定失败默认返回 404；请求解析失败返回 400；验证失败返回 422 或 Web 回跳响应。
-- 命名路由支持类型安全参数的方向应先做可行性验证，P0 可接受运行时校验参数名。
+- 当前路由参数使用 Laravel 风格 `{post}`，并支持 GET、POST、PUT、PATCH、DELETE、HEAD 和 OPTIONS。
+- 当前命名 URL 使用 `router.url("posts.show", &[("post", "42")])`；未知名称和缺失参数返回明确错误。
+- 重复路由名或冲突模式在 `Routes::build()` 阶段失败，不静默覆盖。
+- 模型绑定、正则参数约束和类型安全命名参数仍待实现。
 
 ## 3. 控制器与 React 页面
+
+当前控制器使用 `async fn(Request)`，静态关联函数可以直接注册为处理器：
+
+```rust
+pub struct UserController;
+
+impl UserController {
+    pub async fn show(request: Request) -> Response {
+        let user = request.param("user").unwrap_or("unknown");
+        Json(json!({
+            "user": user,
+            "route": request.route_name(),
+        }))
+        .into_response()
+    }
+}
+```
+
+下面是接入 Toasty 和 React 后的目标写法：
 
 ```rust
 use phoenix::prelude::*;
@@ -115,6 +148,27 @@ export default function PostIndex({ posts }: PostIndexProps) {
 前端没有重复声明 `PostIndexProps`。P0 客户端包至少提供启动器、`Link`、表单提交、页面上下文、`Head`、加载状态、错误处理和资源/契约版本刷新。前端包不负责 UI 组件库。
 
 ## 5. 请求与验证
+
+当前已实现无需 derive 的验证器、内置规则、`Rule` trait 和闭包式自定义规则：
+
+```rust
+let confirmed = custom_rule("confirmed", |context| {
+    if context.value == context.data.get("password_confirmation") {
+        Ok(())
+    } else {
+        Err(format!("The {} confirmation does not match.", context.field))
+    }
+});
+
+Validator::new(&payload)
+    .rule("user", required())
+    .rule("user", string())
+    .rule("password", min_length(8))
+    .rule("password", confirmed)
+    .validate()?;
+```
+
+下面的 Request derive、契约生成和授权接口仍是后续目标：
 
 ```rust
 #[derive(FromRequest, Validate, Contract)]
@@ -191,9 +245,9 @@ export default function Login() {
 Routes::new()
     .get("/dashboard", DashboardController::show)
         .render_mode(RenderMode::Spa)
-    .get("/articles/:article", ArticleController::show)
+    .get("/articles/{article}", ArticleController::show)
         .render_mode(RenderMode::Ssr)
-    .get("/docs/:page", DocsController::show)
+    .get("/docs/{page}", DocsController::show)
         .render_mode(RenderMode::Islands)
 ```
 
@@ -287,6 +341,16 @@ abort(StatusCode::NOT_FOUND)
 应用错误映射为稳定的 HTTP 语义。开发环境可显示带请求 ID 的诊断页；生产环境只显示安全错误页，完整错误进入结构化日志。
 
 ## 10. 测试体验
+
+当前案例测试位于 `examples/blog/tests/`，可以直接运行：
+
+```bash
+cargo test -p phoenix-blog-example
+```
+
+测试覆盖真实 TCP 启动和关闭、控制器、HTTP 方法、路径参数、404/405、全局/组中间件、命名 URL、重复路由名以及 trait/闭包自定义规则。
+
+下面的 `TestApp` 断言 DSL 是后续目标：
 
 ```rust
 #[phoenix::test]

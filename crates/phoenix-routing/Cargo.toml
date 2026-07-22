@@ -1,0 +1,18 @@
+[package]
+name = "phoenix-routing"
+description = "Laravel-inspired routing and named URL generation for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+matchit.workspace = true
+percent-encoding.workspace = true
+phoenix-http = { path = "../phoenix-http" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "phoenix-core"
+description = "Application lifecycle and Hyper server runtime for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+phoenix-http = { path = "../phoenix-http" }
+phoenix-routing = { path = "../phoenix-routing" }
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

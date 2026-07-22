@@ -1,0 +1,16 @@
+[package]
+name = "phoenix-http"
+description = "HTTP request, response, handler, and middleware primitives for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

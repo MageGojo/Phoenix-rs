@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "crates/phoenix",
+    "crates/phoenix-core",
+    "crates/phoenix-http",
+    "crates/phoenix-routing",
+    "crates/phoenix-validation",
+    "examples/blog",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.95"
+version = "0.1.0"
+
+[workspace.dependencies]
+bytes = "1"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+matchit = "0.8"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
