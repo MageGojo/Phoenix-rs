@@ -28,8 +28,9 @@ pub mod prelude {
         MultiApplicationError, Server, ServerError, ServerHandle, TlsConfig, TlsConfigError,
     };
     pub use phoenix_crypto::{
-        Ciphertext, EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor,
-        FileTokenStore, Jwt, JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager,
+        BlindIndexError, BlindIndexKey, BlindIndexer, Ciphertext,
+        EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, FileTokenStore, Jwt,
+        JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, MAX_BLIND_INDEX_KEYS,
         MemoryTokenStore, Password, PasswordError, RefreshRecord, RotateRefresh, StatefulJwtAuth,
         TokenError, TokenPair, TokenService, TokenStore, TokenStoreError,
     };

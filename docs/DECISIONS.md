@@ -249,3 +249,10 @@
 - 原因：把 nonce 放进 `PageEnvelope` 会污染业务 props、页面导航 JSON、contract hash 和缓存键；构建时固定 Vite `html.cspNonce` 又会让多个请求复用同一值。请求元数据边界既能自动连接框架输出，也能保持 Rust/TypeScript 业务契约稳定。
 - 缓存与失败边界：带 nonce 的 HTML 固定为 `private, no-store` 并移除 ETag/Last-Modified；API/页面 JSON 不携带 nonce 且保留自己的缓存策略。重复/unsafe-inline/预置 nonce CSP 在启动时拒绝，下游 CSP 冲突返回 500，renderer v1 与 v2 协议不兼容并明确失败。
 - 开发边界：Vite 只接受一个显式 HTTP(S) origin，并推导对应 WebSocket source；凭据、路径、query、控制字符与非 HTTP scheme 被拒绝。第三方资源仍需应用显式审查并扩展基础 `SecurityPolicy`。
+
+## ADR-036：敏感字段等值查询使用用途隔离的有界盲索引
+
+- 状态：已接受
+- 决定：Phoenix 提供独立于可逆加密的 `BlindIndexer`。索引固定使用 HMAC-SHA256，认证输入显式 framing 格式版本、key ID、非空有界 purpose 和原值；持久化 envelope 携带版本、算法与 key ID。active key 负责新写入，最多七个 legacy key 只用于验证和生成轮换查询候选。
+- 原因：直接保存敏感字段或无 key 的 SHA-256 会暴露原值或允许低成本字典匹配；用途 framing 避免跨表复用和拼接碰撞，有界候选避免 key ring 无限制扩大 SQL 与 CPU 成本。
+- 边界：盲索引是确定性认证标签，不是加密，会泄漏重复关系；低熵字段在索引与 key 同时泄露后仍可离线枚举。应用必须单独定义规范化规则，并让盲索引 key 与 AES-GCM、JWT、Session/Cookie、CSRF 及其他 HMAC key 完全独立。未知 key、畸形 envelope 和 tag 不匹配都失败关闭。

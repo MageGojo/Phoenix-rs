@@ -265,3 +265,11 @@
 - 带 nonce 的 HTML/流式响应固定为 `Cache-Control: private, no-store` 并移除验证器，JSON/API 缓存策略保持不变。
 - `examples/blog` 与 `px new` 脚手架默认按 debug/release 装配开发/生产 nonce policy；Vite 插件明确不生成构建期静态 nonce。
 - 目标 crate 测试、严格 Clippy、React SSR/Vite 测试和 TypeScript build 已通过；全仓门禁在本检查点提交前执行。
+
+## 2026-07-23：用途隔离的 HMAC 盲索引
+
+- `phoenix-crypto` 新增专用 `BlindIndexKey` 与 `BlindIndexer`，强制至少 32 byte key、严格脱敏 Debug，并禁止空、控制字符或超长 key ID/purpose。
+- HMAC-SHA256 输入使用显式格式版本和 key ID/purpose/value 长度 framing；稳定 envelope 携带算法、版本和 Base64URL key ID，解析拒绝非规范编码与未知 key。
+- key ring 固定 active-first 顺序并限制为最多 8 个 active/legacy key；查询候选有界，旧 envelope 可验证，tag 使用常量时间比较。
+- 测试覆盖稳定向量、用途隔离、不同 key、轮换候选、短 key、重复/超量 key、Debug 脱敏及畸形/未知/认证失败 envelope。
+- 安全文档明确盲索引不是加密，会泄漏等值关系；低熵数据在 key 泄露后仍可离线枚举，且 key 必须独立于 Encryptor、JWT、Session 和其他用途。

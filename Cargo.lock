@@ -1620,6 +1620,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "base64",
+ "hmac 0.13.0",
  "http",
  "jsonwebtoken",
  "phoenix-http",

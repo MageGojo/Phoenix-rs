@@ -1,6 +1,6 @@
 [package]
 name = "phoenix-crypto"
-description = "JWT, authenticated encryption, and password hashing for Phoenix"
+description = "JWT, blind indexes, authenticated encryption, and password hashing for Phoenix"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ aes-gcm.workspace = true
 argon2.workspace = true
 base64.workspace = true
 http.workspace = true
+hmac.workspace = true
 jsonwebtoken.workspace = true
 phoenix-http = { path = "../phoenix-http" }
 rand.workspace = true
