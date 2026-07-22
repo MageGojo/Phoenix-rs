@@ -58,6 +58,7 @@ export async function streamPage(
   chunk: (html: string) => void,
   cspNonce?: string,
 ): Promise<Omit<RenderResult, "html">> {
+  validateNonce(cspNonce);
   if (envelope.render_mode === "spa") {
     return { islands: [], mode: "spa" };
   }

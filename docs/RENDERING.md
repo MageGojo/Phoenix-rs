@@ -55,7 +55,7 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> renderer 池
 
 `RendererConfig::with_workers` 设置池容量；等待 worker 和 Node 响应共用 deadline，超过后淘汰协议状态不确定的 worker并快速失败，不会静默切换为 SPA。`warm_up()` 在接流量前完成全部握手，`health()` 返回 ready/active/rendered/failure/restart/timeout 指标，`shutdown()` 停止接单并回收子进程。
 
-`Page::respond_streaming_with_renderer` 使用 React `renderToPipeableStream`，把同一请求 nonce 交给 React 后将 HTML chunk 通过 `ResponseBody::Stream` 直接交给 Hyper；真实 TCP 测试固定了 chunked response，Suspense 测试固定了 React 恢复脚本的 nonce。renderer 完成帧携带 island 描述，Phoenix 随后写入带同一 nonce、且上下文安全的 hydration 信封和版本化浏览器入口。
+`Page::respond_streaming_with_renderer` 使用 React `renderToPipeableStream`，把同一请求 nonce 交给 React 后将 HTML chunk 通过 `ResponseBody::Stream` 直接交给 Hyper；真实 TCP 测试固定了 chunked response，跨 Rust/官方 Node renderer 的 E2E 固定了 React Suspense 恢复脚本的 nonce。只有 renderer `Complete` 帧携带 island 描述后，Phoenix 才写入带同一 nonce、且上下文安全的 hydration 信封和版本化浏览器入口；启动、协议或中途渲染失败只终止文档，不启动客户端。
 
 SSR 必须定义：
 
@@ -230,7 +230,7 @@ pub fn show(
 
 `production_assets(..., "client")` 从 manifest 注入实际 JS/CSS URL，并把 asset version 与 contract hash 写进页面信封。SSR/Islands 完整页面可以使用 `respond_streaming_with_renderer`；带 `X-Phoenix-Page: 1` 的局部导航仍返回原子的页面 JSON。
 
-需要完整缓冲响应时使用 `respond_with_renderer(...).await`。renderer 失败会返回 503，不会静默改成 SPA。
+需要完整缓冲响应时使用 `respond_with_renderer(...).await`。renderer 失败会返回 503，不会静默改成 SPA。流式响应的 Header 一旦发送便不能改写状态，因此生产启动必须先调用 `warm_up()`；流中失败会关闭未完成文档且不会追加 hydration/module script。客户端断开、协议错误和 deadline 会在释放 worker 锁前原子作废对应进程，排队请求只会启动干净 worker，不会读取前一请求的残留帧。
 
 ### CSP nonce 与页面缓存
 
@@ -244,6 +244,8 @@ pub fn show(
 ```
 
 Vite 7 从该 meta 继承 HMR 与动态 style/link nonce；Vite 配置不得写死 `html.cspNonce`。带 nonce 的文档固定为 `private, no-store` 并删除验证器，防止共享缓存重放另一个请求的 nonce。页面协议 JSON 不携带 nonce，也不会被强制改写应用已有缓存策略。
+
+官方 Rust→Node→React Suspense→HTML nonce 链路使用 `npm run test:e2e:ssr-csp` 验证；该命令先构建 workspace 内的官方 React 包，再运行显式集成测试，不读取被忽略的示例构建产物。
 
 `Page::respond(false, ...)` 和在路由外直接调用 `Page::into_response()` 没有 Request 上下文，因此不会凭空创建 nonce。启用 nonce policy 的应用应从 Handler 直接返回 `Page`，或使用 `respond_to`/renderer API；CLI 生成代码遵守这一约定。
 

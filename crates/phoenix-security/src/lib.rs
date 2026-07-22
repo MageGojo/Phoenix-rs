@@ -9,10 +9,12 @@ pub use session_backend::{
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
+    panic::AssertUnwindSafe,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use futures_util::FutureExt;
 use http::uri::Authority;
 use phoenix_http::{
     BoxFuture, Bytes, ConnectionInfo, CspNonce, HeaderMap, HeaderName, HeaderValue, Method,
@@ -1563,7 +1565,7 @@ impl Middleware for SecurityPolicy {
         let policy = self.clone();
         Box::pin(async move {
             let secure = effective_scheme(&request).is_secure();
-            let mut response = next.run(request).await;
+            let mut response = run_with_panic_boundary(request, next).await;
             insert_default(response.headers_mut(), "x-content-type-options", "nosniff");
             insert_default(response.headers_mut(), "x-frame-options", "DENY");
             insert_default(
@@ -1606,20 +1608,20 @@ impl Middleware for NonceSecurityPolicy {
                 });
             request.extensions_mut().insert(nonce.clone());
             let secure = effective_scheme(&request).is_secure();
-            let mut response = next.run(request).await;
+            let mut response = run_with_panic_boundary(request, next).await;
             let Ok(csp) = render_nonced_policy(&policy.content_security_policy, nonce.as_str())
                 .and_then(|value| {
                     HeaderValue::from_str(&value).map_err(|_| CspPolicyError::InvalidPolicy)
                 })
             else {
-                return csp_failure_response();
+                return csp_failure_response(secure, &policy, None);
             };
             if response
                 .headers()
                 .get("content-security-policy")
                 .is_some_and(|existing| existing != csp)
             {
-                return csp_failure_response();
+                return csp_failure_response(secure, &policy, Some(csp));
             }
             response
                 .headers_mut()
@@ -1647,6 +1649,7 @@ fn render_nonced_policy(base: &str, nonce: &str) -> Result<String, CspPolicyErro
     let mut names = HashSet::new();
     let mut has_script = false;
     let mut has_style = false;
+    let mut default_sources = None;
     for raw in base.split(';') {
         let raw = raw.trim();
         if raw.is_empty() {
@@ -1663,17 +1666,22 @@ fn render_nonced_policy(base: &str, nonce: &str) -> Result<String, CspPolicyErro
         }
         let mut values = parts.map(ToOwned::to_owned).collect::<Vec<_>>();
         if values.iter().any(|value| {
-            value == "'unsafe-inline'"
-                || value.starts_with("'nonce-")
+            let normalized = value.to_ascii_lowercase();
+            normalized == "'unsafe-inline'"
+                || normalized.starts_with("'nonce-")
                 || value.bytes().any(|byte| byte.is_ascii_control())
         }) {
             return Err(CspPolicyError::InvalidPolicy);
         }
-        if name == "script-src" {
-            has_script = true;
+        if name == "default-src" {
+            default_sources = Some(values.clone());
+        } else if matches!(name, "script-src" | "script-src-elem") {
+            has_script |= name == "script-src";
+            values.retain(|source| !source.eq_ignore_ascii_case("'none'"));
             values.push(nonce_source.clone());
-        } else if name == "style-src" {
-            has_style = true;
+        } else if matches!(name, "style-src" | "style-src-elem") {
+            has_style |= name == "style-src";
+            values.retain(|source| !source.eq_ignore_ascii_case("'none'"));
             values.push(nonce_source.clone());
         }
         directives.push(format!(
@@ -1683,12 +1691,40 @@ fn render_nonced_policy(base: &str, nonce: &str) -> Result<String, CspPolicyErro
         ));
     }
     if !has_script {
-        directives.push(format!("script-src 'self' {nonce_source}"));
+        directives.push(inherited_nonce_directive(
+            "script-src",
+            default_sources.as_deref(),
+            &nonce_source,
+        ));
     }
     if !has_style {
-        directives.push(format!("style-src 'self' {nonce_source}"));
+        directives.push(inherited_nonce_directive(
+            "style-src",
+            default_sources.as_deref(),
+            &nonce_source,
+        ));
     }
     Ok(directives.join("; "))
+}
+
+fn inherited_nonce_directive(
+    name: &str,
+    default_sources: Option<&[String]>,
+    nonce_source: &str,
+) -> String {
+    let mut sources = default_sources.map_or_else(|| vec!["'self'".to_owned()], <[String]>::to_vec);
+    sources.retain(|source| !source.eq_ignore_ascii_case("'none'"));
+    sources.push(nonce_source.to_owned());
+    format!("{name} {}", sources.join(" "))
+}
+
+async fn run_with_panic_boundary(request: Request, next: Next) -> Response {
+    AssertUnwindSafe(next.run(request))
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| {
+            Response::text("Internal Server Error").with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        })
 }
 
 fn apply_browser_headers(response: &mut Response, secure: bool, policy: &SecurityPolicy) {
@@ -1719,11 +1755,32 @@ fn response_is_html(response: &Response) -> bool {
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/html"))
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "text/html" | "application/xhtml+xml"
+            )
+        })
 }
 
-fn csp_failure_response() -> Response {
-    Response::text("Security policy conflict").with_status(StatusCode::INTERNAL_SERVER_ERROR)
+fn csp_failure_response(
+    secure: bool,
+    policy: &SecurityPolicy,
+    csp: Option<HeaderValue>,
+) -> Response {
+    let mut response =
+        Response::text("Security policy conflict").with_status(StatusCode::INTERNAL_SERVER_ERROR);
+    if let Some(csp) = csp {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("content-security-policy"), csp);
+    }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    apply_browser_headers(&mut response, secure, policy);
+    response
 }
 
 fn insert_default(headers: &mut HeaderMap, name: &'static str, value: &str) {
@@ -1803,7 +1860,7 @@ fn random_token(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoenix_http::{IntoResponse, Uri};
+    use phoenix_http::{IntoResponse, Uri, middleware_fn};
     use phoenix_routing::{Router, Routes};
 
     fn request(method: Method, path: &str) -> Request {
@@ -1812,6 +1869,10 @@ mod tests {
 
     async fn handle(router: &Router, request: Request) -> Response {
         router.handle(request).await
+    }
+
+    async fn panic_middleware(_request: Request, _next: Next) -> Response {
+        panic!("middleware panic must be converted before security headers are applied")
     }
 
     #[tokio::test]
@@ -2609,9 +2670,111 @@ mod tests {
             .with_middleware(NonceSecurityPolicy::default())
             .build()
             .unwrap();
-        let response = handle(&conflict, request(Method::GET, "/")).await;
+        let mut secure_conflict = request(Method::GET, "/");
+        secure_conflict
+            .extensions_mut()
+            .insert(EffectiveScheme(TransportScheme::Https));
+        let response = handle(&conflict, secure_conflict).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(response.body(), "Security policy conflict");
+        assert!(response.headers().contains_key("content-security-policy"));
+        assert!(response.headers().contains_key("strict-transport-security"));
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonce_policy_secures_short_circuits_and_xhtml_cache_boundaries() {
+        let rejected = Routes::new()
+            .get("/", |_request: Request| async { "unreachable" })
+            .with_middleware(NonceSecurityPolicy::default())
+            .with_middleware(HostAllowlist::new(["allowed.invalid"]))
+            .build()
+            .unwrap();
+        let mut secure = request(Method::GET, "/");
+        secure
+            .extensions_mut()
+            .insert(EffectiveScheme(TransportScheme::Https));
+        secure
+            .headers_mut()
+            .insert(header::HOST, HeaderValue::from_static("blocked.invalid"));
+        let response = handle(&rejected, secure).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().contains_key("content-security-policy"));
+        assert!(response.headers().contains_key("strict-transport-security"));
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+
+        let xhtml = Routes::new()
+            .get("/", |_request: Request| async {
+                Response::new(StatusCode::OK, "<html/>")
+                    .with_header(header::CONTENT_TYPE, "application/xhtml+xml; charset=utf-8")
+                    .unwrap()
+                    .with_header(header::CACHE_CONTROL, "public, max-age=60")
+                    .unwrap()
+                    .with_header(header::ETAG, "\"shared\"")
+                    .unwrap()
+            })
+            .with_middleware(NonceSecurityPolicy::default())
+            .build()
+            .unwrap();
+        let response = handle(&xhtml, request(Method::GET, "/")).await;
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert!(!response.headers().contains_key(header::ETAG));
+    }
+
+    #[tokio::test]
+    async fn nonce_policy_secures_downstream_middleware_panics() {
+        let router = Routes::new()
+            .get("/", |_request: Request| async { "unreachable" })
+            .with_middleware(NonceSecurityPolicy::default())
+            .with_middleware(middleware_fn(panic_middleware))
+            .build()
+            .unwrap();
+        let mut secure = request(Method::GET, "/");
+        secure
+            .extensions_mut()
+            .insert(EffectiveScheme(TransportScheme::Https));
+
+        let response = handle(&router, secure).await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.body(), "Internal Server Error");
+        assert!(response.headers().contains_key("content-security-policy"));
+        assert!(response.headers().contains_key("strict-transport-security"));
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    }
+
+    #[test]
+    fn nonce_policy_inherits_default_sources_without_broadening_them() {
+        let nonce = "0123456789abcdef";
+        let locked_down = render_nonced_policy("default-src 'none'", nonce).unwrap();
+        assert!(locked_down.contains("script-src 'nonce-0123456789abcdef'"));
+        assert!(locked_down.contains("style-src 'nonce-0123456789abcdef'"));
+        assert!(!locked_down.contains("script-src 'self'"));
+        assert!(!locked_down.contains("style-src 'self'"));
+
+        let cdn = render_nonced_policy("default-src https://cdn.invalid", nonce).unwrap();
+        assert!(cdn.contains("script-src https://cdn.invalid 'nonce-0123456789abcdef'"));
+        assert!(cdn.contains("style-src https://cdn.invalid 'nonce-0123456789abcdef'"));
+        assert!(!cdn.contains("script-src 'self'"));
+
+        let elements = render_nonced_policy(
+            "default-src 'self'; script-src-elem https://scripts.invalid; style-src-elem https://styles.invalid",
+            nonce,
+        )
+        .unwrap();
+        assert!(
+            elements.contains("script-src-elem https://scripts.invalid 'nonce-0123456789abcdef'")
+        );
+        assert!(
+            elements.contains("style-src-elem https://styles.invalid 'nonce-0123456789abcdef'")
+        );
     }
 
     #[test]
@@ -2619,7 +2782,9 @@ mod tests {
         for policy in [
             "",
             "script-src 'unsafe-inline'",
+            "script-src 'UnSaFe-InLiNe'",
             "script-src 'nonce-stale-value'",
+            "script-src 'NoNcE-stale-value'",
             "script-src 'self'; script-src https://cdn.invalid",
             "default-src 'self'\r\nx-injected: yes",
         ] {

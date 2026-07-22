@@ -143,12 +143,12 @@ impl RouteManifest {
 /// Request metadata retained while a handler converts its output into a response.
 ///
 /// This keeps request-aware response features such as CSP nonces and named-route
-/// manifests available even when the handler consumes the [`Request`]. Header
-/// values are intentionally excluded from `Debug` output.
+/// manifests available even when the handler consumes the [`Request`]. Sensitive
+/// request Header values are never retained.
 #[derive(Clone)]
 pub struct ResponseContext {
     uri: Uri,
-    headers: HeaderMap,
+    page_request: bool,
     csp_nonce: Option<CspNonce>,
     route_manifest: Option<RouteManifest>,
 }
@@ -158,7 +158,10 @@ impl ResponseContext {
     pub fn from_request(request: &Request) -> Self {
         Self {
             uri: request.uri().clone(),
-            headers: request.headers().clone(),
+            page_request: request
+                .headers()
+                .get("x-phoenix-page")
+                .is_some_and(|value| value == "1"),
             csp_nonce: request.extensions().get::<CspNonce>().cloned(),
             route_manifest: request.extensions().get::<RouteManifest>().cloned(),
         }
@@ -170,8 +173,8 @@ impl ResponseContext {
     }
 
     #[must_use]
-    pub const fn headers(&self) -> &HeaderMap {
-        &self.headers
+    pub const fn is_page_request(&self) -> bool {
+        self.page_request
     }
 
     #[must_use]
@@ -189,7 +192,8 @@ impl std::fmt::Debug for ResponseContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ResponseContext")
-            .field("uri", &self.uri)
+            .field("path", &self.uri.path())
+            .field("page_request", &self.page_request)
             .field("has_csp_nonce", &self.csp_nonce.is_some())
             .field("has_route_manifest", &self.route_manifest.is_some())
             .finish_non_exhaustive()
@@ -1572,6 +1576,24 @@ mod tests {
         ] {
             assert!(CspNonce::new(invalid).is_err());
         }
+
+        let mut request = Request::new(Method::GET, "/account?reset_token=secret".parse().unwrap());
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        request
+            .headers_mut()
+            .insert(header::COOKIE, HeaderValue::from_static("session=secret"));
+        request
+            .headers_mut()
+            .insert("x-phoenix-page", HeaderValue::from_static("1"));
+        let context = ResponseContext::from_request(&request);
+        let debug = format!("{context:?}");
+        assert!(context.is_page_request());
+        assert!(debug.contains("/account"));
+        assert!(!debug.contains("reset_token"));
+        assert!(!debug.contains("secret"));
     }
 
     impl FromMultipart for UploadInput {

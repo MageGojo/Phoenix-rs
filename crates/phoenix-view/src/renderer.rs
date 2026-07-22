@@ -226,25 +226,17 @@ impl NodeRenderer {
         let worker = self.next_worker();
         let request = RendererRequest::render(id, envelope.clone(), context);
         let _active = ActiveRequest::new(&self.inner.active);
-        let result = tokio::time::timeout(
-            self.inner.config.timeout,
-            self.render_on_worker(worker, &request),
-        )
-        .await;
-        match result {
-            Ok(Ok(rendered)) => {
+        match self.render_on_worker(worker, &request).await {
+            Ok(rendered) => {
                 self.inner.rendered.fetch_add(1, Ordering::Relaxed);
                 Ok(rendered)
             }
-            Ok(Err(error)) => {
+            Err(error) => {
+                if matches!(&error, RendererError::Timeout(_)) {
+                    self.inner.timeouts.fetch_add(1, Ordering::Relaxed);
+                }
                 self.inner.failures.fetch_add(1, Ordering::Relaxed);
                 Err(error)
-            }
-            Err(_) => {
-                self.inner.timeouts.fetch_add(1, Ordering::Relaxed);
-                self.inner.failures.fetch_add(1, Ordering::Relaxed);
-                self.reset_worker(worker).await;
-                Err(RendererError::Timeout(self.inner.config.timeout))
             }
         }
     }
@@ -268,27 +260,17 @@ impl NodeRenderer {
         let renderer = self.clone();
         tokio::spawn(async move {
             let _active = ActiveRequest::new(&renderer.inner.active);
-            let result = tokio::time::timeout(
-                renderer.inner.config.timeout,
-                renderer.stream_on_worker(worker, &request, &sender),
-            )
-            .await;
-            match result {
-                Ok(Ok(())) => {
+            match renderer.stream_on_worker(worker, &request, &sender).await {
+                Ok(()) => {
                     renderer.inner.rendered.fetch_add(1, Ordering::Relaxed);
                 }
-                Ok(Err(error)) => {
+                Err(RendererError::Cancelled) => {}
+                Err(error) => {
+                    if matches!(&error, RendererError::Timeout(_)) {
+                        renderer.inner.timeouts.fetch_add(1, Ordering::Relaxed);
+                    }
                     renderer.inner.failures.fetch_add(1, Ordering::Relaxed);
-                    renderer.reset_worker(worker).await;
                     let _ = sender.send(Err(error)).await;
-                }
-                Err(_) => {
-                    renderer.inner.timeouts.fetch_add(1, Ordering::Relaxed);
-                    renderer.inner.failures.fetch_add(1, Ordering::Relaxed);
-                    renderer.reset_worker(worker).await;
-                    let _ = sender
-                        .send(Err(RendererError::Timeout(renderer.inner.config.timeout)))
-                        .await;
                 }
             }
         });
@@ -345,27 +327,47 @@ impl NodeRenderer {
         worker: usize,
         request: &RendererRequest,
     ) -> Result<RenderResult, RendererError> {
-        let mut slot = self.inner.workers[worker].lock().await;
+        let deadline = tokio::time::Instant::now() + self.inner.config.timeout;
+        let mut slot = tokio::time::timeout_at(deadline, self.inner.workers[worker].lock())
+            .await
+            .map_err(|_| RendererError::Timeout(self.inner.config.timeout))?;
         for attempt in 0..2 {
             self.ensure_running()?;
             if slot.is_none() {
-                *slot = Some(RendererProcess::start(&self.inner.config).await?);
+                let process =
+                    tokio::time::timeout_at(deadline, RendererProcess::start(&self.inner.config))
+                        .await
+                        .map_err(|_| RendererError::Timeout(self.inner.config.timeout))??;
+                *slot = Some(process);
                 self.inner.ready.fetch_add(1, Ordering::Relaxed);
             }
-            let response = slot
-                .as_mut()
-                .expect("renderer process was initialized")
-                .exchange(request)
-                .await;
+            let response = tokio::time::timeout_at(
+                deadline,
+                slot.as_mut()
+                    .expect("renderer process was initialized")
+                    .exchange(request),
+            )
+            .await;
             match response {
-                Ok(response) => return response.into_render_result(request.id),
-                Err(error) if attempt == 0 => {
-                    slot.take();
-                    self.inner.ready.fetch_sub(1, Ordering::Relaxed);
-                    self.inner.restarts.fetch_add(1, Ordering::Relaxed);
-                    let _ = error;
+                Ok(Ok(response)) => {
+                    let result = response.into_render_result(request.id);
+                    if matches!(&result, Err(RendererError::ProtocolMismatch { .. })) {
+                        self.discard_worker(&mut slot);
+                    }
+                    return result;
                 }
-                Err(error) => return Err(error),
+                Ok(Err(_)) if attempt == 0 => {
+                    self.discard_worker(&mut slot);
+                    self.inner.restarts.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(Err(error)) => {
+                    self.discard_worker(&mut slot);
+                    return Err(error);
+                }
+                Err(_) => {
+                    self.discard_worker(&mut slot);
+                    return Err(RendererError::Timeout(self.inner.config.timeout));
+                }
             }
         }
         unreachable!("renderer retry loop always returns")
@@ -377,20 +379,49 @@ impl NodeRenderer {
         request: &RendererRequest,
         sender: &mpsc::Sender<Result<RenderFrame, RendererError>>,
     ) -> Result<(), RendererError> {
-        let mut slot = self.inner.workers[worker].lock().await;
+        let deadline = tokio::time::Instant::now() + self.inner.config.timeout;
+        let mut slot = tokio::select! {
+            () = sender.closed() => return Err(RendererError::Cancelled),
+            result = tokio::time::timeout_at(deadline, self.inner.workers[worker].lock()) => {
+                result.map_err(|_| RendererError::Timeout(self.inner.config.timeout))?
+            }
+        };
+        if sender.is_closed() {
+            return Err(RendererError::Cancelled);
+        }
         self.ensure_running()?;
         if slot.is_none() {
-            *slot = Some(RendererProcess::start(&self.inner.config).await?);
+            let process = tokio::select! {
+                () = sender.closed() => return Err(RendererError::Cancelled),
+                result = tokio::time::timeout_at(
+                    deadline,
+                    RendererProcess::start(&self.inner.config),
+                ) => result.map_err(|_| RendererError::Timeout(self.inner.config.timeout))??,
+            };
+            *slot = Some(process);
             self.inner.ready.fetch_add(1, Ordering::Relaxed);
         }
-        slot.as_mut()
-            .expect("renderer process was initialized")
-            .stream_exchange(request, sender)
-            .await
+        let result = tokio::time::timeout_at(
+            deadline,
+            slot.as_mut()
+                .expect("renderer process was initialized")
+                .stream_exchange(request, sender),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.discard_worker(&mut slot);
+                Err(error)
+            }
+            Err(_) => {
+                self.discard_worker(&mut slot);
+                Err(RendererError::Timeout(self.inner.config.timeout))
+            }
+        }
     }
 
-    async fn reset_worker(&self, worker: usize) {
-        let mut slot = self.inner.workers[worker].lock().await;
+    fn discard_worker(&self, slot: &mut Option<RendererProcess>) {
         if slot.take().is_some() {
             self.inner.ready.fetch_sub(1, Ordering::Relaxed);
         }
@@ -544,26 +575,40 @@ impl RendererProcess {
         request: &RendererRequest,
         sender: &mpsc::Sender<Result<RenderFrame, RendererError>>,
     ) -> Result<(), RendererError> {
-        self.write(request).await?;
+        tokio::select! {
+            () = sender.closed() => return Err(RendererError::Cancelled),
+            result = self.write(request) => result?,
+        }
         loop {
-            let response = self.read_response().await?;
+            let response = tokio::select! {
+                () = sender.closed() => return Err(RendererError::Cancelled),
+                response = self.read_response() => response?,
+            };
             response.verify_protocol(request.id)?;
             match response.kind.as_deref() {
                 Some("chunk") => {
-                    let _ = sender
-                        .send(Ok(RenderFrame::Chunk(response.chunk.unwrap_or_default())))
-                        .await;
+                    if !response.ok {
+                        return Err(response.rejection());
+                    }
+                    let chunk = response.chunk.ok_or_else(|| {
+                        RendererError::InvalidStreamFrame("chunk payload is missing".to_owned())
+                    })?;
+                    sender
+                        .send(Ok(RenderFrame::Chunk(chunk)))
+                        .await
+                        .map_err(|_| RendererError::Cancelled)?;
                 }
                 Some("complete") => {
                     if !response.ok {
                         return Err(response.rejection());
                     }
-                    let _ = sender
+                    sender
                         .send(Ok(RenderFrame::Complete {
                             head: response.head,
                             islands: response.islands,
                         }))
-                        .await;
+                        .await
+                        .map_err(|_| RendererError::Cancelled)?;
                     return Ok(());
                 }
                 Some("error") => return Err(response.rejection()),
@@ -757,6 +802,8 @@ pub enum RendererError {
     },
     #[error("SSR renderer returned an invalid streaming frame: {0}")]
     InvalidStreamFrame(String),
+    #[error("SSR renderer stream was cancelled by the response consumer")]
+    Cancelled,
     #[error("SSR renderer rejected the page: {0}")]
     Rejected(String),
     #[error("SSR renderer exceeded its {0:?} deadline")]
@@ -1017,6 +1064,240 @@ mod tests {
             RenderFrame::Complete { islands, .. } if islands.len() == 1
         ));
         assert!(stream.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn rejects_failed_or_incomplete_chunk_frames() {
+        for frame in [
+            r"{protocol: 2, id: request.id, ok: false, kind: 'chunk', error: 'failed'}",
+            r"{protocol: 2, id: request.id, ok: true, kind: 'chunk'}",
+        ] {
+            let source = format!(
+                r"
+                  const readline = require('node:readline');
+                  readline.createInterface({{input: process.stdin}}).on('line', line => {{
+                    const request = JSON.parse(line);
+                    if (request.kind === 'hello') {{
+                      console.log(JSON.stringify({{protocol: 2, id: request.id, ok: true}})); return;
+                    }}
+                    console.log(JSON.stringify({frame}));
+                  }});
+                "
+            );
+            let renderer = NodeRenderer::new(node_fixture(&source));
+            let mut stream = renderer
+                .render_stream(
+                    &PageEnvelope::new_for_test(json!({})),
+                    &RenderContext::new("/invalid-frame"),
+                )
+                .unwrap();
+
+            assert!(stream.recv().await.unwrap().is_err());
+            assert!(stream.recv().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_stream_cancels_and_recycles_its_worker() {
+        let source = r"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.kind === 'hello') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true}));
+            }
+          });
+        ";
+        let renderer =
+            NodeRenderer::new(node_fixture(source).with_timeout(Duration::from_secs(30)));
+        renderer.warm_up().await.unwrap();
+        let stream = renderer
+            .render_stream(
+                &PageEnvelope::new_for_test(json!({})),
+                &RenderContext::new("/cancelled"),
+            )
+            .unwrap();
+
+        let active_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests == 0 {
+            assert!(
+                Instant::now() < active_deadline,
+                "stream never became active"
+            );
+            tokio::task::yield_now().await;
+        }
+        drop(stream);
+
+        let cancelled_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let health = renderer.health();
+            if health.active_requests == 0 && health.ready_workers == 0 {
+                assert_eq!(health.failures, 0);
+                break;
+            }
+            assert!(
+                Instant::now() < cancelled_deadline,
+                "cancelled stream retained a renderer worker: {health:?}"
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_cannot_poison_or_reset_a_queued_request() {
+        let source = r"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.kind === 'hello') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true})); return;
+            }
+            if (request.url === '/first') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
+                kind: 'chunk', chunk: '<p>first</p>'})); return;
+            }
+            if (request.url === '/second') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
+                kind: 'chunk', chunk: '<p>second</p>'}));
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
+                kind: 'complete', head: [], islands: []}));
+            }
+          });
+        ";
+        let renderer = NodeRenderer::new(
+            node_fixture(source)
+                .with_workers(1)
+                .with_timeout(Duration::from_secs(5)),
+        );
+        renderer.warm_up().await.unwrap();
+        let mut first = renderer
+            .render_stream(
+                &PageEnvelope::new_for_test(json!({})),
+                &RenderContext::new("/first"),
+            )
+            .unwrap();
+        assert_eq!(
+            first.recv().await.unwrap().unwrap(),
+            RenderFrame::Chunk("<p>first</p>".to_owned())
+        );
+        let mut second = renderer
+            .render_stream(
+                &PageEnvelope::new_for_test(json!({})),
+                &RenderContext::new("/second"),
+            )
+            .unwrap();
+
+        let queued_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests < 2 {
+            assert!(
+                Instant::now() < queued_deadline,
+                "second request never queued"
+            );
+            tokio::task::yield_now().await;
+        }
+        drop(first);
+
+        let chunk = tokio::time::timeout(Duration::from_secs(2), second.recv())
+            .await
+            .expect("queued request timed out")
+            .expect("queued stream closed")
+            .expect("queued render failed");
+        assert_eq!(chunk, RenderFrame::Chunk("<p>second</p>".to_owned()));
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), second.recv())
+                .await
+                .expect("completion timed out")
+                .expect("queued stream closed")
+                .expect("queued render failed"),
+            RenderFrame::Complete { .. }
+        ));
+        assert!(second.recv().await.is_none());
+
+        let idle_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests != 0 {
+            assert!(
+                Instant::now() < idle_deadline,
+                "requests did not become idle"
+            );
+            tokio::task::yield_now().await;
+        }
+        let health = renderer.health();
+        assert_eq!(health.ready_workers, 1);
+        assert_eq!(health.rendered_requests, 1);
+        assert_eq!(health.failures, 0);
+        renderer.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_disconnected_queued_stream_cancels_without_touching_the_worker() {
+        let source = r"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.kind === 'hello') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true})); return;
+            }
+            if (request.url === '/active') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
+                kind: 'chunk', chunk: '<p>active</p>'}));
+            }
+          });
+        ";
+        let renderer = NodeRenderer::new(
+            node_fixture(source)
+                .with_workers(1)
+                .with_timeout(Duration::from_secs(30)),
+        );
+        renderer.warm_up().await.unwrap();
+        let mut active = renderer
+            .render_stream(
+                &PageEnvelope::new_for_test(json!({})),
+                &RenderContext::new("/active"),
+            )
+            .unwrap();
+        assert_eq!(
+            active.recv().await.unwrap().unwrap(),
+            RenderFrame::Chunk("<p>active</p>".to_owned())
+        );
+        let queued = renderer
+            .render_stream(
+                &PageEnvelope::new_for_test(json!({})),
+                &RenderContext::new("/queued"),
+            )
+            .unwrap();
+        let queued_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests < 2 {
+            assert!(
+                Instant::now() < queued_deadline,
+                "second request never queued"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        drop(queued);
+        let cancelled_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests != 1 {
+            assert!(
+                Instant::now() < cancelled_deadline,
+                "queued cancellation did not propagate"
+            );
+            tokio::task::yield_now().await;
+        }
+        let health = renderer.health();
+        assert_eq!(health.ready_workers, 1);
+        assert_eq!(health.failures, 0);
+        assert_eq!(health.timeouts, 0);
+
+        drop(active);
+        let idle_deadline = Instant::now() + Duration::from_secs(1);
+        while renderer.health().active_requests != 0 {
+            assert!(
+                Instant::now() < idle_deadline,
+                "active stream did not cancel"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(renderer.health().ready_workers, 0);
     }
 
     #[tokio::test]

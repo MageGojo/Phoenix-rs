@@ -106,4 +106,13 @@ describe("Phoenix React server renderer", () => {
     expect(html).toContain("ready");
     expect(html).toContain(`nonce="${nonce}"`);
   });
+
+  it("rejects invalid nonces through the public streaming API", async () => {
+    await expect(streamPage(
+      baseEnvelope,
+      pages,
+      () => undefined,
+      "not a nonce",
+    )).rejects.toThrow("invalid CSP nonce");
+  });
 });

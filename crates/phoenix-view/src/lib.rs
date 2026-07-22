@@ -450,8 +450,7 @@ impl Page {
                         b"<!-- Phoenix SSR stream interrupted -->",
                     ))
                     .await;
-            }
-            if let Ok(suffix) = document_suffix(&envelope, &script_src, nonce.as_ref()) {
+            } else if let Ok(suffix) = document_suffix(&envelope, &script_src, nonce.as_ref()) {
                 let _ = sender.send(Bytes::from(suffix)).await;
             }
         });
@@ -548,7 +547,7 @@ impl Page {
         if let Some(manifest) = context.route_manifest() {
             self.envelope.routes.clone_from(manifest.routes());
         }
-        if Self::is_page_request(context.headers()) {
+        if context.is_page_request() {
             return protocol_response(&self.envelope, codec);
         }
         document_response(
@@ -1229,6 +1228,42 @@ mod tests {
         )));
         assert!(html.contains("\"component\":\"counter\""));
         assert!(html.find("<h1").unwrap() < html.find("phoenix-page").unwrap());
+    }
+
+    #[tokio::test]
+    async fn renderer_startup_failure_never_emits_executable_stream_suffix() {
+        let renderer = NodeRenderer::new(RendererConfig::command(
+            "/definitely/missing/phoenix-renderer",
+            std::iter::empty::<OsString>(),
+        ));
+        let nonce = CspNonce::new("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let mut request = Request::new(Method::GET, "/stream".parse().unwrap());
+        request.extensions_mut().insert(nonce.clone());
+        let response = Page::new("test/page", json!({ "ready": true }))
+            .ssr()
+            .respond_streaming_with_renderer(&request, &renderer);
+        let (_, _, body) = response.into_parts();
+        let ResponseBody::Stream(stream) = body else {
+            panic!("expected streaming body");
+        };
+        let html = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .fold(Vec::new(), |mut output, chunk| {
+                output.extend_from_slice(&chunk);
+                output
+            });
+        let html = String::from_utf8(html).unwrap();
+
+        assert!(html.contains("Phoenix SSR stream interrupted"));
+        assert!(html.contains(&format!(
+            "<meta property=\"csp-nonce\" nonce=\"{}\">",
+            nonce.as_str()
+        )));
+        assert!(!html.contains("id=\"phoenix-page\""));
+        assert!(!html.contains("<script"));
     }
 
     #[test]

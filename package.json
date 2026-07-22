@@ -1,6 +1,9 @@
 {
   "name": "phoenix-workspace",
   "private": true,
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "workspaces": [
     "packages/*",
     "examples/blog"
@@ -8,6 +11,7 @@
   "scripts": {
     "build:react": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr && npm run build -w @phoenix/vite",
     "build:ssr": "npm run build:react && npm run build:ssr -w phoenix-blog-react-example",
+    "test:e2e:ssr-csp": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr && cargo test --locked -p phoenix-view --test react_ssr_csp -- --ignored",
     "test:react": "npm run test -w @phoenix/react && npm run test -w @phoenix/react-ssr && npm run test -w @phoenix/vite && npm run test -w phoenix-blog-react-example",
     "typecheck:example": "npm run typecheck -w phoenix-blog-react-example"
   },

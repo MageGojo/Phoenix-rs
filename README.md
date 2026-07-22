@@ -147,6 +147,7 @@ npm run build:client -w phoenix-blog-react-example
 npm run build:ssr -w phoenix-blog-react-example
 npm run typecheck:example
 npm run test:react
+npm run test:e2e:ssr-csp
 ```
 
 ## 仓库结构

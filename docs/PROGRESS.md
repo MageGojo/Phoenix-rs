@@ -264,7 +264,8 @@
 - Renderer protocol 从 v1 升到 v2，旧 worker 明确失败；同一常驻 worker 的连续请求测试证明 nonce 不串线。SPA/SSR 页面协议请求直接返回 JSON，Islands 仍调用 renderer 收集实际 island 描述。
 - 带 nonce 的 HTML/流式响应固定为 `Cache-Control: private, no-store` 并移除验证器，JSON/API 缓存策略保持不变。
 - `examples/blog` 与 `px new` 脚手架默认按 debug/release 装配开发/生产 nonce policy；Vite 插件明确不生成构建期静态 nonce。
-- 目标 crate 测试、严格 Clippy、React SSR/Vite 测试和 TypeScript build 已通过；全仓门禁在本检查点提交前执行。
+- 独立审计后补齐大小写 CSP 关键字校验、`default-src`/element directive nonce、短路与 panic 错误安全头、XHTML no-store、ResponseContext query/Header 脱敏、流式失败关闭和 chunk 帧校验。取消/超时会在同一 worker 锁内原子作废进程；排队请求回归证明不会复用残留帧或被前序 reset 误杀。
+- `cargo test --workspace --locked`、全目标严格 Clippy、Rustfmt、React/SSR/Vite/博客测试、示例类型检查、三包与 client/SSR 生产构建全部通过。`npm run test:e2e:ssr-csp` 另行真实覆盖 Rust renderer v2 → 官方 `startRenderer` → React Suspense recovery script → CSP/meta/hydration/module 同 nonce。
 
 ## 2026-07-23：用途隔离的 HMAC 盲索引
 

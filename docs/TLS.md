@@ -62,9 +62,9 @@ async fn inspect(request: Request) -> String {
 ```rust
 let routes = routes
     .with_middleware(TrustedProxies::new(trusted_proxy_ips))
+    .with_middleware(SecurityPolicy::default())
     .with_middleware(HostAllowlist::new(["APP_HOST"]))
-    .with_middleware(HttpsRedirect::new("APP_HOST")?)
-    .with_middleware(SecurityPolicy::default());
+    .with_middleware(HttpsRedirect::new("APP_HOST")?);
 ```
 
 `TrustedProxies` 只有在直连 TCP peer 位于显式 allowlist 时才读取 `X-Forwarded-Proto`。未受信客户端自行发送 `X-Forwarded-Proto: https` 仍被视为 HTTP。
