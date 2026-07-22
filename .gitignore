@@ -1,0 +1,19 @@
+/target/
+**/node_modules/
+**/dist/
+**/.vite/
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.sqlite3
+.DS_Store
+
+# Runtime data
+examples/*/storage/*
+!examples/*/storage/.gitkeep
+!examples/*/storage/cache/
+!examples/*/storage/logs/
+!examples/*/storage/cache/.gitkeep
+!examples/*/storage/logs/.gitkeep
