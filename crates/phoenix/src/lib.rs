@@ -8,7 +8,7 @@ pub mod prelude {
     pub use phoenix_core::{Application, Server, ServerError, ServerHandle};
     pub use phoenix_http::{
         BoxFuture, Handler, IntoResponse, Json, JsonRejection, Method, Middleware, Next, Request,
-        Response, SecurityHeaders, StatusCode, Uri, middleware_fn,
+        Response, RouteManifest, SecurityHeaders, StatusCode, Uri, middleware_fn,
     };
     pub use phoenix_routing::{RouteBuildError, RouteGroup, Router, Routes, UrlGenerationError};
     pub use phoenix_validation::{

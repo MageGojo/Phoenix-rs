@@ -1,10 +1,13 @@
 // Controllers keep async signatures so database calls can be added without changing routes.
 #![allow(clippy::unused_async)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use phoenix::prelude::{
-    IntoResponse, Island, Json, NodeRenderer, Page, RenderContext, RenderMode, Request, Response,
+    IntoResponse, Json, NodeRenderer, Page, RenderContext, RenderMode, Request, Response,
     StatusCode,
 };
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::{middleware::AuthorizedAdmin, requests::registration_validator};
@@ -74,6 +77,53 @@ impl AdminController {
 
 pub struct ReactController;
 
+static NEXT_MEMBER_ID: AtomicUsize = AtomicUsize::new(101);
+
+#[derive(Deserialize)]
+struct CreateMemberInput {
+    name: String,
+}
+
+pub struct MemberController;
+
+impl MemberController {
+    pub async fn store(request: Request) -> Response {
+        let input = match request.json::<CreateMemberInput>() {
+            Ok(input) => input,
+            Err(error) => return error.into_response(),
+        };
+        let name = input.name.trim();
+        if name.is_empty() || name.chars().count() > 40 {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "message": "成员姓名必须为 1 到 40 个字符。",
+                    "errors": { "name": ["成员姓名必须为 1 到 40 个字符。"] }
+                })),
+            )
+                .into_response();
+        }
+
+        let id = NEXT_MEMBER_ID.fetch_add(1, Ordering::Relaxed);
+        (
+            StatusCode::CREATED,
+            Json(json!({
+                "id": id,
+                "name": name,
+                "email": format!("rust{id}@example.test"),
+                "city": "Rust 服务端",
+                "role": "新成员",
+                "status": "active",
+                "projects": 0,
+                "joinedOn": "2026-07-22",
+                "lastActiveMinutes": 0,
+                "createdBy": "Rust"
+            })),
+        )
+            .into_response()
+    }
+}
+
 impl ReactController {
     pub async fn islands(request: Request) -> Response {
         article_page().respond_to(&request, None).into_response()
@@ -105,11 +155,7 @@ impl ReactController {
             }),
         )
         .islands()
-        .island(Island::new(
-            "member-directory",
-            "member-directory",
-            island_props,
-        ))
+        .island("member-directory", island_props)
         .script_src(members_islands_entry());
         render_server_page(page, &request, &renderer).await
     }
@@ -196,12 +242,8 @@ fn article_page() -> Page {
         }),
     )
     .script_src(frontend_entry())
-    .island(Island::new(
-        "article-like",
-        "like-button",
-        json!({ "initialLikes": 7 }),
-    ))
+    .island("like-button", json!({ "initialLikes": 7 }))
     .trusted_server_html(
-        "<main><article><h1>React meets Phoenix</h1><p>One controller contract, three rendering modes.</p></article><div data-phoenix-island=\"article-like\" data-component=\"like-button\"><button>7 likes</button></div></main>",
+        "<main><article><h1>React meets Phoenix</h1><p>One controller contract, three rendering modes.</p></article><div data-phoenix-island=\"like-button\" data-component=\"like-button\"><button>7 likes</button></div></main>",
     )
 }

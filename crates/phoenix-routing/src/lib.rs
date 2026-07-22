@@ -4,7 +4,9 @@ use bytes::Bytes;
 use futures_util::FutureExt;
 use http::{HeaderValue, Method, StatusCode};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
-use phoenix_http::{Handler, IntoResponse, Middleware, Request, Response, apply_middleware};
+use phoenix_http::{
+    Handler, IntoResponse, Middleware, Request, Response, RouteManifest, apply_middleware,
+};
 use thiserror::Error;
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
@@ -208,7 +210,7 @@ impl Routes {
 
         Ok(Router {
             handler: Arc::new(PanicBoundary { next: handler }),
-            named_routes,
+            named_routes: Arc::new(named_routes),
         })
     }
 }
@@ -251,7 +253,7 @@ impl RouteGroup {
 #[derive(Clone)]
 pub struct Router {
     handler: Arc<dyn Handler>,
-    named_routes: HashMap<String, String>,
+    named_routes: Arc<HashMap<String, String>>,
 }
 
 impl fmt::Debug for Router {
@@ -264,7 +266,10 @@ impl fmt::Debug for Router {
 }
 
 impl Router {
-    pub async fn handle(&self, request: Request) -> Response {
+    pub async fn handle(&self, mut request: Request) -> Response {
+        request
+            .extensions_mut()
+            .insert(RouteManifest::new(Arc::clone(&self.named_routes)));
         self.handler.call(request).await
     }
 

@@ -85,3 +85,47 @@ async fn registration_controller_rejects_missing_content_type_and_invalid_json()
         serde_json::from_slice(response.body()).expect("error should be JSON");
     assert_eq!(json["message"], "The request body contains invalid JSON.");
 }
+
+#[tokio::test]
+async fn member_controller_creates_a_server_owned_member_from_input() {
+    let application = phoenix_blog_example::application().expect("routes should build");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let request = Request::from_parts(
+        Method::POST,
+        Uri::from_static("/api/members"),
+        headers,
+        Bytes::from(r#"{"name":"Rust 新成员"}"#),
+    );
+
+    let response = application.handle(request).await;
+    let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(body["name"], "Rust 新成员");
+    assert_eq!(body["createdBy"], "Rust");
+    assert_eq!(body["city"], "Rust 服务端");
+    assert!(body["email"].as_str().unwrap().starts_with("rust"));
+}
+
+#[tokio::test]
+async fn member_controller_rejects_an_empty_name() {
+    let application = phoenix_blog_example::application().expect("routes should build");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let request = Request::from_parts(
+        Method::POST,
+        Uri::from_static("/api/members"),
+        headers,
+        Bytes::from_static(br#"{"name":"  "}"#),
+    );
+
+    let response = application.handle(request).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

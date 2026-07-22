@@ -35,6 +35,18 @@ export default function Show({ user }: UserShowProps) {
 }
 ```
 
+React 调用 Rust action 时使用后端路由名，不写死 URL。框架会把 Rust 命名路由表自动注入页面协议：
+
+```rust
+Routes::new()
+    .post("/api/members", MemberController::store)
+    .name("members.store");
+```
+
+```tsx
+const member = await callRust<Member>("members.store", { name });
+```
+
 ## 当前状态
 
 当前已实现第一版底层垂直切片：
@@ -82,7 +94,7 @@ npm run dev -w phoenix-blog-react-example
 cargo run -p phoenix-blog-example
 ```
 
-`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条假数据由 Rust 生成；常驻 Node renderer 输出完整首屏 HTML，浏览器只加载成员目录 island，接管动态添加、搜索、筛选、排序和分页。
+`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条初始数据由 Rust 生成；常驻 Node renderer 输出完整首屏 HTML，浏览器只加载成员目录 island。新增成员通过命名路由 `members.store` 调用 Rust 接口，搜索、筛选、排序和分页继续在 island 内交互。
 
 运行完整检查：
 

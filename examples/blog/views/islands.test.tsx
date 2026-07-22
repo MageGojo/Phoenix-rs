@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startPhoenix, type PageEnvelope } from "@phoenix/react";
 import { renderPage } from "@phoenix/react-ssr";
@@ -24,7 +24,28 @@ const members: Member[] = [{
 }];
 
 describe("member directory island", () => {
-  it("hydrates only its root and adds a browser-side member", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("hydrates only its root and adds a member through Rust", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      id: 101,
+      name: "岛屿测试成员",
+      email: "rust101@example.test",
+      city: "Rust 服务端",
+      role: "新成员",
+      status: "active",
+      projects: 0,
+      joinedOn: "2026-07-22",
+      lastActiveMinutes: 0,
+      createdBy: "Rust",
+    }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
     const envelope: PageEnvelope = {
       protocol: 1,
       render_mode: "islands",
@@ -36,6 +57,7 @@ describe("member directory island", () => {
       contract_hash: null,
       asset_version: null,
       request_id: null,
+      routes: { "members.store": "/api/members" },
       islands: [{
         id: "member-directory",
         component: "member-directory",
@@ -50,8 +72,7 @@ describe("member directory island", () => {
 
     await act(async () => {
       startPhoenix({
-        pages: { "members/index": MembersIndex },
-        islands: { "member-directory": MemberDirectory },
+        islands: [MemberDirectory],
       });
     });
 
@@ -75,8 +96,13 @@ describe("member directory island", () => {
       form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     });
 
-    expect(document.body.textContent).toContain("已添加 岛屿测试成员");
-    expect(document.body.textContent).toContain("island2@example.test");
+    expect(fetchMock).toHaveBeenCalledWith("/api/members", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ name: "岛屿测试成员" }),
+    });
+    expect(document.body.textContent).toContain("Rust 已创建 岛屿测试成员");
+    expect(document.body.textContent).toContain("rust101@example.test");
     expect(document.body.textContent).toContain("当前共 2 条记录");
   });
 });

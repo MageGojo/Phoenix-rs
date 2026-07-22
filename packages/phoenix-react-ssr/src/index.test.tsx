@@ -15,6 +15,7 @@ const baseEnvelope: PageEnvelope = {
   contract_hash: null,
   asset_version: null,
   request_id: null,
+  routes: {},
   islands: [],
 };
 

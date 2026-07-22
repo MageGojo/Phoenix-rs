@@ -19,8 +19,9 @@ const envelope: PageEnvelope = {
   contract_hash: null,
   asset_version: null,
   request_id: null,
+  routes: {},
   islands: [
-    { id: "article-like", component: "like-button", props: { initialLikes: 7 } },
+    { id: "like-button", component: "like-button", props: { initialLikes: 7 } },
   ],
 };
 
@@ -32,7 +33,7 @@ describe("blog React case", () => {
     );
 
     expect(result.html).toContain("React meets Phoenix");
-    expect(result.html).toContain('data-phoenix-island="article-like"');
+    expect(result.html).toContain('data-phoenix-island="like-button"');
   });
 
   it("keeps the SPA server shell empty", () => {

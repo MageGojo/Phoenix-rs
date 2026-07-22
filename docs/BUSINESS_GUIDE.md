@@ -617,7 +617,7 @@ let response = Response::text("created")
 后端只传页面名和业务 props，不为三种渲染模式分别设计 API：
 
 ```rust
-use phoenix::prelude::{Island, Page, Request, Response};
+use phoenix::prelude::{Page, Request, Response};
 use serde_json::json;
 
 pub async fn show(request: Request) -> Response {
@@ -628,11 +628,7 @@ pub async fn show(request: Request) -> Response {
             "summary": "One controller contract, three rendering modes."
         }),
     )
-    .island(Island::new(
-        "article-like",
-        "like-button",
-        json!({ "initialLikes": 7 }),
-    ))
+    .island("like-button", json!({ "initialLikes": 7 }))
     .respond_to(&request, None)
     .into_response()
 }
@@ -656,7 +652,7 @@ Page::new("docs/show", props); // Islands
 import { island } from "@phoenix/react";
 import LikeButton from "../../islands/like-button.js";
 
-const LikeButtonIsland = island("like-button", LikeButton);
+const LikeButtonIsland = island(LikeButton);
 
 export default function ArticleShow({ title, summary }: ArticleShowProps) {
   return (
@@ -665,7 +661,7 @@ export default function ArticleShow({ title, summary }: ArticleShowProps) {
         <h1>{title}</h1>
         <p>{summary}</p>
       </article>
-      <LikeButtonIsland islandId="article-like" initialLikes={7} />
+      <LikeButtonIsland initialLikes={7} />
     </main>
   );
 }
@@ -677,12 +673,29 @@ export default function ArticleShow({ title, summary }: ArticleShowProps) {
 import { startPhoenix } from "@phoenix/react";
 
 startPhoenix({
-  pages: { "articles/show": ArticleShow },
-  islands: { "like-button": LikeButton },
+  islands: [LikeButton],
 });
 ```
 
-启动器按 `render_mode` 执行：SPA 使用 `createRoot`，SSR 使用整页 `hydrateRoot`，Islands 只对 `PageEnvelope.islands` 中的节点调用 `hydrateRoot`。当前注册表需要手写；后续由 `phoenix-vite` 根据目录自动生成。
+组件名会自动从 `LikeButton` 转换为 `like-button`。只有同一组件需要多个实例 ID 时，才使用 Rust 的 `.island_with_id(...)` 和 React 的 `islandId`。启动器按 `render_mode` 执行：SPA 使用 `createRoot`，SSR 使用整页 `hydrateRoot`，Islands 只对 `PageEnvelope.islands` 中的节点调用 `hydrateRoot`。当前组件列表仍需导入；后续由 `phoenix-vite` 根据目录自动发现。
+
+### 从 React 调用 Rust action
+
+先在 Rust 路由上设置稳定名称：
+
+```rust
+Routes::new()
+    .post("/api/members", MemberController::store)
+    .name("members.store")
+```
+
+React 只传路由名和输入数据：
+
+```tsx
+const member = await callRust<Member>("members.store", { name });
+```
+
+框架会把 Rust 命名路由表自动加入 `PageEnvelope.routes`，`callRust` 将 `members.store` 解析为当前后端路径并发送 JSON POST。它是标准化的 HTTP 传输层，不是在浏览器进程里直接执行 Rust；校验、ID 分配和返回数据仍由 Rust 控制器负责。
 
 ### 服务端 React HTML
 

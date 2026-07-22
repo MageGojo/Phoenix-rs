@@ -3,10 +3,15 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use phoenix_http::{HeaderValue, IntoResponse, Request, Response, StatusCode, header};
+use phoenix_http::{
+    HeaderValue, IntoResponse, Request, Response, RouteManifest, StatusCode, header,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 
 mod renderer;
@@ -46,7 +51,21 @@ pub struct Island {
 
 impl Island {
     #[must_use]
-    pub fn new(id: impl Into<String>, component: impl Into<String>, props: impl Serialize) -> Self {
+    pub fn new(component: impl Into<String>, props: impl Serialize) -> Self {
+        let component = component.into();
+        Self {
+            id: component.clone(),
+            component,
+            props: serde_json::to_value(props).unwrap_or(Value::Null),
+        }
+    }
+
+    #[must_use]
+    pub fn with_id(
+        id: impl Into<String>,
+        component: impl Into<String>,
+        props: impl Serialize,
+    ) -> Self {
         Self {
             id: id.into(),
             component: component.into(),
@@ -67,6 +86,7 @@ pub struct PageEnvelope {
     pub contract_hash: Option<String>,
     pub asset_version: Option<String>,
     pub request_id: Option<String>,
+    pub routes: HashMap<String, String>,
     pub islands: Vec<Island>,
 }
 
@@ -84,6 +104,7 @@ impl PageEnvelope {
             contract_hash: None,
             asset_version: None,
             request_id: None,
+            routes: HashMap::new(),
             islands: Vec::new(),
         }
     }
@@ -111,6 +132,7 @@ impl Page {
                 contract_hash: None,
                 asset_version: None,
                 request_id: None,
+                routes: HashMap::new(),
                 islands: Vec::new(),
             },
             server_html: None,
@@ -176,8 +198,21 @@ impl Page {
     }
 
     #[must_use]
-    pub fn island(mut self, island: Island) -> Self {
-        self.envelope.islands.push(island);
+    pub fn island(mut self, component: impl Into<String>, props: impl Serialize) -> Self {
+        self.envelope.islands.push(Island::new(component, props));
+        self
+    }
+
+    #[must_use]
+    pub fn island_with_id(
+        mut self,
+        id: impl Into<String>,
+        component: impl Into<String>,
+        props: impl Serialize,
+    ) -> Self {
+        self.envelope
+            .islands
+            .push(Island::with_id(id, component, props));
         self
     }
 
@@ -201,10 +236,13 @@ impl Page {
     ///
     /// Returns an error if serialization or the selected codec fails.
     pub fn respond_to(
-        self,
+        mut self,
         request: &Request,
         codec: Option<&dyn PayloadCodec>,
     ) -> Result<Response, PageResponseError> {
+        if let Some(manifest) = request.extensions().get::<RouteManifest>() {
+            self.envelope.routes.clone_from(manifest.routes());
+        }
         let page_request = Self::is_page_request(request.headers());
         self.respond(page_request, codec)
     }

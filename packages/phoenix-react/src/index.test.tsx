@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   createAes256GcmDecryptor,
+  callRust,
   fetchPage,
   island,
+  RustCallError,
   type EncryptedPayload,
   type PageEnvelope,
 } from "./index.js";
@@ -18,6 +20,55 @@ describe("Phoenix React client", () => {
 
     expect(renderToString(createElement(CounterIsland, { islandId: "counter-7", count: 7 })))
       .toContain('data-phoenix-island="counter-7"');
+  });
+
+  it("derives the island name from a named React component", () => {
+    function MemberDirectory({ count }: { count: number }) {
+      return createElement("button", null, count);
+    }
+    const MemberDirectoryIsland = island(MemberDirectory);
+
+    expect(renderToString(createElement(MemberDirectoryIsland, { count: 7 })))
+      .toContain('data-phoenix-island="member-directory"');
+  });
+
+  it("posts input to a Rust action and returns its JSON result", async () => {
+    installRoutes({ "members.store": "/api/members" });
+    const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
+      expect(url).toBe("/api/members");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+      expect(init?.body).toBe(JSON.stringify({ name: "Lin" }));
+      return new Response(JSON.stringify({ id: 101, name: "Lin" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await expect(callRust<{ id: number; name: string }, { name: string }>(
+      "members.store",
+      { name: "Lin" },
+      fetcher as typeof fetch,
+    )).resolves.toEqual({ id: 101, name: "Lin" });
+  });
+
+  it("surfaces a Rust action error with its status and details", async () => {
+    installRoutes({ "members.store": "/api/members" });
+    const fetcher = async () => new Response(JSON.stringify({
+      message: "成员姓名不能为空。",
+    }), {
+      status: 422,
+      headers: { "content-type": "application/json" },
+    });
+
+    const request = callRust("members.store", { name: "" }, fetcher as typeof fetch);
+    await expect(request).rejects.toBeInstanceOf(RustCallError);
+    await expect(request).rejects.toMatchObject({
+      name: "RustCallError",
+      status: 422,
+      message: "成员姓名不能为空。",
+      details: { message: "成员姓名不能为空。" },
+    });
   });
 
   it("requests the page protocol without requiring encryption", async () => {
@@ -81,4 +132,8 @@ function base64Url(value: Uint8Array): string {
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replaceAll("=", "");
+}
+
+function installRoutes(routes: Record<string, string>): void {
+  document.body.innerHTML = `<script id="phoenix-page" type="application/json">${JSON.stringify({ routes })}</script>`;
 }

@@ -1,4 +1,4 @@
-use std::{convert::Infallible, future::Future, pin::Pin, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, future::Future, pin::Pin, sync::Arc};
 
 pub use bytes::Bytes;
 pub use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
@@ -6,6 +6,21 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+#[derive(Clone, Debug, Default)]
+pub struct RouteManifest(Arc<HashMap<String, String>>);
+
+impl RouteManifest {
+    #[must_use]
+    pub fn new(routes: Arc<HashMap<String, String>>) -> Self {
+        Self(routes)
+    }
+
+    #[must_use]
+    pub fn routes(&self) -> &HashMap<String, String> {
+        &self.0
+    }
+}
 
 #[derive(Debug)]
 pub struct Request {

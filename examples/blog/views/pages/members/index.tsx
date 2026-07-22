@@ -2,7 +2,7 @@ import { island } from "@phoenix/react";
 
 import MemberDirectory, { type Member } from "../../islands/member-directory.js";
 
-const MemberDirectoryIsland = island("member-directory", MemberDirectory);
+const MemberDirectoryIsland = island(MemberDirectory);
 
 export interface MembersIndexProps {
   members: Member[];
@@ -36,7 +36,6 @@ export default function MembersIndex({ members, generatedBy, total }: MembersInd
         </section>
 
         <MemberDirectoryIsland
-          islandId="member-directory"
           initialMembers={members}
           initialTotal={total}
         />

@@ -4,6 +4,5 @@ import MemberDirectory from "./islands/member-directory.js";
 import "./styles.css";
 
 startPhoenix({
-  pages: {},
-  islands: { "member-directory": MemberDirectory },
+  islands: [MemberDirectory],
 });

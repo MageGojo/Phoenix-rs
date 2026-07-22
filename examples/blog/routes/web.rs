@@ -4,7 +4,8 @@ use phoenix::prelude::{NodeRenderer, RendererConfig, RouteGroup, Routes, Securit
 
 use crate::{
     controllers::{
-        AdminController, HealthController, ReactController, RegistrationController, UserController,
+        AdminController, HealthController, MemberController, ReactController,
+        RegistrationController, UserController,
     },
     middleware::{PoweredByPhoenix, RequireExampleToken},
 };
@@ -28,6 +29,8 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
         .name("users.show")
         .post("/register", RegistrationController::store)
         .name("register.store")
+        .post("/api/members", MemberController::store)
+        .name("members.store")
         .get("/react", ReactController::islands)
         .name("react.islands")
         .get("/react/spa", ReactController::spa)

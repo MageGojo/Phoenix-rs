@@ -20,6 +20,7 @@ export interface PageEnvelope<Props = unknown> {
   contract_hash: string | null;
   asset_version: string | null;
   request_id: string | null;
+  routes: Record<string, string>;
   islands: IslandDescriptor[];
 }
 
@@ -36,38 +37,53 @@ export interface EncryptedPayload {
 }
 
 export type ComponentRegistry = Record<string, ComponentType<any>>;
+export type ComponentList = readonly ComponentType<any>[];
 export type DecryptPage = (payload: EncryptedPayload) => Promise<PageEnvelope>;
 
 export interface PhoenixOptions {
-  pages: ComponentRegistry;
-  islands?: ComponentRegistry;
+  pages?: ComponentRegistry;
+  islands?: ComponentRegistry | ComponentList;
   document?: Document;
 }
 
 export function island<Props extends object>(
+  Component: ComponentType<Props>,
+): ComponentType<Props & { islandId?: string }>;
+export function island<Props extends object>(
   componentName: string,
   Component: ComponentType<Props>,
-): ComponentType<Props & { islandId: string }> {
-  return function PhoenixIsland({ islandId, ...props }) {
+): ComponentType<Props & { islandId?: string }>;
+export function island<Props extends object>(
+  nameOrComponent: string | ComponentType<Props>,
+  explicitComponent?: ComponentType<Props>,
+): ComponentType<Props & { islandId?: string }> {
+  const Component = typeof nameOrComponent === "string" ? explicitComponent : nameOrComponent;
+  if (!Component) {
+    throw new Error("Phoenix island component is required");
+  }
+  const name = typeof nameOrComponent === "string"
+    ? nameOrComponent
+    : componentName(Component);
+  return function PhoenixIsland({ islandId = name, ...props }) {
     return createElement(
       "div",
-      { "data-phoenix-island": islandId, "data-component": componentName },
+      { "data-phoenix-island": islandId, "data-component": name },
       createElement(Component, props as Props),
     );
   };
 }
 
-export function startPhoenix(options: PhoenixOptions): PageEnvelope {
+export function startPhoenix(options: PhoenixOptions = {}): PageEnvelope {
   const documentRef = options.document ?? document;
   const envelope = readPage(documentRef);
   const root = requiredElement(documentRef, "phoenix-root");
 
   if (envelope.render_mode === "islands") {
-    hydrateIslands(documentRef, envelope, options.islands ?? {});
+    hydrateIslands(documentRef, envelope, componentRegistry(options.islands));
     return envelope;
   }
 
-  const Page = requiredComponent(options.pages, envelope.page, "page");
+  const Page = requiredComponent(options.pages ?? {}, envelope.page, "page");
   const element = createElement(Page, pageProps(envelope));
   if (envelope.render_mode === "ssr") {
     hydrateRoot(root, element);
@@ -75,6 +91,46 @@ export function startPhoenix(options: PhoenixOptions): PageEnvelope {
     createRoot(root).render(element);
   }
   return envelope;
+}
+
+export class RustCallError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly details: unknown,
+  ) {
+    super(message);
+    this.name = "RustCallError";
+  }
+}
+
+export async function callRust<Output, Input = unknown>(
+  routeName: string,
+  input: Input,
+  fetcher: typeof fetch = fetch,
+): Promise<Output> {
+  const url = rustRoute(routeName);
+  const response = await fetcher(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await response.json().catch(() => null) as unknown;
+  if (!response.ok) {
+    const message = isRecord(body) && typeof body.message === "string"
+      ? body.message
+      : `Rust action failed with ${response.status}`;
+    throw new RustCallError(response.status, message, body);
+  }
+  return body as Output;
+}
+
+function rustRoute(routeName: string, documentRef: Document = document): string {
+  const route = readPage(documentRef).routes[routeName];
+  if (!route) {
+    throw new Error(`Phoenix named route is not available: ${routeName}`);
+  }
+  return route;
 }
 
 export async function fetchPage(
@@ -178,6 +234,28 @@ function requiredComponent(
     throw new Error(`Phoenix ${kind} is not registered: ${name}`);
   }
   return component;
+}
+
+function componentRegistry(
+  components: ComponentRegistry | ComponentList | undefined,
+): ComponentRegistry {
+  if (!components) return {};
+  if (!Array.isArray(components)) return components as ComponentRegistry;
+  return Object.fromEntries(
+    components.map((Component) => [componentName(Component), Component]),
+  );
+}
+
+function componentName(Component: ComponentType<any>): string {
+  const named = Component as ComponentType<any> & { displayName?: string; name?: string };
+  const name = named.displayName || named.name;
+  if (!name) {
+    throw new Error("Phoenix island components must use a named function or explicit name");
+  }
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .toLowerCase();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

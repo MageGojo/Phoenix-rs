@@ -343,6 +343,7 @@ name = "phoenix-blog-example"
 version = "0.1.0"
 dependencies = [
  "phoenix",
+ "serde",
  "serde_json",
  "tokio",
 ]

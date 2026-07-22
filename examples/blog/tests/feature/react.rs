@@ -76,6 +76,7 @@ async fn member_directory_receives_one_hundred_unique_rust_records() {
     assert_eq!(members.len(), 100);
     assert_eq!(names.len(), 100);
     assert_eq!(envelope.props["generatedBy"], "Rust");
+    assert_eq!(envelope.routes["members.store"], "/api/members");
 }
 
 #[tokio::test]

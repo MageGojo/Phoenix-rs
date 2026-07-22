@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { callRust } from "@phoenix/react";
 
 export interface Member {
   id: number;
@@ -10,6 +11,7 @@ export interface Member {
   projects: number;
   joinedOn: string;
   lastActiveMinutes: number;
+  createdBy?: "Rust";
 }
 
 export interface MemberDirectoryProps {
@@ -27,7 +29,11 @@ export default function MemberDirectory({
 }: MemberDirectoryProps) {
   const [members, setMembers] = useState(initialMembers);
   const [draftName, setDraftName] = useState("");
-  const [lastAdded, setLastAdded] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [role, setRole] = useState("all");
@@ -71,30 +77,30 @@ export default function MemberDirectory({
   const activeCount = members.filter((member) => member.status === "active").length;
   const projectCount = members.reduce((sum, member) => sum + member.projects, 0);
 
-  function addMember(event: FormEvent<HTMLFormElement>) {
+  async function addMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = draftName.trim();
-    if (!name) return;
+    if (!name || submitting) return;
 
-    const id = members.reduce((maximum, member) => Math.max(maximum, member.id), 0) + 1;
-    const member: Member = {
-      id,
-      name,
-      email: `island${id}@example.test`,
-      city: "浏览器",
-      role: "临时成员",
-      status: "active",
-      projects: 0,
-      joinedOn: "2026-07-22",
-      lastActiveMinutes: 0,
-    };
-    setMembers((current) => [member, ...current]);
-    setDraftName("");
-    setLastAdded(name);
-    setQuery(name);
-    setStatus("all");
-    setRole("all");
-    setPage(1);
+    setSubmitting(true);
+    setFeedback(null);
+    try {
+      const member = await callRust<Member, { name: string }>("members.store", { name });
+      setMembers((current) => [member, ...current]);
+      setDraftName("");
+      setFeedback({ type: "success", message: `Rust 已创建 ${member.name}` });
+      setQuery(member.name);
+      setStatus("all");
+      setRole("all");
+      setPage(1);
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : "提交失败，请重试。",
+      });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function updateFilter(update: () => void) {
@@ -127,11 +133,18 @@ export default function MemberDirectory({
             onChange={(event) => setDraftName(event.target.value)}
             placeholder="输入姓名"
             autoComplete="off"
+            disabled={submitting}
           />
         </label>
-        <button type="submit" disabled={!draftName.trim()}>添加成员</button>
-        <p className="member-added" aria-live="polite">
-          {lastAdded ? `已添加 ${lastAdded}` : ""}
+        <button type="submit" disabled={!draftName.trim() || submitting}>
+          {submitting ? "提交中..." : "添加成员"}
+        </button>
+        <p
+          className={`member-feedback${feedback?.type === "error" ? " member-feedback-error" : ""}`}
+          aria-live="polite"
+          role={feedback?.type === "error" ? "alert" : undefined}
+        >
+          {feedback?.message ?? ""}
         </p>
       </form>
 
