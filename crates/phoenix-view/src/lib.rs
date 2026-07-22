@@ -70,6 +70,7 @@ pub struct PageEnvelope {
 pub struct Page {
     envelope: PageEnvelope,
     server_html: Option<String>,
+    script_src: String,
 }
 
 impl Page {
@@ -90,6 +91,7 @@ impl Page {
                 islands: Vec::new(),
             },
             server_html: None,
+            script_src: "/assets/phoenix.js".to_owned(),
         }
     }
 
@@ -163,6 +165,13 @@ impl Page {
         self
     }
 
+    /// Override the browser entrypoint, for example when using a Vite dev server.
+    #[must_use]
+    pub fn script_src(mut self, source: impl Into<String>) -> Self {
+        self.script_src = source.into();
+        self
+    }
+
     /// Select a document or protocol response from the incoming request.
     ///
     /// # Errors
@@ -200,7 +209,11 @@ impl Page {
             return protocol_response(&self.envelope, codec);
         }
 
-        document_response(&self.envelope, self.server_html.as_deref())
+        document_response(
+            &self.envelope,
+            self.server_html.as_deref(),
+            &self.script_src,
+        )
     }
 
     #[must_use]
@@ -419,6 +432,7 @@ fn protocol_response(
 fn document_response(
     envelope: &PageEnvelope,
     server_html: Option<&str>,
+    script_src: &str,
 ) -> Result<Response, PageResponseError> {
     let payload = json_for_html(envelope)?;
     let root_html = if envelope.render_mode == RenderMode::Spa {
@@ -426,8 +440,9 @@ fn document_response(
     } else {
         server_html.unwrap_or_default()
     };
+    let script_src = html_attribute(script_src);
     let html = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">{root_html}</div><script id=\"phoenix-page\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"/assets/phoenix.js\"></script></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">{root_html}</div><script id=\"phoenix-page\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"{script_src}\"></script></body></html>",
         envelope.render_mode.as_str()
     );
     let mut response = Response::new(StatusCode::OK, html);
@@ -440,6 +455,14 @@ fn document_response(
         HeaderValue::from_static(envelope.render_mode.as_str()),
     );
     Ok(response)
+}
+
+fn html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn json_for_html(value: &impl Serialize) -> Result<String, serde_json::Error> {
@@ -495,6 +518,18 @@ mod tests {
             .into_response();
 
         assert!(!String::from_utf8_lossy(response.body()).contains("server-only"));
+    }
+
+    #[test]
+    fn custom_script_source_is_attribute_encoded() {
+        let response = Page::new("dashboard/show", json!({}))
+            .script_src("http://localhost/app.js?mode=dev&name=\"test\"")
+            .into_response();
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(
+            html.contains("src=\"http://localhost/app.js?mode=dev&amp;name=&quot;test&quot;\"")
+        );
     }
 
     #[test]

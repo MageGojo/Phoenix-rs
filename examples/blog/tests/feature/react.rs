@@ -45,6 +45,29 @@ async fn client_navigation_receives_the_same_business_props() {
     }
 }
 
+#[tokio::test]
+async fn member_directory_receives_one_hundred_unique_rust_records() {
+    let application = phoenix_blog_example::application().expect("routes should build");
+    let mut request = Request::new(Method::GET, Uri::from_static("/members"));
+    request
+        .headers_mut()
+        .insert("x-phoenix-page", HeaderValue::from_static("1"));
+
+    let response = application.handle(request).await;
+    let envelope: PageEnvelope = serde_json::from_slice(response.body()).unwrap();
+    let members = envelope.props["members"].as_array().unwrap();
+    let names = members
+        .iter()
+        .map(|member| member["name"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(envelope.page, "members/index");
+    assert_eq!(envelope.render_mode, phoenix::prelude::RenderMode::Spa);
+    assert_eq!(members.len(), 100);
+    assert_eq!(names.len(), 100);
+    assert_eq!(envelope.props["generatedBy"], "Rust");
+}
+
 #[test]
 fn optional_encryption_is_compatible_with_the_page_protocol() {
     let codec = Aes256GcmCodec::new("test-key", [42; 32]);

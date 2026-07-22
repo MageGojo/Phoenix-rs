@@ -74,6 +74,15 @@ curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/users/Ada
 ```
 
+React 案例需要同时启动 Vite：
+
+```bash
+npm run dev -w phoenix-blog-react-example
+cargo run -p phoenix-blog-example
+```
+
+成员目录位于 `http://127.0.0.1:3000/members`，100 条假数据由 Rust 生成，React 负责搜索、筛选、排序和分页。
+
 运行完整检查：
 
 ```bash

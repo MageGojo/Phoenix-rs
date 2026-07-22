@@ -91,6 +91,66 @@ impl ReactController {
             .respond_to(&request, None)
             .into_response()
     }
+
+    pub async fn members(request: Request) -> Response {
+        Page::new(
+            "members/index",
+            json!({
+                "members": fake_members(),
+                "generatedBy": "Rust",
+                "total": 100
+            }),
+        )
+        .spa()
+        .script_src(frontend_entry())
+        .respond_to(&request, None)
+        .into_response()
+    }
+}
+
+fn frontend_entry() -> String {
+    let vite_url =
+        std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+    format!("{}/views/entry.tsx", vite_url.trim_end_matches('/'))
+}
+
+fn fake_members() -> Vec<serde_json::Value> {
+    const SURNAMES: [&str; 10] = ["林", "陈", "许", "顾", "沈", "周", "宋", "梁", "叶", "陆"];
+    const GIVEN_NAMES: [&str; 10] = [
+        "知遥", "景川", "清和", "予安", "星野", "书宁", "嘉树", "云舒", "明澈", "若衡",
+    ];
+    const CITIES: [&str; 10] = [
+        "上海", "杭州", "深圳", "成都", "北京", "苏州", "南京", "武汉", "厦门", "重庆",
+    ];
+    const ROLES: [&str; 5] = [
+        "后端工程师",
+        "前端工程师",
+        "产品设计师",
+        "数据分析师",
+        "内容编辑",
+    ];
+    const STATUSES: [&str; 3] = ["active", "away", "offline"];
+
+    (0..100)
+        .map(|index| {
+            let id = index + 1;
+            json!({
+                "id": id,
+                "name": format!("{}{}", SURNAMES[index % 10], GIVEN_NAMES[index / 10]),
+                "email": format!("member{id:03}@example.test"),
+                "city": CITIES[(index * 3 + index / 10 * 2) % CITIES.len()],
+                "role": ROLES[(index * 2 + index / 10) % ROLES.len()],
+                "status": STATUSES[(index * 11) % STATUSES.len()],
+                "projects": (index * 7) % 18 + 1,
+                "joinedOn": format!(
+                    "2024-{:02}-{:02}",
+                    index % 12 + 1,
+                    (index * 5) % 28 + 1
+                ),
+                "lastActiveMinutes": (index * 37) % 1440
+            })
+        })
+        .collect()
 }
 
 fn article_page() -> Page {
@@ -101,6 +161,7 @@ fn article_page() -> Page {
             "summary": "One controller contract, three rendering modes."
         }),
     )
+    .script_src(frontend_entry())
     .island(Island::new(
         "article-like",
         "like-button",

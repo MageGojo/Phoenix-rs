@@ -24,6 +24,8 @@ pub fn routes() -> Routes {
         .name("react.spa")
         .get("/react/ssr", ReactController::ssr)
         .name("react.ssr")
+        .get("/members", ReactController::members)
+        .name("members.index")
         .group(
             RouteGroup::new()
                 .prefix("/admin")
