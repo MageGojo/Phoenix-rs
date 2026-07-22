@@ -79,12 +79,13 @@ const member = await members.store({ name });
 - 版本化共享 Session backend：异步 load/create/save/rotate/delete、CAS 冲突、滑动 TTL、默认失败关闭、成功后 Cookie 提交和双实例共享测试。
 - HS256 JWT、refresh rotation、reuse detection、access/family 撤销和持久化 token store，以及 AES-256-GCM 应用数据加密与 Argon2id 密码哈希。
 - 默认拒绝的 RBAC/ABAC：角色继承、直接 allow/deny、资源属性 policy、决策审计、JWT principal 映射和 401/403 权限中间件。
+- 每请求 CSP nonce 自动贯穿 Header、React HTML、Vite runtime meta、CSS/模块/hydration script 与流式 renderer；带 nonce 的 HTML 禁止共享缓存。
 - 单进程多应用：官网、用户前台、管理后台可按 Host/路径独立挂载，拥有路由命名空间与强类型 State。
 - `routes!` 与 `applications!` 声明宏减少路由和多应用组装样板，同时完整保留 builder API。
 - Laravel 风格 `px new` 与控制器、模型、迁移、Request、Resource、中间件、页面和 Island 生成器。
 - `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
 
-React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供 TLS/HTTPS/ALPN、服务端 Session、JWT token 生命周期、RBAC/ABAC、自动 action CSRF、精确 CORS、可信代理、Host allowlist、分布式 Session/限流 contract、指标 exporter、安全头、request ID、日志脱敏以及安全重定向/下载响应。CSP nonce、实时协议、生产共享存储适配器和独立安全评审仍是生产发布前置条件。
+React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供 TLS/HTTPS/ALPN、服务端 Session、JWT token 生命周期、RBAC/ABAC、自动 action CSRF、精确 CORS、可信代理、Host allowlist、分布式 Session/限流 contract、指标 exporter、自动 CSP nonce、安全头、request ID、日志脱敏以及安全重定向/下载响应。实时协议、生产共享存储适配器和独立安全评审仍是生产发布前置条件。
 
 - [产品需求](docs/PRODUCT.md)
 - [架构设计](docs/PROJECT.md)
@@ -112,7 +113,7 @@ cd my-app
 px dev
 ```
 
-`px new` 默认安装 npm 依赖并初始化本地 Git 仓库；从当前源码构建的 CLI 会自动使用本地 Phoenix crates/packages。生成业务切片可以运行 `px make:model Post --all`，完整命令见[开发者体验与 CLI](docs/DX.md#21-项目与业务代码生成)。
+`px new` 默认安装 npm 依赖、初始化本地 Git，并按开发/生产环境装配请求级 CSP nonce；从当前源码构建的 CLI 会自动使用本地 Phoenix crates/packages。生成业务切片可以运行 `px make:model Post --all`，完整命令见[开发者体验与 CLI](docs/DX.md#21-项目与业务代码生成)。
 
 运行仓库内参考应用：
 

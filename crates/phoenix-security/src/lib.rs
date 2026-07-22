@@ -15,8 +15,8 @@ use std::{
 
 use http::uri::Authority;
 use phoenix_http::{
-    BoxFuture, Bytes, ConnectionInfo, HeaderMap, HeaderName, HeaderValue, Method, Middleware, Next,
-    Request, Response, StatusCode, TransportScheme, header,
+    BoxFuture, Bytes, ConnectionInfo, CspNonce, HeaderMap, HeaderName, HeaderValue, Method,
+    Middleware, Next, Request, Response, StatusCode, TransportScheme, Uri, header,
 };
 use phoenix_metrics::Metrics;
 use serde_json::Value;
@@ -1451,6 +1451,92 @@ impl Default for SecurityPolicy {
     }
 }
 
+impl SecurityPolicy {
+    /// Enable per-request CSP nonces while retaining this policy's directives and HSTS settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for duplicate/unsafe directives or a stale hard-coded nonce.
+    pub fn with_nonce(self) -> Result<NonceSecurityPolicy, CspPolicyError> {
+        NonceSecurityPolicy::new(self)
+    }
+}
+
+/// Request-scoped CSP nonce generation and browser security headers.
+#[derive(Clone, Debug)]
+pub struct NonceSecurityPolicy {
+    policy: SecurityPolicy,
+}
+
+impl Default for NonceSecurityPolicy {
+    fn default() -> Self {
+        Self::new(SecurityPolicy::default()).expect("the built-in CSP is valid")
+    }
+}
+
+impl NonceSecurityPolicy {
+    /// Validate a static policy before request-time nonce insertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, duplicate, unsafe-inline, or pre-nonced directives.
+    pub fn new(policy: SecurityPolicy) -> Result<Self, CspPolicyError> {
+        render_nonced_policy(&policy.content_security_policy, "0123456789abcdef")?;
+        Ok(Self { policy })
+    }
+
+    /// Build a development policy for one explicitly configured Vite HTTP(S) origin.
+    ///
+    /// # Errors
+    ///
+    /// Rejects origins containing credentials, paths, query strings, or unsupported schemes.
+    pub fn development(vite_origin: &str) -> Result<Self, CspPolicyError> {
+        let uri = vite_origin
+            .parse::<Uri>()
+            .map_err(|_| CspPolicyError::InvalidDevelopmentOrigin)?;
+        let scheme = uri
+            .scheme_str()
+            .filter(|scheme| matches!(*scheme, "http" | "https"))
+            .ok_or(CspPolicyError::InvalidDevelopmentOrigin)?;
+        let authority = uri
+            .authority()
+            .filter(|authority| !authority.as_str().contains('@'))
+            .ok_or(CspPolicyError::InvalidDevelopmentOrigin)?;
+        if uri.path() != "/" || uri.query().is_some() {
+            return Err(CspPolicyError::InvalidDevelopmentOrigin);
+        }
+        let origin = format!("{scheme}://{authority}");
+        let socket_origin = format!(
+            "{}://{authority}",
+            if scheme == "https" { "wss" } else { "ws" }
+        );
+        Self::new(SecurityPolicy {
+            content_security_policy: format!(
+                "default-src 'self'; script-src 'self' {origin}; style-src 'self' {origin}; connect-src 'self' {origin} {socket_origin}; img-src 'self' data: blob: {origin}; font-src 'self' data: {origin}; base-uri 'self'; frame-ancestors 'none'; object-src 'none'"
+            ),
+            hsts: None,
+            hsts_include_subdomains: false,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CspPolicyError {
+    InvalidPolicy,
+    InvalidDevelopmentOrigin,
+}
+
+impl std::fmt::Display for CspPolicyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidPolicy => "CSP policy is invalid for nonce mode",
+            Self::InvalidDevelopmentOrigin => "Vite development origin is invalid",
+        })
+    }
+}
+
+impl std::error::Error for CspPolicyError {}
+
 impl Middleware for SecurityPolicy {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
         let policy = self.clone();
@@ -1484,6 +1570,139 @@ impl Middleware for SecurityPolicy {
             response
         })
     }
+}
+
+impl Middleware for NonceSecurityPolicy {
+    fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
+        let policy = self.policy.clone();
+        Box::pin(async move {
+            let nonce = request
+                .extensions()
+                .get::<CspNonce>()
+                .cloned()
+                .unwrap_or_else(|| {
+                    CspNonce::new(random_token(16)).expect("generated hex nonce is valid")
+                });
+            request.extensions_mut().insert(nonce.clone());
+            let secure = effective_scheme(&request).is_secure();
+            let mut response = next.run(request).await;
+            let Ok(csp) = render_nonced_policy(&policy.content_security_policy, nonce.as_str())
+                .and_then(|value| {
+                    HeaderValue::from_str(&value).map_err(|_| CspPolicyError::InvalidPolicy)
+                })
+            else {
+                return csp_failure_response();
+            };
+            if response
+                .headers()
+                .get("content-security-policy")
+                .is_some_and(|existing| existing != csp)
+            {
+                return csp_failure_response();
+            }
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static("content-security-policy"), csp);
+            apply_browser_headers(&mut response, secure, &policy);
+            if response_is_html(&response) {
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, no-store"),
+                );
+                response.headers_mut().remove(header::ETAG);
+                response.headers_mut().remove(header::LAST_MODIFIED);
+            }
+            response
+        })
+    }
+}
+
+fn render_nonced_policy(base: &str, nonce: &str) -> Result<String, CspPolicyError> {
+    if base.is_empty() || base.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(CspPolicyError::InvalidPolicy);
+    }
+    let nonce_source = format!("'nonce-{nonce}'");
+    let mut directives = Vec::new();
+    let mut names = HashSet::new();
+    let mut has_script = false;
+    let mut has_style = false;
+    for raw in base.split(';') {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let mut parts = raw.split_ascii_whitespace();
+        let name = parts.next().ok_or(CspPolicyError::InvalidPolicy)?;
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            || !names.insert(name.to_owned())
+        {
+            return Err(CspPolicyError::InvalidPolicy);
+        }
+        let mut values = parts.map(ToOwned::to_owned).collect::<Vec<_>>();
+        if values.iter().any(|value| {
+            value == "'unsafe-inline'"
+                || value.starts_with("'nonce-")
+                || value.bytes().any(|byte| byte.is_ascii_control())
+        }) {
+            return Err(CspPolicyError::InvalidPolicy);
+        }
+        if name == "script-src" {
+            has_script = true;
+            values.push(nonce_source.clone());
+        } else if name == "style-src" {
+            has_style = true;
+            values.push(nonce_source.clone());
+        }
+        directives.push(format!(
+            "{name}{}{}",
+            if values.is_empty() { "" } else { " " },
+            values.join(" ")
+        ));
+    }
+    if !has_script {
+        directives.push(format!("script-src 'self' {nonce_source}"));
+    }
+    if !has_style {
+        directives.push(format!("style-src 'self' {nonce_source}"));
+    }
+    Ok(directives.join("; "))
+}
+
+fn apply_browser_headers(response: &mut Response, secure: bool, policy: &SecurityPolicy) {
+    insert_default(response.headers_mut(), "x-content-type-options", "nosniff");
+    insert_default(response.headers_mut(), "x-frame-options", "DENY");
+    insert_default(
+        response.headers_mut(),
+        "referrer-policy",
+        "strict-origin-when-cross-origin",
+    );
+    insert_default(
+        response.headers_mut(),
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()",
+    );
+    if secure && let Some(max_age) = policy.hsts {
+        let mut value = format!("max-age={}", max_age.as_secs());
+        if policy.hsts_include_subdomains {
+            value.push_str("; includeSubDomains");
+        }
+        insert_default(response.headers_mut(), "strict-transport-security", &value);
+    }
+}
+
+fn response_is_html(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/html"))
+}
+
+fn csp_failure_response() -> Response {
+    Response::text("Security policy conflict").with_status(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn insert_default(headers: &mut HeaderMap, name: &'static str, value: &str) {
@@ -2194,6 +2413,164 @@ mod tests {
             .insert(EffectiveScheme(TransportScheme::Https));
         let secure = handle(&router, secure).await;
         assert!(secure.headers().contains_key("strict-transport-security"));
+    }
+
+    fn nonce_from_policy(response: &Response) -> String {
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .expect("ASCII CSP");
+        let source = policy
+            .split_once("'nonce-")
+            .map(|(_, source)| source)
+            .expect("nonce source");
+        source
+            .split_once('\'')
+            .map(|(nonce, _)| nonce.to_owned())
+            .expect("nonce terminator")
+    }
+
+    #[tokio::test]
+    async fn nonce_policy_reuses_nested_nonce_and_isolates_concurrent_requests() {
+        let router = Routes::new()
+            .get("/", |request: Request| async move {
+                let nonce = request
+                    .extensions()
+                    .get::<CspNonce>()
+                    .expect("nonce middleware ran")
+                    .as_str()
+                    .to_owned();
+                let mut response = Response::new(StatusCode::OK, nonce);
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/html; charset=utf-8"),
+                );
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=60"),
+                );
+                response
+                    .headers_mut()
+                    .insert(header::ETAG, HeaderValue::from_static("\"shared\""));
+                response.headers_mut().insert(
+                    header::LAST_MODIFIED,
+                    HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"),
+                );
+                response
+            })
+            .with_middleware(NonceSecurityPolicy::default())
+            .with_middleware(NonceSecurityPolicy::default())
+            .build()
+            .unwrap();
+
+        let (left, right) = tokio::join!(
+            handle(&router, request(Method::GET, "/")),
+            handle(&router, request(Method::GET, "/"))
+        );
+        for response in [&left, &right] {
+            let nonce = nonce_from_policy(response);
+            assert_eq!(response.body(), nonce.as_bytes());
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "private, no-store"
+            );
+            assert!(!response.headers().contains_key(header::ETAG));
+            assert!(!response.headers().contains_key(header::LAST_MODIFIED));
+            assert_eq!(
+                response.headers()["content-security-policy"]
+                    .to_str()
+                    .unwrap()
+                    .matches(&format!("'nonce-{nonce}'"))
+                    .count(),
+                2
+            );
+        }
+        assert_ne!(left.body(), right.body());
+    }
+
+    #[tokio::test]
+    async fn nonce_policy_preserves_api_cache_headers_and_rejects_csp_conflicts() {
+        let api = Routes::new()
+            .get("/", |_request: Request| async {
+                let mut response = Response::new(StatusCode::OK, "{}");
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=60"),
+                );
+                response
+                    .headers_mut()
+                    .insert(header::ETAG, HeaderValue::from_static("\"api\""));
+                response
+            })
+            .with_middleware(NonceSecurityPolicy::default())
+            .build()
+            .unwrap();
+        let response = handle(&api, request(Method::GET, "/")).await;
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=60"
+        );
+        assert_eq!(response.headers()[header::ETAG], "\"api\"");
+
+        let conflict = Routes::new()
+            .get("/", |_request: Request| async {
+                Response::text("unsafe")
+                    .with_header("content-security-policy", "default-src *")
+                    .unwrap()
+            })
+            .with_middleware(NonceSecurityPolicy::default())
+            .build()
+            .unwrap();
+        let response = handle(&conflict, request(Method::GET, "/")).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.body(), "Security policy conflict");
+    }
+
+    #[test]
+    fn nonce_policy_rejects_unsafe_csp_and_untrusted_vite_origins() {
+        for policy in [
+            "",
+            "script-src 'unsafe-inline'",
+            "script-src 'nonce-stale-value'",
+            "script-src 'self'; script-src https://cdn.invalid",
+            "default-src 'self'\r\nx-injected: yes",
+        ] {
+            assert!(
+                NonceSecurityPolicy::new(SecurityPolicy {
+                    content_security_policy: policy.to_owned(),
+                    hsts: None,
+                    hsts_include_subdomains: false,
+                })
+                .is_err(),
+                "{policy:?}"
+            );
+        }
+
+        let development = NonceSecurityPolicy::development("http://127.0.0.1:5173").unwrap();
+        assert!(
+            development
+                .policy
+                .content_security_policy
+                .contains("connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173")
+        );
+        assert!(!development.policy.content_security_policy.contains('*'));
+        assert!(NonceSecurityPolicy::development("https://[::1]:5173").is_ok());
+        for origin in [
+            "",
+            "ftp://127.0.0.1:5173",
+            "http://user@127.0.0.1:5173",
+            "http://127.0.0.1:5173/path",
+            "http://127.0.0.1:5173/?token=secret",
+            "http://127.0.0.1:5173\r\nx-injected: yes",
+        ] {
+            assert!(
+                NonceSecurityPolicy::development(origin).is_err(),
+                "{origin:?}"
+            );
+        }
     }
 
     #[tokio::test]

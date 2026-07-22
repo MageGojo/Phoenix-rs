@@ -1,8 +1,8 @@
-import { createElement } from "react";
+import { Suspense, createElement, lazy, type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { Island, type PageEnvelope } from "@phoenix/react";
-import { renderPage } from "./index.js";
+import { renderPage, streamPage } from "./index.js";
 
 const baseEnvelope: PageEnvelope = {
   protocol: 1,
@@ -70,5 +70,40 @@ describe("Phoenix React server renderer", () => {
       { ...baseEnvelope, page: "invalid/index" },
       { "invalid/index": InvalidPage },
     )).toThrow("props must be JSON-serializable");
+  });
+
+  it("applies the request nonce to React suspense streaming scripts", async () => {
+    let resolveDeferred: ((module: { default: () => ReactElement }) => void) | undefined;
+    const Deferred = lazy(() => new Promise<{ default: () => ReactElement }>((resolve) => {
+      resolveDeferred = resolve;
+    }));
+    function StreamingPage() {
+      return createElement(
+        "main",
+        null,
+        createElement("h1", null, "shell"),
+        createElement(
+          Suspense,
+          { fallback: createElement("span", null, "loading") },
+          createElement(Deferred),
+        ),
+      );
+    }
+    const chunks: string[] = [];
+    const nonce = "0123456789abcdef0123456789abcdef";
+    setTimeout(() => resolveDeferred?.({
+      default: () => createElement("strong", null, "ready"),
+    }), 25);
+
+    await streamPage(
+      { ...baseEnvelope, page: "streaming/show", render_mode: "ssr" },
+      { "streaming/show": StreamingPage },
+      (chunk) => chunks.push(chunk),
+      nonce,
+    );
+
+    const html = chunks.join("");
+    expect(html).toContain("ready");
+    expect(html).toContain(`nonce="${nonce}"`);
   });
 });

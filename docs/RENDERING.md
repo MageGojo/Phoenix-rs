@@ -51,16 +51,16 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> renderer 池
 浏览器 -> hydrateRoot -> 后续 SPA 导航
 ```
 
-当前实现使用可配置数量的长期 Node.js renderer worker，而不是每个请求启动 Node 进程。Phoenix 使用版本化按行 JSON 与流式分帧协议传入完整 `PageEnvelope`、URL 和 locale；`asset_version` 与 `contract_hash` 随信封传递。每个子进程启动时校验浏览器资源版本与契约 hash，完整渲染发生 I/O 故障时会替换 worker 并重试一次。
+当前实现使用可配置数量的长期 Node.js renderer worker，而不是每个请求启动 Node 进程。Renderer protocol v2 使用版本化按行 JSON 与流式分帧协议传入完整 `PageEnvelope`、URL、locale 和顶层 `csp_nonce`；`asset_version` 与 `contract_hash` 随信封传递。Nonce 不进入 `PageEnvelope`。每个子进程启动时校验协议、浏览器资源版本与契约 hash，旧 v1 worker 会失败关闭；完整渲染发生 I/O 故障时会替换 worker 并重试一次。
 
 `RendererConfig::with_workers` 设置池容量；等待 worker 和 Node 响应共用 deadline，超过后淘汰协议状态不确定的 worker并快速失败，不会静默切换为 SPA。`warm_up()` 在接流量前完成全部握手，`health()` 返回 ready/active/rendered/failure/restart/timeout 指标，`shutdown()` 停止接单并回收子进程。
 
-`Page::respond_streaming_with_renderer` 使用 React `renderToPipeableStream`，把 HTML chunk 通过 `ResponseBody::Stream` 直接交给 Hyper；真实 TCP 测试固定了 chunked response。renderer 完成帧携带 island 描述，Phoenix 随后写入上下文安全的 hydration 信封和版本化浏览器入口。
+`Page::respond_streaming_with_renderer` 使用 React `renderToPipeableStream`，把同一请求 nonce 交给 React 后将 HTML chunk 通过 `ResponseBody::Stream` 直接交给 Hyper；真实 TCP 测试固定了 chunked response，Suspense 测试固定了 React 恢复脚本的 nonce。renderer 完成帧携带 island 描述，Phoenix 随后写入带同一 nonce、且上下文安全的 hydration 信封和版本化浏览器入口。
 
 SSR 必须定义：
 
 - `Head`、HTTP 状态码、重定向和错误页的合并规则。
-- hydration 数据的安全编码与 CSP nonce。
+- hydration 数据使用脚本上下文安全编码，并与 CSP Header 使用同一请求级 nonce。
 - 浏览器与服务端输出不一致时的诊断信息。
 - 无 Node 生产环境可以显式选择 SPA；SSR 部署不能继续承诺“只有一个 Rust 二进制”。
 
@@ -123,7 +123,7 @@ export default defineConfig({ plugins: [phoenix()] });
 }
 ```
 
-`islands` 仅在 Islands renderer 输出时存在实际内容。页面业务 props 的 JSON 语义不因渲染模式变化。
+`islands` 仅在 Islands renderer 输出时存在实际内容。页面业务 props 的 JSON 语义不因渲染模式变化。CSP nonce 是文档执行上下文，不属于业务协议，因此不会出现在该 JSON、共享 props 或 contract hash 中。
 
 ## 7. 构建产物
 
@@ -232,6 +232,23 @@ pub fn show(
 
 需要完整缓冲响应时使用 `respond_with_renderer(...).await`。renderer 失败会返回 503，不会静默改成 SPA。
 
+### CSP nonce 与页面缓存
+
+在路由外层安装 `NonceSecurityPolicy` 后，`Page::respond_to`、直接返回 `Page`、完整 renderer 和流式 renderer 都会读取同一个 Request nonce。框架输出以下标记：
+
+```html
+<meta property="csp-nonce" nonce="REQUEST_NONCE">
+<link rel="stylesheet" href="/assets/app.css" nonce="REQUEST_NONCE">
+<script id="phoenix-page" type="application/json" nonce="REQUEST_NONCE">...</script>
+<script type="module" src="/assets/app.js" nonce="REQUEST_NONCE"></script>
+```
+
+Vite 7 从该 meta 继承 HMR 与动态 style/link nonce；Vite 配置不得写死 `html.cspNonce`。带 nonce 的文档固定为 `private, no-store` 并删除验证器，防止共享缓存重放另一个请求的 nonce。页面协议 JSON 不携带 nonce，也不会被强制改写应用已有缓存策略。
+
+`Page::respond(false, ...)` 和在路由外直接调用 `Page::into_response()` 没有 Request 上下文，因此不会凭空创建 nonce。启用 nonce policy 的应用应从 Handler 直接返回 `Page`，或使用 `respond_to`/renderer API；CLI 生成代码遵守这一约定。
+
+SPA/SSR 的局部页面协议请求不需要 Node renderer，会直接返回原子 JSON；Islands 局部导航仍调用 renderer 收集实际 island 描述。这个差异只影响 renderer 工作量，不改变 props 语义。
+
 ### 静态资源解析
 
 静态请求只能解析 manifest 明确声明的文件：
@@ -285,7 +302,8 @@ Vite 生成：
 1. 已完成：统一 `PageEnvelope`、三种渲染语义、`client:load`、Vite 自动发现与按需加载。
 2. 已完成：版本化生产 manifest、多 worker renderer 池、contract/resource 握手、健康指标、优雅关闭和流式 SSR。
 3. 已完成：受控 PageHead 在 HTML 与局部页面协议间保持一致。
-4. 下一步：结构化流错误、CSP nonce 和 hydration 诊断。
+4. 已完成：请求级 CSP nonce、Vite meta、renderer v2、React 流式 nonce 与 HTML no-store 边界。
+5. 下一步：结构化流错误、hydration 诊断和实时/流式请求协议。
 5. 稳定前：独立 island 入口、bundle 预算、缓存和部署验证。
 6. 1.0：三种模式的部署文档、性能基线、安全测试和同页面契约一致性测试。
 

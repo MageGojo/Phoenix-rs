@@ -60,6 +60,8 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
     enforce: "pre",
 
     config() {
+      // Vite reads `<meta property="csp-nonce" nonce="...">` at runtime.
+      // Never set `html.cspNonce` here: Phoenix emits a fresh value per HTTP request.
       if (options.renderer) {
         return {
           publicDir: false,

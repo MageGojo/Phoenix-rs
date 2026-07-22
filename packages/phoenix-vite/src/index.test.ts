@@ -20,9 +20,11 @@ describe("Phoenix Vite plugin", () => {
     const plugin = phoenix();
     const config = invokeHook(plugin.config) as {
       build: { rollupOptions: { output: { assetFileNames: string } } };
+      html?: { cspNonce?: string };
     };
 
     expect(config.build.rollupOptions.output.assetFileNames).toBe("[name]-[hash][extname]");
+    expect(config.html?.cspNonce).toBeUndefined();
   });
 
   it("generates lazy browser loaders from page and island conventions", () => {

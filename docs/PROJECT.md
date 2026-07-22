@@ -67,7 +67,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 ### `phoenix-http`
 
-直接在 Hyper 1.x、`http` 与 `http-body` 类型之上提供稳定门面，包括 Tokio 连接适配、请求 body 归一化、内容类型判断、大小限制、JSON/Form/Multipart 提取、Cookie、重定向、下载和统一错误映射。`hyper-util` 与 `http-body-util` 只承担连接/runtime 适配和 body 工具，不定义应用层 API。
+直接在 Hyper 1.x、`http` 与 `http-body` 类型之上提供稳定门面，包括 Tokio 连接适配、请求 body 归一化、内容类型判断、大小限制、JSON/Form/Multipart 提取、Cookie、重定向、下载和统一错误映射。轻量 `ResponseContext` 在 Handler 消耗 Request 后仍保留 URI、请求 Header、命名路由表和经过验证的 CSP nonce，同时 Debug 不输出 Header/nonce 值，使 `IntoResponse` 实现可以安全完成请求感知的文档响应。`hyper-util` 与 `http-body-util` 只承担连接/runtime 适配和 body 工具，不定义应用层 API。
 
 ### `phoenix-crypto`
 
@@ -91,7 +91,7 @@ Phoenix 采用模块化单体框架结构。应用开发者通常只依赖顶层
 
 ### `phoenix-view`
 
-负责页面名解析、props 序列化、共享数据、渲染模式选择、初始 HTML、Vite 开发代理/生产 manifest、资源版本和页面错误。该模块定义 React 无关的 `PageEnvelope`，SPA、SSR 和 Islands 共享相同业务数据语义。
+负责页面名解析、props 序列化、共享数据、渲染模式选择、初始 HTML、Vite 开发代理/生产 manifest、资源版本、请求级 CSP nonce 和页面错误。该模块定义 React 无关的 `PageEnvelope`，SPA、SSR 和 Islands 共享相同业务数据语义；nonce 只存在于文档/renderer 请求上下文，不进入业务信封。
 
 ### `phoenix-database`
 

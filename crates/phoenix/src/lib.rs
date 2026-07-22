@@ -39,12 +39,13 @@ pub mod prelude {
         ResourceRoutes, mount_routes,
     };
     pub use phoenix_http::{
-        BoxFuture, ByteStream, ConnectionInfo, Download, Form, FormRejection, FromMultipart,
-        FromRequest, Handler, Header, HeaderRejection, IntoResponse, Json, JsonRejection, Method,
-        Middleware, Mime, Multipart, MultipartData, MultipartField, MultipartRejection, Next, Path,
-        PathRejection, Query, QueryRejection, Redirect, Request, Response, ResponseBody,
-        RouteManifest, SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode,
-        TransportScheme, TypedHandler, Uri, middleware_fn, typed,
+        BoxFuture, ByteStream, ConnectionInfo, CspNonce, Download, Form, FormRejection,
+        FromMultipart, FromRequest, Handler, Header, HeaderRejection, IntoResponse,
+        InvalidCspNonce, Json, JsonRejection, Method, Middleware, Mime, Multipart, MultipartData,
+        MultipartField, MultipartRejection, Next, Path, PathRejection, Query, QueryRejection,
+        Redirect, Request, Response, ResponseBody, ResponseContext, RouteManifest, SecurityHeaders,
+        State, StateMiddleware, StateRejection, StatusCode, TransportScheme, TypedHandler, Uri,
+        middleware_fn, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
     pub use phoenix_metrics::{
@@ -56,13 +57,13 @@ pub mod prelude {
         UrlGenerationError,
     };
     pub use phoenix_security::{
-        AccessLog, ClientIp, ClientIpRateLimitKey, Cors, CorsConfig, Csrf, EffectiveScheme,
-        HostAllowlist, HttpsRedirect, HttpsRedirectError, MemoryRateLimitBackend,
-        MemorySessionBackend, RateLimit, RateLimitBackend, RateLimitConfig, RateLimitDecision,
-        RateLimitFailureMode, RateLimitKey, RateLimitStoreError, RequestId, RequestIdValue,
-        SameSite, SecurityPolicy, Session, SessionBackend, SessionBackendError, SessionConfig,
-        SessionMiddleware, SessionSnapshot, SessionStore, SessionWrite, TrustedProxies,
-        effective_scheme,
+        AccessLog, ClientIp, ClientIpRateLimitKey, Cors, CorsConfig, CspPolicyError, Csrf,
+        EffectiveScheme, HostAllowlist, HttpsRedirect, HttpsRedirectError, MemoryRateLimitBackend,
+        MemorySessionBackend, NonceSecurityPolicy, RateLimit, RateLimitBackend, RateLimitConfig,
+        RateLimitDecision, RateLimitFailureMode, RateLimitKey, RateLimitStoreError, RequestId,
+        RequestIdValue, SameSite, SecurityPolicy, Session, SessionBackend, SessionBackendError,
+        SessionConfig, SessionMiddleware, SessionSnapshot, SessionStore, SessionWrite,
+        TrustedProxies, effective_scheme,
     };
     pub use phoenix_validation::{
         BoxedRule, Rule, RuleContext, Validate, Validated, ValidatedRejection, ValidationError,

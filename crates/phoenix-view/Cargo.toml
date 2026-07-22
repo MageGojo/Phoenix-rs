@@ -17,5 +17,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+phoenix-routing = { path = "../phoenix-routing" }
+phoenix-security = { path = "../phoenix-security" }
+
 [lints]
 workspace = true

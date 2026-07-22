@@ -30,11 +30,12 @@ interface RendererRequest {
   id: number;
   asset_version?: string;
   contract_hash?: string;
+  csp_nonce?: string;
   kind: "hello" | "render" | "stream";
   envelope?: PageEnvelope;
 }
 
-export const RENDERER_PROTOCOL = 1;
+export const RENDERER_PROTOCOL = 2;
 
 export function renderPage(
   envelope: PageEnvelope,
@@ -51,10 +52,11 @@ export function renderPage(
   };
 }
 
-async function streamPage(
+export async function streamPage(
   envelope: PageEnvelope,
   pages: ComponentRegistry,
   chunk: (html: string) => void,
+  cspNonce?: string,
 ): Promise<Omit<RenderResult, "html">> {
   if (envelope.render_mode === "spa") {
     return { islands: [], mode: "spa" };
@@ -67,6 +69,7 @@ async function streamPage(
     output.on("end", resolve);
     output.on("error", reject);
     const rendered = renderToPipeableStream(element, {
+      nonce: cspNonce,
       onError: reject,
       onShellError: reject,
       onShellReady: () => rendered.pipe(output),
@@ -136,6 +139,7 @@ export function startRenderer({
       if (!request.envelope || !["render", "stream"].includes(request.kind)) {
         throw new Error("invalid renderer request");
       }
+      validateNonce(request.csp_nonce);
       if (contractHash && request.envelope.contract_hash
         && request.envelope.contract_hash !== contractHash) {
         throw new Error("Phoenix renderer contract hash mismatch");
@@ -148,7 +152,7 @@ export function startRenderer({
           ok: true,
           kind: "chunk",
           chunk,
-        }));
+        }), request.csp_nonce);
         write({
           protocol: RENDERER_PROTOCOL,
           id: request.id,
@@ -203,4 +207,14 @@ function write(response: object): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateNonce(nonce: unknown): asserts nonce is string | undefined {
+  if (nonce === undefined) return;
+  if (typeof nonce !== "string"
+    || nonce.length < 16
+    || nonce.length > 128
+    || !/^[A-Za-z0-9+/_=-]+$/.test(nonce)) {
+    throw new Error("invalid CSP nonce");
+  }
 }

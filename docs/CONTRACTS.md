@@ -149,6 +149,7 @@ type AdminLogin = admin.LoginInput;
 - 新增可选字段通常兼容；新增必填字段必须提供默认值或升级版本。
 - 生成的 TypeScript 模块携带 `contractHash`。
 - 页面协议、client/renderer manifest 和 renderer worker 握手使用同一个 `contract_hash`；生产资源或 renderer 与当前 Rust 契约不一致时失败关闭。
+- CSP nonce 是每请求文档执行上下文，只通过 `ResponseContext` 和 renderer v2 顶层字段传递；它不进入 `PageEnvelope`、生成 TypeScript、共享 props 或 `contract_hash`。
 
 ## 9. 验收标准
 

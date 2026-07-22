@@ -1,5 +1,5 @@
 use phoenix::{
-    http::{HeaderValue, Method, Request, Uri},
+    http::{HeaderValue, Method, Request, Uri, header},
     prelude::{Aes256GcmCodec, NodeRenderer, Page, PageEnvelope, RendererConfig, StatusCode},
     view::EncryptedPayload,
 };
@@ -23,14 +23,32 @@ async fn react_pages_default_to_islands_and_offer_spa_and_ssr() {
             Some(&HeaderValue::from_static(expected_mode))
         );
         let html = String::from_utf8_lossy(response.body());
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        let nonce = policy
+            .split_once("'nonce-")
+            .and_then(|(_, source)| source.split_once('\''))
+            .map(|(nonce, _)| nonce)
+            .expect("nonce source");
         assert!(html.contains("React meets Phoenix"));
         assert!(html.contains("phoenix-page"));
+        assert!(html.contains(&format!("<meta property=\"csp-nonce\" nonce=\"{nonce}\">")));
+        assert!(html.contains(&format!(
+            "id=\"phoenix-page\" type=\"application/json\" nonce=\"{nonce}\""
+        )));
+        assert!(html.contains(&format!("nonce=\"{nonce}\"></script></body></html>")));
+        assert!(!html.contains("\"csp_nonce\""));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
     }
 }
 
 #[tokio::test]
 async fn client_navigation_receives_the_same_business_props() {
-    let application = phoenix_blog_example::application().expect("routes should build");
+    let application = test_application();
 
     for path in ["/react", "/react/spa", "/react/ssr"] {
         let mut request = Request::new(Method::GET, path.parse::<Uri>().unwrap());
@@ -42,12 +60,14 @@ async fn client_navigation_receives_the_same_business_props() {
 
         assert_eq!(envelope.page, "articles/show");
         assert_eq!(envelope.props["title"], "React meets Phoenix");
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert!(!String::from_utf8_lossy(response.body()).contains("csp_nonce"));
     }
 }
 
 #[tokio::test]
 async fn member_directory_receives_one_hundred_unique_rust_records() {
-    let application = phoenix_blog_example::application().expect("routes should build");
+    let application = test_application();
     let mut request = Request::new(Method::GET, Uri::from_static("/members"));
     request
         .headers_mut()

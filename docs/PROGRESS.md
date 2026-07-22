@@ -255,3 +255,13 @@
 - `SessionMiddleware::distributed` 已把 Cookie 生命周期接入异步 load/create/CAS save/CAS rotate/CAS delete；旧 `SessionMiddleware::new(SessionStore, ...)` 保持兼容。
 - handler 只修改请求级快照，冲突返回 409、backend 故障返回 503；持久化失败或冲突不会发送 `Set-Cookie`，成功 load/commit 后才刷新 Cookie。
 - 双 Router 测试覆盖跨实例 create/load/save、原子 ID 轮换、终结式 destroy、并行写冲突、滑动 TTL 以及无 ID 的 conflict/store-error 指标。
+
+## 2026-07-23：CSP nonce 端到端集成
+
+- `phoenix-http` 新增验证并脱敏 Debug 的 `CspNonce`，以及在 Handler 消耗 Request 后保留安全响应元数据的 `ResponseContext`；直接返回 `Page`、`Result<Page, _>` 和状态 tuple 均可自动继承 nonce。
+- `NonceSecurityPolicy` 每请求生成 128-bit nonce，拒绝重复 directive、`unsafe-inline`、硬编码 nonce、控制字符和非法 Vite origin；嵌套策略复用同一值，下游 CSP 不一致返回 500。
+- 同一 nonce 已贯穿 CSP Header、Vite `csp-nonce` meta、stylesheet、hydration JSON、module script、Rust renderer context 与 React Suspense 流式恢复脚本；nonce 保持在 `PageEnvelope` 和 contract hash 之外。
+- Renderer protocol 从 v1 升到 v2，旧 worker 明确失败；同一常驻 worker 的连续请求测试证明 nonce 不串线。SPA/SSR 页面协议请求直接返回 JSON，Islands 仍调用 renderer 收集实际 island 描述。
+- 带 nonce 的 HTML/流式响应固定为 `Cache-Control: private, no-store` 并移除验证器，JSON/API 缓存策略保持不变。
+- `examples/blog` 与 `px new` 脚手架默认按 debug/release 装配开发/生产 nonce policy；Vite 插件明确不生成构建期静态 nonce。
+- 目标 crate 测试、严格 Clippy、React SSR/Vite 测试和 TypeScript build 已通过；全仓门禁在本检查点提交前执行。

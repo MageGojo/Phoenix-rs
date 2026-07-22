@@ -49,6 +49,47 @@ pub struct ConnectionInfo {
     alpn_protocol: Option<String>,
 }
 
+/// A validated request-scoped Content Security Policy nonce.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CspNonce(String);
+
+impl CspNonce {
+    /// Validate a CSP base64-value-like token before it enters an HTML attribute or Header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for short, excessively long, or non-token values.
+    pub fn new(value: impl Into<String>) -> Result<Self, InvalidCspNonce> {
+        let value = value.into();
+        if !(16..=128).contains(&value.len())
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'_' | b'-' | b'=')
+            })
+        {
+            return Err(InvalidCspNonce);
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for CspNonce {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("CspNonce")
+            .field(&"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("CSP nonce is invalid")]
+pub struct InvalidCspNonce;
+
 impl ConnectionInfo {
     #[must_use]
     pub const fn new(
@@ -96,6 +137,62 @@ impl RouteManifest {
     #[must_use]
     pub fn routes(&self) -> &HashMap<String, String> {
         &self.0
+    }
+}
+
+/// Request metadata retained while a handler converts its output into a response.
+///
+/// This keeps request-aware response features such as CSP nonces and named-route
+/// manifests available even when the handler consumes the [`Request`]. Header
+/// values are intentionally excluded from `Debug` output.
+#[derive(Clone)]
+pub struct ResponseContext {
+    uri: Uri,
+    headers: HeaderMap,
+    csp_nonce: Option<CspNonce>,
+    route_manifest: Option<RouteManifest>,
+}
+
+impl ResponseContext {
+    #[must_use]
+    pub fn from_request(request: &Request) -> Self {
+        Self {
+            uri: request.uri().clone(),
+            headers: request.headers().clone(),
+            csp_nonce: request.extensions().get::<CspNonce>().cloned(),
+            route_manifest: request.extensions().get::<RouteManifest>().cloned(),
+        }
+    }
+
+    #[must_use]
+    pub const fn uri(&self) -> &Uri {
+        &self.uri
+    }
+
+    #[must_use]
+    pub const fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+
+    #[must_use]
+    pub const fn csp_nonce(&self) -> Option<&CspNonce> {
+        self.csp_nonce.as_ref()
+    }
+
+    #[must_use]
+    pub const fn route_manifest(&self) -> Option<&RouteManifest> {
+        self.route_manifest.as_ref()
+    }
+}
+
+impl std::fmt::Debug for ResponseContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResponseContext")
+            .field("uri", &self.uri)
+            .field("has_csp_nonce", &self.csp_nonce.is_some())
+            .field("has_route_manifest", &self.route_manifest.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1048,6 +1145,15 @@ fn ascii_file_name(file_name: &str) -> String {
 
 pub trait IntoResponse {
     fn into_response(self) -> Response;
+
+    /// Convert a handler result while retaining safe request-local response metadata.
+    #[doc(hidden)]
+    fn into_response_with_context(self, _context: &ResponseContext) -> Response
+    where
+        Self: Sized,
+    {
+        self.into_response()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1101,6 +1207,12 @@ where
     fn into_response(self) -> Response {
         self.1.into_response().with_status(self.0)
     }
+
+    fn into_response_with_context(self, context: &ResponseContext) -> Response {
+        self.1
+            .into_response_with_context(context)
+            .with_status(self.0)
+    }
 }
 
 impl<T, E> IntoResponse for Result<T, E>
@@ -1112,6 +1224,13 @@ where
         match self {
             Ok(value) => value.into_response(),
             Err(error) => error.into_response(),
+        }
+    }
+
+    fn into_response_with_context(self, context: &ResponseContext) -> Response {
+        match self {
+            Ok(value) => value.into_response_with_context(context),
+            Err(error) => error.into_response_with_context(context),
         }
     }
 }
@@ -1226,9 +1345,10 @@ where
         let handler = move |request: Request| {
             let function = Arc::clone(&function);
             async move {
+                let context = ResponseContext::from_request(&request);
                 match A::from_request(&request) {
-                    Ok(first) => function(first).await.into_response(),
-                    Err(rejection) => rejection.into_response(),
+                    Ok(first) => function(first).await.into_response_with_context(&context),
+                    Err(rejection) => rejection.into_response_with_context(&context),
                 }
             }
         };
@@ -1252,13 +1372,16 @@ macro_rules! impl_typed_handler {
                 let handler = move |request: Request| {
                     let function = Arc::clone(&function);
                     async move {
+                        let context = ResponseContext::from_request(&request);
                         $(
                             let $value = match $type::from_request(&request) {
                                 Ok(value) => value,
-                                Err(rejection) => return rejection.into_response(),
+                                Err(rejection) => {
+                                    return rejection.into_response_with_context(&context);
+                                }
                             };
                         )+
-                        function($($value),+).await.into_response()
+                        function($($value),+).await.into_response_with_context(&context)
                     }
                 };
                 TypedHandler {
@@ -1280,8 +1403,9 @@ where
     Output: IntoResponse + 'static,
 {
     fn call(&self, request: Request) -> BoxFuture<Response> {
+        let context = ResponseContext::from_request(&request);
         let future = (self)(request);
-        Box::pin(async move { future.await.into_response() })
+        Box::pin(async move { future.await.into_response_with_context(&context) })
     }
 }
 
@@ -1342,8 +1466,9 @@ where
     Output: IntoResponse + 'static,
 {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
+        let context = ResponseContext::from_request(&request);
         let future = (self.0)(request, next);
-        Box::pin(async move { future.await.into_response() })
+        Box::pin(async move { future.await.into_response_with_context(&context) })
     }
 }
 
@@ -1430,6 +1555,23 @@ mod tests {
     struct UploadInput {
         title: String,
         document: MultipartField,
+    }
+
+    #[test]
+    fn csp_nonce_validation_and_debug_are_fail_closed() {
+        let nonce = CspNonce::new("0123456789abcdef0123456789abcdef").unwrap();
+        assert_eq!(nonce.as_str(), "0123456789abcdef0123456789abcdef");
+        let debug = format!("{nonce:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains(nonce.as_str()));
+        for invalid in [
+            "short",
+            "0123456789abcde!",
+            "0123456789abcdef\r\n",
+            &"a".repeat(129),
+        ] {
+            assert!(CspNonce::new(invalid).is_err());
+        }
     }
 
     impl FromMultipart for UploadInput {
@@ -1610,7 +1752,7 @@ mod tests {
 
         let handler = typed(|State(name): State<AppName>| async move { name.0 });
         let request = Request::new(Method::GET, "/".parse().expect("valid URI"));
-        let response = handler.call(request).await;
+        let response = Handler::call(&handler, request).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
         let handler: Arc<dyn Handler> = Arc::new(handler);
@@ -1623,6 +1765,46 @@ mod tests {
             .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.body(), "Phoenix");
+    }
+
+    #[tokio::test]
+    async fn handler_response_conversion_retains_safe_request_context() {
+        struct ContextResponse;
+
+        impl IntoResponse for ContextResponse {
+            fn into_response(self) -> Response {
+                Response::text("missing context")
+            }
+
+            fn into_response_with_context(self, context: &ResponseContext) -> Response {
+                let nonce = context.csp_nonce().map_or("missing", CspNonce::as_str);
+                let route_count = context
+                    .route_manifest()
+                    .map_or(0, |manifest| manifest.routes().len());
+                Response::text(format!("{}|{nonce}|{route_count}", context.uri()))
+            }
+        }
+
+        let handler =
+            |_request: Request| async { Ok::<_, Response>((StatusCode::CREATED, ContextResponse)) };
+        let mut request = Request::new(Method::GET, "/context".parse().unwrap());
+        request
+            .extensions_mut()
+            .insert(CspNonce::new("0123456789abcdef0123456789abcdef").unwrap());
+        request
+            .extensions_mut()
+            .insert(RouteManifest::new(Arc::new(HashMap::from([(
+                "home".to_owned(),
+                "/".to_owned(),
+            )]))));
+
+        let response = Handler::call(&handler, request).await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response.body(),
+            "/context|0123456789abcdef0123456789abcdef|1"
+        );
     }
 
     #[test]

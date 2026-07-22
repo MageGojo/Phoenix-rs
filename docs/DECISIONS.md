@@ -102,7 +102,7 @@
 - 决定：使用可配置 worker 池的长期 Node.js renderer，通过版本化完整响应/流式分帧协议与 Rust 服务通信；不按请求启动进程。容量等待与渲染共享 deadline，I/O 故障的完整响应最多替换 worker 后重试一次。
 - 原因：React 官方服务端能力首先存在于 JavaScript 运行时，持久进程能控制延迟和资源成本。
 - 已验证：完整/流式 SSR、成员目录 Islands、逐岛 hydration、多 worker 并发、超时淘汰、崩溃恢复、资源版本与契约 hash 握手、健康快照、显式关闭和 hydration 数据安全编码。
-- 剩余验证：Head、CSP nonce、流中错误语义、hydration 诊断和部署指标导出。
+- 剩余验证：流中错误语义与 hydration 诊断；Head、CSP nonce 和部署指标导出已验证。
 
 ## ADR-014：首个路由器使用 matchit 作为内部路径树
 
@@ -241,3 +241,11 @@
 - 原因：最后写入者覆盖会在并行请求中静默丢失 Session/CSRF/权限状态；分步删除旧 ID、创建新 ID 会产生 fixation 或双 ID 窗口。
 - 边界：memory backend 是 contract reference，不跨进程。HTTP middleware 遇到冲突或 backend 故障必须失败关闭且不得发送未持久化的新 Cookie；业务外部副作用仍需应用自行保证幂等或事务一致性。
 - 验证结果：middleware 已把请求级快照接入异步 load/create/CAS save/CAS rotate/CAS delete；冲突映射为 409、存储故障映射为 503，并仅在持久化成功后提交 Cookie。共享 memory backend 的双 Router 测试覆盖跨实例读写、旧 ID 失效、删除、并行写冲突和指标。
+
+## ADR-035：CSP nonce 属于请求文档上下文，不属于页面业务协议
+
+- 状态：已接受
+- 决定：`NonceSecurityPolicy` 为每个 Request 生成或复用经过验证的 nonce；`ResponseContext` 让普通/typed Handler 的 `IntoResponse` 在 Request 被消费后仍能安全读取该值。相同 nonce 写入 CSP Header、Vite runtime meta、stylesheet、hydration/module script 和 renderer v2 顶层请求；React 流式 SSR 把它交给 `renderToPipeableStream`。
+- 原因：把 nonce 放进 `PageEnvelope` 会污染业务 props、页面导航 JSON、contract hash 和缓存键；构建时固定 Vite `html.cspNonce` 又会让多个请求复用同一值。请求元数据边界既能自动连接框架输出，也能保持 Rust/TypeScript 业务契约稳定。
+- 缓存与失败边界：带 nonce 的 HTML 固定为 `private, no-store` 并移除 ETag/Last-Modified；API/页面 JSON 不携带 nonce 且保留自己的缓存策略。重复/unsafe-inline/预置 nonce CSP 在启动时拒绝，下游 CSP 冲突返回 500，renderer v1 与 v2 协议不兼容并明确失败。
+- 开发边界：Vite 只接受一个显式 HTTP(S) origin，并推导对应 WebSocket source；凭据、路径、query、控制字符与非 HTTP scheme 被拒绝。第三方资源仍需应用显式审查并扩展基础 `SecurityPolicy`。

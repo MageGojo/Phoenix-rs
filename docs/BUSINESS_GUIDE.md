@@ -70,7 +70,7 @@ px dev
 ```rust
 use std::time::Duration;
 
-use phoenix::prelude::{Application, RouteBuildError, Routes};
+use phoenix::prelude::{Application, NonceSecurityPolicy, RouteBuildError, Routes};
 
 #[path = "../app/controllers/mod.rs"]
 pub mod controllers;
@@ -79,7 +79,17 @@ pub mod middleware;
 #[path = "../app/requests/mod.rs"]
 pub mod requests;
 pub fn routes() -> Routes {
-    phoenix::mount_routes!()
+    phoenix::mount_routes!().with_middleware(content_security_policy())
+}
+
+fn content_security_policy() -> NonceSecurityPolicy {
+    if cfg!(debug_assertions) {
+        let origin = std::env::var("VITE_DEV_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+        return NonceSecurityPolicy::development(&origin)
+            .expect("VITE_DEV_URL must be one trusted HTTP(S) origin");
+    }
+    NonceSecurityPolicy::default()
 }
 
 pub fn application() -> Result<Application, RouteBuildError> {
@@ -768,7 +778,7 @@ Page::new("articles/show", props).ssr();
 Page::new("docs/show", props); // Islands
 ```
 
-三种模式共享 `PageEnvelope`。完整浏览器请求返回 HTML；带 `X-Phoenix-Page: 1` 的局部导航请求返回 `application/vnd.phoenix.page+json`。状态、页面名、props、共享数据、错误和 flash 不因模式改变。
+三种模式共享 `PageEnvelope`。完整浏览器请求返回 HTML；带 `X-Phoenix-Page: 1` 的局部导航请求返回 `application/vnd.phoenix.page+json`。状态、页面名、props、共享数据、错误和 flash 不因模式改变。`NonceSecurityPolicy` 生成的 CSP nonce 会自动进入完整 HTML 与 renderer，但不会进入页面 JSON 或业务 props。
 
 ### 编写 TSX 页面和 Island
 
@@ -1012,10 +1022,10 @@ let articles = Article::all()
 
 Phoenix 已提供这些基础中间件，但业务应用仍需自行完成：
 
-- TLS/HTTPS 终止和可信 scheme 判断；
-- 身份认证与授权策略；
-- 多实例共享 Session store 和限流后端；
-- CSP nonce、上传存储策略和依赖安全 CI；
+- 生产证书签发/续期、反向代理和可信 scheme 部署配置；
+- 基于框架 JWT/RBAC/ABAC 原语定义本应用的身份、角色和资源策略；
+- 多实例共享 Token/Session/限流生产适配器；
+- 上传存储策略和依赖安全 CI；
 - 正式上线前的独立安全评审。
 
 不要因为启用了默认中间件就跳过权限检查、Resource 字段白名单或部署层安全配置。

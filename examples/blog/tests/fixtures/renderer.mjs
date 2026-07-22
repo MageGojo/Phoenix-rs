@@ -12,7 +12,7 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line)
     islands = [{ id: "member-creator", component: "member-creator", props: { initialTotal: 100 } }];
   }
   process.stdout.write(`${JSON.stringify({
-    protocol: 1,
+    protocol: 2,
     id: request.id,
     ok: true,
     html,

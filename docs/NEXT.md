@@ -57,9 +57,10 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 
 1. （已完成）TLS/HTTPS/ALPN、RBAC/ABAC 和 JWT refresh/revocation 持久化首版。
 2. （已完成首版）指标 exporter、分布式限流 contract，以及带 CAS middleware/Cookie 提交边界的分布式 Session contract。
-3. CSP nonce、流中错误语义与 hydration 诊断。
-4. WebSocket、SSE、流式请求、队列和邮件。
-5. 管理后台、插件机制、安全评审与项目改名决策。
+3. （已完成首版）CSP nonce：Header/HTML/Vite/renderer 一致、缓存失败关闭和 renderer v2。
+4. WebSocket、SSE、流式请求、流中错误语义与 hydration 诊断。
+5. 队列和邮件。
+6. 管理后台、插件机制、安全评审与项目改名决策。
 
 ## 待验证决策
 
@@ -80,4 +81,4 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 
 ## Definition of Done
 
-HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC 与持久化 token 生命周期已有直接证据。下一阶段以多实例安全状态、指标、CSP nonce 和实时/流式协议为完成标准。
+HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC、持久化 token 生命周期、多实例状态 contract、指标 exporter 与 CSP nonce 已有直接证据。当前下一检查点是 WebSocket、SSE 和流式请求。

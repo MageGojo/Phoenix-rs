@@ -5,7 +5,8 @@ use aes_gcm::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::stream;
 use phoenix_http::{
-    Bytes, HeaderValue, IntoResponse, Request, Response, RouteManifest, StatusCode, header,
+    Bytes, CspNonce, HeaderValue, IntoResponse, Request, Response, ResponseContext, RouteManifest,
+    StatusCode, header,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -374,7 +375,14 @@ impl Page {
         request: &Request,
         renderer: &NodeRenderer,
     ) -> Response {
-        let context = RenderContext::new(request.uri().to_string());
+        if Self::is_page_request(request.headers())
+            && self.envelope.render_mode != RenderMode::Islands
+        {
+            return self
+                .respond_to(request, None)
+                .unwrap_or_else(PageResponseError::into_response);
+        }
+        let context = render_context(request);
         match renderer.render(self.envelope(), &context).await {
             Ok(result) => self
                 .rendered(result)
@@ -404,12 +412,14 @@ impl Page {
                 .unwrap_or_else(PageResponseError::into_response);
         }
 
-        let context = RenderContext::new(request.uri().to_string());
+        let nonce = request.extensions().get::<CspNonce>().cloned();
+        let has_nonce = nonce.is_some();
+        let context = render_context(request);
         let Ok(mut frame_stream) = renderer.render_stream(&self.envelope, &context) else {
             return Response::text("SSR renderer unavailable")
                 .with_status(StatusCode::SERVICE_UNAVAILABLE);
         };
-        let prefix = document_prefix(&self.envelope, &self.stylesheets);
+        let prefix = document_prefix(&self.envelope, &self.stylesheets, nonce.as_ref());
         let render_mode = self.envelope.render_mode;
         let script_src = self.script_src;
         let mut envelope = self.envelope;
@@ -441,7 +451,7 @@ impl Page {
                     ))
                     .await;
             }
-            if let Ok(suffix) = document_suffix(&envelope, &script_src) {
+            if let Ok(suffix) = document_suffix(&envelope, &script_src, nonce.as_ref()) {
                 let _ = sender.send(Bytes::from(suffix)).await;
             }
         });
@@ -460,6 +470,14 @@ impl Page {
         response
             .headers_mut()
             .insert("x-phoenix-ssr-stream", HeaderValue::from_static("1"));
+        if has_nonce {
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-store"),
+            );
+            response.headers_mut().remove(header::ETAG);
+            response.headers_mut().remove(header::LAST_MODIFIED);
+        }
         response
     }
 
@@ -476,15 +494,11 @@ impl Page {
     ///
     /// Returns an error if serialization or the selected codec fails.
     pub fn respond_to(
-        mut self,
+        self,
         request: &Request,
         codec: Option<&dyn PayloadCodec>,
     ) -> Result<Response, PageResponseError> {
-        if let Some(manifest) = request.extensions().get::<RouteManifest>() {
-            self.envelope.routes.clone_from(manifest.routes());
-        }
-        let page_request = Self::is_page_request(request.headers());
-        self.respond(page_request, codec)
+        self.respond_with_context(&ResponseContext::from_request(request), codec)
     }
 
     #[must_use]
@@ -515,6 +529,7 @@ impl Page {
             self.server_html.as_deref(),
             &self.script_src,
             &self.stylesheets,
+            None,
         )
     }
 
@@ -523,6 +538,26 @@ impl Page {
         headers
             .get(PAGE_REQUEST_HEADER)
             .is_some_and(|value| value == "1")
+    }
+
+    fn respond_with_context(
+        mut self,
+        context: &ResponseContext,
+        codec: Option<&dyn PayloadCodec>,
+    ) -> Result<Response, PageResponseError> {
+        if let Some(manifest) = context.route_manifest() {
+            self.envelope.routes.clone_from(manifest.routes());
+        }
+        if Self::is_page_request(context.headers()) {
+            return protocol_response(&self.envelope, codec);
+        }
+        document_response(
+            &self.envelope,
+            self.server_html.as_deref(),
+            &self.script_src,
+            &self.stylesheets,
+            context.csp_nonce(),
+        )
     }
 }
 
@@ -543,6 +578,19 @@ impl IntoResponse for Page {
         self.respond(false, None)
             .unwrap_or_else(PageResponseError::into_response)
     }
+
+    fn into_response_with_context(self, context: &ResponseContext) -> Response {
+        self.respond_with_context(context, None)
+            .unwrap_or_else(PageResponseError::into_response)
+    }
+}
+
+fn render_context(request: &Request) -> RenderContext {
+    let mut context = RenderContext::new(request.uri().to_string());
+    if let Some(nonce) = request.extensions().get::<CspNonce>().cloned() {
+        context = context.csp_nonce(nonce);
+    }
+    context
 }
 
 pub trait PayloadCodec: Send + Sync {
@@ -748,6 +796,7 @@ fn document_response(
     server_html: Option<&str>,
     script_src: &str,
     stylesheets: &[String],
+    nonce: Option<&CspNonce>,
 ) -> Result<Response, PageResponseError> {
     let root_html = if envelope.render_mode == RenderMode::Spa {
         ""
@@ -756,8 +805,8 @@ fn document_response(
     };
     let html = format!(
         "{}{root_html}{}",
-        document_prefix(envelope, stylesheets),
-        document_suffix(envelope, script_src)?
+        document_prefix(envelope, stylesheets, nonce),
+        document_suffix(envelope, script_src, nonce)?
     );
     let mut response = Response::new(StatusCode::OK, html);
     response.headers_mut().insert(
@@ -768,23 +817,39 @@ fn document_response(
         "x-phoenix-render-mode",
         HeaderValue::from_static(envelope.render_mode.as_str()),
     );
+    if nonce.is_some() {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        response.headers_mut().remove(header::ETAG);
+        response.headers_mut().remove(header::LAST_MODIFIED);
+    }
     Ok(response)
 }
 
-fn document_prefix(envelope: &PageEnvelope, stylesheets: &[String]) -> String {
+fn document_prefix(
+    envelope: &PageEnvelope,
+    stylesheets: &[String],
+    nonce: Option<&CspNonce>,
+) -> String {
+    let nonce_attribute = nonce_attribute(nonce);
     let styles = stylesheets
         .iter()
         .fold(String::new(), |mut styles, source| {
             let _ = write!(
                 styles,
-                "<link rel=\"stylesheet\" href=\"{}\">",
-                html_attribute(source)
+                "<link rel=\"stylesheet\" href=\"{}\"{nonce_attribute}>",
+                html_attribute(source),
             );
             styles
         });
     let head = document_head(&envelope.head);
+    let nonce_meta = nonce.map_or_else(String::new, |_| {
+        format!("<meta property=\"csp-nonce\"{nonce_attribute}>")
+    });
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{head}{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{nonce_meta}{head}{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
         envelope.render_mode.as_str()
     )
 }
@@ -833,12 +898,23 @@ fn push_meta(output: &mut String, key: &str, name: &str, content: &str) {
     );
 }
 
-fn document_suffix(envelope: &PageEnvelope, script_src: &str) -> Result<String, PageResponseError> {
+fn document_suffix(
+    envelope: &PageEnvelope,
+    script_src: &str,
+    nonce: Option<&CspNonce>,
+) -> Result<String, PageResponseError> {
     let payload = json_for_html(envelope)?;
     let script_src = html_attribute(script_src);
+    let nonce_attribute = nonce_attribute(nonce);
     Ok(format!(
-        "</div><script id=\"phoenix-page\" type=\"application/json\">{payload}</script><script type=\"module\" src=\"{script_src}\"></script></body></html>"
+        "</div><script id=\"phoenix-page\" type=\"application/json\"{nonce_attribute}>{payload}</script><script type=\"module\" src=\"{script_src}\"{nonce_attribute}></script></body></html>"
     ))
+}
+
+fn nonce_attribute(nonce: Option<&CspNonce>) -> String {
+    nonce.map_or_else(String::new, |nonce| {
+        format!(" nonce=\"{}\"", html_attribute(nonce.as_str()))
+    })
 }
 
 fn html_attribute(value: &str) -> String {
@@ -871,6 +947,8 @@ mod tests {
     use super::*;
     use futures_util::StreamExt;
     use phoenix_http::{Method, ResponseBody};
+    use phoenix_routing::Routes;
+    use phoenix_security::NonceSecurityPolicy;
     use serde_json::json;
     use std::ffi::OsString;
 
@@ -933,6 +1011,32 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn page_navigation_bypasses_the_ssr_renderer() {
+        let renderer = NodeRenderer::new(RendererConfig::command(
+            "/definitely/missing/phoenix-renderer",
+            std::iter::empty::<OsString>(),
+        ));
+        let mut request = Request::new(Method::GET, "/articles/7".parse().unwrap());
+        request
+            .headers_mut()
+            .insert(PAGE_REQUEST_HEADER, HeaderValue::from_static("1"));
+        request
+            .extensions_mut()
+            .insert(CspNonce::new("dddddddddddddddddddddddddddddddd").unwrap());
+
+        let response = Page::new("articles/show", json!({ "id": 7 }))
+            .ssr()
+            .respond_with_renderer(&request, &renderer)
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], PAGE_MEDIA_TYPE);
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        let envelope: PageEnvelope = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(envelope.props["id"], 7);
+    }
+
     #[test]
     fn spa_document_keeps_the_client_root_empty() {
         let response = Page::new("dashboard/show", json!({ "ready": true }))
@@ -984,20 +1088,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nonce_policy_automatically_reaches_page_html_but_not_page_json() {
+        let manifest = AssetManifest {
+            schema: ASSET_MANIFEST_SCHEMA,
+            version: "sha256-build".to_owned(),
+            contract_hash: "fnv1a-contract".to_owned(),
+            public_path: "/assets/".to_owned(),
+            entries: HashMap::from([(
+                "client".to_owned(),
+                AssetEntry {
+                    file: "phoenix-a1.js".to_owned(),
+                    css: vec!["client-b2.css".to_owned()],
+                    imports: Vec::new(),
+                },
+            )]),
+        };
+        let router = Routes::new()
+            .get("/", move |_request: Request| {
+                let manifest = manifest.clone();
+                async move {
+                    Page::new("dashboard/show", json!({ "ready": true }))
+                        .production_assets(&manifest, "client")
+                        .unwrap()
+                }
+            })
+            .name("dashboard.show")
+            .with_middleware(NonceSecurityPolicy::default())
+            .build()
+            .unwrap();
+
+        let response = router
+            .handle(Request::new(Method::GET, "/".parse().unwrap()))
+            .await;
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        let nonce_source = policy
+            .split_once("'nonce-")
+            .map(|(_, source)| source)
+            .expect("nonce source");
+        let nonce = nonce_source
+            .split_once('\'')
+            .map(|(nonce, _)| nonce)
+            .expect("nonce terminator");
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(html.contains(&format!("<meta property=\"csp-nonce\" nonce=\"{nonce}\">")));
+        assert!(html.contains(&format!(
+            "<link rel=\"stylesheet\" href=\"/assets/client-b2.css\" nonce=\"{nonce}\">"
+        )));
+        assert!(html.contains(&format!(
+            "<script id=\"phoenix-page\" type=\"application/json\" nonce=\"{nonce}\">"
+        )));
+        assert!(html.contains(&format!(
+            "<script type=\"module\" src=\"/assets/phoenix-a1.js\" nonce=\"{nonce}\">"
+        )));
+        assert!(!html.contains("\"csp_nonce\""));
+        assert!(html.contains("\"dashboard.show\":\"/\""));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+
+        let mut navigation = Request::new(Method::GET, "/".parse().unwrap());
+        navigation
+            .headers_mut()
+            .insert(PAGE_REQUEST_HEADER, HeaderValue::from_static("1"));
+        let response = router.handle(navigation).await;
+        assert_eq!(response.headers()[header::CONTENT_TYPE], PAGE_MEDIA_TYPE);
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert!(!String::from_utf8_lossy(response.body()).contains("csp_nonce"));
+    }
+
+    #[tokio::test]
     async fn page_response_forwards_renderer_chunks_before_hydration_payload() {
-        let source = r"
+        let source = r#"
           const readline = require('node:readline');
           readline.createInterface({input: process.stdin}).on('line', line => {
             const request = JSON.parse(line);
             if (request.kind === 'hello') {
-              console.log(JSON.stringify({protocol: 1, id: request.id, ok: true})); return;
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true})); return;
             }
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: '<h1>'}));
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: 'Streamed</h1>'}));
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'complete',
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'chunk', chunk: `<h1 data-nonce="${request.csp_nonce}">`}));
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'chunk', chunk: 'Streamed</h1>'}));
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'complete',
               islands: [{id: 'counter', component: 'counter', props: {value: 1}}]}));
           });
-        ";
+        "#;
         let node = std::env::var_os("PATH")
             .and_then(|path| {
                 std::env::split_paths(&path)
@@ -1009,12 +1186,18 @@ mod tests {
             node,
             [OsString::from("--eval"), OsString::from(source)],
         ));
-        let request = Request::new(Method::GET, "/stream".parse().unwrap());
+        let nonce = CspNonce::new("cccccccccccccccccccccccccccccccc").unwrap();
+        let mut request = Request::new(Method::GET, "/stream".parse().unwrap());
+        request.extensions_mut().insert(nonce.clone());
         let response = Page::new("test/page", json!({ "ready": true }))
             .ssr()
             .respond_streaming_with_renderer(&request, &renderer);
         assert!(response.is_streaming());
         assert_eq!(response.headers()["x-phoenix-ssr-stream"], "1");
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
         let (_, _, body) = response.into_parts();
         let ResponseBody::Stream(stream) = body else {
             panic!("expected streaming body");
@@ -1029,9 +1212,23 @@ mod tests {
             });
         let html = String::from_utf8(html).unwrap();
 
-        assert!(html.contains("<h1>Streamed</h1>"));
+        assert!(html.contains("Streamed</h1>"));
+        assert!(html.contains(&format!("data-nonce=\"{}\"", nonce.as_str())));
+        assert!(html.contains(&format!(
+            "<meta property=\"csp-nonce\" nonce=\"{}\">",
+            nonce.as_str()
+        )));
+        assert!(html.contains(&format!(
+            "id=\"phoenix-page\" type=\"application/json\" nonce=\"{}\"",
+            nonce.as_str()
+        )));
+        assert!(html.contains(&format!(
+            "type=\"module\" src=\"{}\" nonce=\"{}\"",
+            default_script_src(),
+            nonce.as_str()
+        )));
         assert!(html.contains("\"component\":\"counter\""));
-        assert!(html.find("<h1>").unwrap() < html.find("phoenix-page").unwrap());
+        assert!(html.find("<h1").unwrap() < html.find("phoenix-page").unwrap());
     }
 
     #[test]

@@ -1757,6 +1757,8 @@ dependencies = [
  "futures-util",
  "phoenix-http",
  "phoenix-metrics",
+ "phoenix-routing",
+ "phoenix-security",
  "serde",
  "serde_json",
  "thiserror",

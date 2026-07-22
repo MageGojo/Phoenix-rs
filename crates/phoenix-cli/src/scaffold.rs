@@ -595,12 +595,22 @@ pub mod resources;
 #[path = "../database/migrations/mod.rs"]
 pub mod migrations;
 
-use phoenix::prelude::{Application, RouteBuildError, Routes};
+use phoenix::prelude::{Application, NonceSecurityPolicy, RouteBuildError, Routes};
 
 #[must_use]
 #[allow(clippy::duplicate_mod)]
 pub fn routes() -> Routes {
-    phoenix::mount_routes!()
+    phoenix::mount_routes!().with_middleware(content_security_policy())
+}
+
+fn content_security_policy() -> NonceSecurityPolicy {
+    if cfg!(debug_assertions) {
+        let vite_origin = std::env::var("VITE_DEV_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+        return NonceSecurityPolicy::development(&vite_origin)
+            .expect("VITE_DEV_URL must be one trusted HTTP(S) origin");
+    }
+    NonceSecurityPolicy::default()
 }
 
 /// Build the Phoenix application.
@@ -1752,6 +1762,9 @@ mod tests {
                 .unwrap()
                 .contains("file:")
         );
+        let application = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(application.contains("NonceSecurityPolicy::development"));
+        assert!(application.contains("with_middleware(content_security_policy())"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use phoenix_http::CspNonce;
 use phoenix_metrics::{Metrics, RendererMetricsSnapshot};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -20,7 +21,7 @@ use tokio::{
 
 use crate::{AssetManifest, AssetManifestError, Island, PageEnvelope, RendererManifest};
 
-const RENDERER_PROTOCOL: u8 = 1;
+const RENDERER_PROTOCOL: u8 = 2;
 
 #[derive(Clone, Debug)]
 pub struct RendererConfig {
@@ -417,6 +418,7 @@ impl Drop for ActiveRequest<'_> {
 pub struct RenderContext {
     pub url: String,
     pub locale: String,
+    csp_nonce: Option<CspNonce>,
 }
 
 impl RenderContext {
@@ -425,6 +427,7 @@ impl RenderContext {
         Self {
             url: url.into(),
             locale: "en".to_owned(),
+            csp_nonce: None,
         }
     }
 
@@ -432,6 +435,19 @@ impl RenderContext {
     pub fn locale(mut self, locale: impl Into<String>) -> Self {
         self.locale = locale.into();
         self
+    }
+
+    /// Attach the validated nonce that must also appear in the HTTP CSP Header
+    /// and the surrounding HTML document.
+    #[must_use]
+    pub fn csp_nonce(mut self, nonce: CspNonce) -> Self {
+        self.csp_nonce = Some(nonce);
+        self
+    }
+
+    #[must_use]
+    pub const fn nonce(&self) -> Option<&CspNonce> {
+        self.csp_nonce.as_ref()
     }
 }
 
@@ -584,6 +600,8 @@ struct RendererRequest {
     contract_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     asset_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    csp_nonce: Option<String>,
 }
 
 impl RendererRequest {
@@ -597,6 +615,7 @@ impl RendererRequest {
             locale: None,
             contract_hash: config.contract_hash.clone(),
             asset_version: config.asset_version.clone(),
+            csp_nonce: None,
         }
     }
 
@@ -618,6 +637,10 @@ impl RendererRequest {
             envelope: Some(envelope),
             url: Some(context.url.clone()),
             locale: Some(context.locale.clone()),
+            csp_nonce: context
+                .csp_nonce
+                .as_ref()
+                .map(|nonce| nonce.as_str().to_owned()),
         }
     }
 }
@@ -811,7 +834,7 @@ mod tests {
           let count = 0;
           readline.createInterface({input: process.stdin}).on('line', line => {
             const request = JSON.parse(line); count += 1;
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true,
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
               html: request.kind === 'hello' ? '' : `<p>${request.envelope.props.value}:${count}</p>`, head: []}));
           });
         ";
@@ -838,12 +861,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keeps_request_nonces_outside_the_envelope_on_reused_workers() {
+        let source = r#"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.kind === 'hello') {
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true})); return;
+            }
+            const leaked = Object.hasOwn(request.envelope, 'csp_nonce');
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: !leaked,
+              html: `<p data-nonce="${request.csp_nonce}"></p>`, head: [],
+              error: leaked ? 'nonce leaked into envelope' : undefined}));
+          });
+        "#;
+        let renderer = NodeRenderer::new(node_fixture(source));
+        let envelope = PageEnvelope::new_for_test(json!({}));
+        let first_nonce = CspNonce::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let second_nonce = CspNonce::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+
+        let first = renderer
+            .render(
+                &envelope,
+                &RenderContext::new("/first").csp_nonce(first_nonce),
+            )
+            .await
+            .unwrap();
+        let second = renderer
+            .render(
+                &envelope,
+                &RenderContext::new("/second").csp_nonce(second_nonce),
+            )
+            .await
+            .unwrap();
+
+        assert!(first.html.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(second.html.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+        assert!(!second.html.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    }
+
+    #[tokio::test]
+    async fn rejects_workers_using_the_pre_nonce_protocol() {
+        let source = r"
+          const readline = require('node:readline');
+          readline.createInterface({input: process.stdin}).on('line', line => {
+            const request = JSON.parse(line);
+            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true}));
+          });
+        ";
+        let renderer = NodeRenderer::new(node_fixture(source));
+
+        assert!(matches!(
+            renderer.warm_up().await,
+            Err(RendererError::ProtocolMismatch { protocol: 1, .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn worker_pool_renders_concurrently_and_reports_health() {
         let source = r"
           const readline = require('node:readline');
           readline.createInterface({input: process.stdin}).on('line', line => {
             const request = JSON.parse(line);
-            const response = () => console.log(JSON.stringify({protocol: 1, id: request.id,
+            const response = () => console.log(JSON.stringify({protocol: 2, id: request.id,
               ok: true, html: '<p>done</p>', head: []}));
             if (request.kind === 'render') setTimeout(response, 120); else response();
           });
@@ -879,7 +959,7 @@ mod tests {
           const readline = require('node:readline');
           readline.createInterface({input: process.stdin}).on('line', line => {
             const request = JSON.parse(line);
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true,
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true,
               contract_hash: 'renderer-contract', html: ''}));
           });
         ";
@@ -909,11 +989,11 @@ mod tests {
           readline.createInterface({input: process.stdin}).on('line', line => {
             const request = JSON.parse(line);
             if (request.kind === 'hello') {
-              console.log(JSON.stringify({protocol: 1, id: request.id, ok: true})); return;
+              console.log(JSON.stringify({protocol: 2, id: request.id, ok: true})); return;
             }
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: '<h1>'}));
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'chunk', chunk: 'Hello</h1>'}));
-            console.log(JSON.stringify({protocol: 1, id: request.id, ok: true, kind: 'complete',
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'chunk', chunk: '<h1>'}));
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'chunk', chunk: 'Hello</h1>'}));
+            console.log(JSON.stringify({protocol: 2, id: request.id, ok: true, kind: 'complete',
               islands: [{id: 'counter', component: 'counter', props: {value: 1}}]}));
           });
         ";

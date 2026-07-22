@@ -1,6 +1,8 @@
 use std::{path::PathBuf, time::Duration};
 
-use phoenix::prelude::{NodeRenderer, RendererConfig, RouteGroup, Routes, SecurityHeaders, typed};
+use phoenix::prelude::{
+    NodeRenderer, NonceSecurityPolicy, RendererConfig, RouteGroup, Routes, typed,
+};
 
 use crate::{
     controllers::{
@@ -24,7 +26,7 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
     let member_renderer = renderer.clone();
 
     Routes::new()
-        .with_middleware(SecurityHeaders)
+        .with_middleware(security_policy())
         .with_middleware(PoweredByPhoenix)
         .get("/health", HealthController::show)
         .name("health")
@@ -60,6 +62,16 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
                     .name("dashboard")
             },
         )
+}
+
+fn security_policy() -> NonceSecurityPolicy {
+    if cfg!(debug_assertions) {
+        let vite_origin =
+            std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
+        return NonceSecurityPolicy::development(&vite_origin)
+            .expect("VITE_DEV_URL must be one trusted HTTP(S) origin");
+    }
+    NonceSecurityPolicy::default()
 }
 
 fn ssr_renderer() -> NodeRenderer {

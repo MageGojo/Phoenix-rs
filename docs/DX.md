@@ -158,7 +158,7 @@ cd my-app
 px dev
 ```
 
-`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。默认执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
+`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。生成项目默认安装 `NonceSecurityPolicy`：debug build 从精确 `VITE_DEV_URL` 生成 Vite HTTP/WebSocket CSP，release build 使用生产 nonce policy；配置非法会在启动时失败。默认同时执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
 
 业务生成命令：
 
