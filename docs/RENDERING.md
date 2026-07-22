@@ -40,6 +40,68 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> HTML shell + props
 - History、滚动恢复、加载状态、错误边界和资源版本刷新由 `phoenix-react` 管理。
 - SPA 不要求生产环境运行 Node.js，适合显式选择为强交互页面模式。
 
+### 客户端导航
+
+Vite 生成的浏览器入口会调用 `startPhoenix({ pages, islands })`。启动器在 SPA/SSR 首屏挂载整页 React root，在 Islands 首屏只 hydrate 实际 island；第一次局部导航后，三种模式都由同一个客户端 root 替换页面组件和 props：
+
+```tsx
+import { Link, navigate } from "@phoenix/react";
+
+export function ProjectLinks() {
+  return (
+    <nav>
+      <Link href="/projects">项目</Link>
+      <Link href="/projects?view=archived" replace preserveScroll>
+        已归档
+      </Link>
+    </nav>
+  );
+}
+
+await navigate("/projects/new", { preserveFocus: true });
+```
+
+`Link` 和文档级委托只接管同源、无修饰键的主键点击。外链、`download`、非 `_self` target、`rel="external"` 和浏览器打开新标签操作保持原生行为；同源链接需要显式完整加载时使用 `<Link href="..." reloadDocument>`。每次局部访问发送 `X-Phoenix-Page: 1`；新访问会取消旧请求，并用请求序号阻止不遵守 `AbortSignal` 的旧响应覆盖新页面。响应协议版本不一致，或当前页已知的 `asset_version` / `contract_hash` 在响应中缺失或发生变化，会在加载新组件前执行完整浏览器导航，避免旧 bundle 渲染新契约；当前页尚无 identity 时可以采用响应首次给出的值。
+
+成功导航会同步更新 `#phoenix-page`、受控 `PageHead`、React 页面、History 和 URL。普通访问默认滚动到顶部并把焦点移到 `autofocus`、`main` 或主标题；hash、`preserveScroll` 和 `preserveFocus` 可以覆盖该行为。History 条目保存滚动坐标与带 `id`/`data-phoenix-focus-key` 的焦点位置，`popstate` 重取页面后恢复它们。`replace` 使用 `replaceState`，其余访问使用 `pushState`。
+
+运行时在 `document` 上发送 `phoenix:navigation-start`、`phoenix:navigation-success`、`phoenix:navigation-hard`、`phoenix:navigation-error` 和 `phoenix:navigation-finish` 事件。手动启动时也可以传入 `fetcher`、`decrypt`、`onNavigationError` 和测试用 `hardNavigate`；测试或卸载时使用 `stopPhoenix()` 清理监听器与 React roots。
+
+### 强类型表单与字段错误
+
+生成的 Rust action 可以直接作为 `Form` 的 action。输入值、`setField` 字段和值类型以及成功结果都从 Rust 契约保持类型约束：
+
+```tsx
+import { FieldError, Form } from "@phoenix/react";
+import { members } from "../generated/routes.js";
+import type { Member, StoreMemberInput } from "../generated/contracts.js";
+
+export function MemberForm() {
+  return (
+    <Form<StoreMemberInput, Member>
+      action={members.store}
+      initialValues={{ name: "" }}
+      onSuccess={(member) => console.info(member.id)}
+    >
+      {(form) => (
+        <>
+          <input
+            name="name"
+            value={form.data.name}
+            onChange={(event) => form.setField("name", event.currentTarget.value)}
+            aria-invalid={Boolean(form.errors.name)}
+          />
+          <FieldError errors={form.errors} name="name" />
+          <button type="submit" disabled={form.processing}>保存</button>
+        </>
+      )}
+    </Form>
+  );
+}
+```
+
+`Form` 自动把新的提交连接到 `AbortSignal`，重复提交会取消前一请求。422 响应中的 `{ errors: { field: [{ rule, message }] } }` 会映射为 `form.errors`；`FieldError` 输出该字段第一条消息，`setField` 会清除正在编辑字段的旧错误。`useForm` 提供同一状态机的 hook 形式，并暴露 `submit`、`cancel`、`reset`、`clearErrors`、`failure` 和 `wasSuccessful`。底层 `RustCallError` 继续保留 `status`、原始 `details` 和规范化后的 `fieldErrors`。
+
 ## 4. SSR
 
 流程：

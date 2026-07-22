@@ -902,9 +902,15 @@ mod tests {
         let response = page.clone().into_response();
         let body = String::from_utf8_lossy(response.body());
 
-        assert!(body.contains("<title>Apps &lt; trusted</title>"));
-        assert!(body.contains("content=\"Install &quot;safely&quot; &amp; privately\""));
-        assert!(body.contains("property=\"og:title\" content=\"Apps &lt; trusted\""));
+        assert!(body.contains("<title data-phoenix-head>Apps &lt; trusted</title>"));
+        assert!(
+            body.contains(
+                "content=\"Install &quot;safely&quot; &amp; privately\" data-phoenix-head"
+            )
+        );
+        assert!(
+            body.contains("property=\"og:title\" content=\"Apps &lt; trusted\" data-phoenix-head")
+        );
         assert!(!body.contains("<script> here"));
 
         let protocol = page.respond(true, None).expect("protocol response");

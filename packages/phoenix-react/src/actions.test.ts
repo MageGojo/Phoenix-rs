@@ -1,91 +1,22 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
-import { renderToString } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  callRust,
   createAes256GcmDecryptor,
   createRustAction,
-  callRust,
   fetchPage,
-  Island,
-  island,
   RustCallError,
-  startPhoenix,
   type EncryptedPayload,
   type PageEnvelope,
 } from "./index.js";
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
-  .IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.body.innerHTML = "";
+});
 
-describe("Phoenix React client", () => {
-  it("marks an island with its stable backend id", () => {
-    const Counter = ({ count }: { count: number }) => createElement("button", null, count);
-    const CounterIsland = island("counter", Counter);
-
-    expect(renderToString(createElement(CounterIsland, { islandId: "counter-7", count: 7 })))
-      .toContain('data-phoenix-island="counter-7"');
-  });
-
-  it("derives the island name from a named React component", () => {
-    function MemberDirectory({ count }: { count: number }) {
-      return createElement("button", null, count);
-    }
-    const MemberDirectoryIsland = island(MemberDirectory);
-
-    expect(renderToString(createElement(MemberDirectoryIsland, { count: 7 })))
-      .toContain('data-phoenix-island="member-directory"');
-  });
-
-  it("marks one unchanged React component with the declarative Island boundary", () => {
-    function SaveButton({ label }: { label: string }) {
-      return createElement("button", null, label);
-    }
-
-    expect(renderToString(
-      createElement(Island, null, createElement(SaveButton, { label: "Save" })),
-    )).toContain('data-phoenix-island="save-button"');
-  });
-
-  it("loads only the current SSR page before hydrating it", async () => {
-    function ArticlePage({ title }: { title: string }) {
-      return createElement("main", null, createElement("h1", null, title));
-    }
-    const envelope: PageEnvelope = {
-      protocol: 1,
-      render_mode: "ssr",
-      page: "articles/show",
-      props: { title: "Server article" },
-      shared: {},
-      errors: {},
-      flash: {},
-      contract_hash: null,
-      asset_version: null,
-      request_id: null,
-      routes: {},
-      islands: [],
-    };
-    document.body.innerHTML = [
-      '<div id="phoenix-root"><main><h1>Server article</h1></main></div>',
-      `<script id="phoenix-page" type="application/json">${JSON.stringify(envelope)}</script>`,
-    ].join("");
-    const loadArticle = vi.fn(async () => ({ default: ArticlePage }));
-    const loadOther = vi.fn(async () => ({ default: ArticlePage }));
-
-    await act(async () => {
-      await startPhoenix({
-        pages: {
-          "articles/show": { load: loadArticle },
-          "members/index": { load: loadOther },
-        },
-      });
-    });
-
-    expect(loadArticle).toHaveBeenCalledOnce();
-    expect(loadOther).not.toHaveBeenCalled();
-  });
-
+describe("Phoenix React actions", () => {
   it("posts input to a Rust action and returns its JSON result", async () => {
     installRoutes({ "members.store": "/api/members" }, "csrf-action-token");
     const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
@@ -125,13 +56,13 @@ describe("Phoenix React client", () => {
       body: JSON.stringify({ name: "Ada" }),
       method: "POST",
     }));
-    fetchMock.mockRestore();
   });
 
-  it("surfaces a Rust action error with its status and details", async () => {
+  it("surfaces a Rust action error with normalized field details", async () => {
     installRoutes({ "members.store": "/api/members" });
     const fetcher = async () => new Response(JSON.stringify({
-      message: "成员姓名不能为空。",
+      message: "The submitted data is invalid.",
+      errors: { name: [{ rule: "required", message: "The name field is required." }] },
     }), {
       status: 422,
       headers: { "content-type": "application/json" },
@@ -140,10 +71,10 @@ describe("Phoenix React client", () => {
     const request = callRust("members.store", { name: "" }, fetcher as typeof fetch);
     await expect(request).rejects.toBeInstanceOf(RustCallError);
     await expect(request).rejects.toMatchObject({
-      name: "RustCallError",
       status: 422,
-      message: "成员姓名不能为空。",
-      details: { message: "成员姓名不能为空。" },
+      fieldErrors: {
+        name: [{ rule: "required", message: "The name field is required." }],
+      },
     });
   });
 

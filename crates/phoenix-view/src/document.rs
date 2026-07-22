@@ -286,7 +286,11 @@ pub(crate) fn document_suffix(
 fn document_head(head: &PageHead) -> String {
     let mut output = String::new();
     if let Some(title) = &head.title {
-        let _ = write!(output, "<title>{}</title>", html_text(title));
+        let _ = write!(
+            output,
+            "<title data-phoenix-head>{}</title>",
+            html_text(title)
+        );
     }
     if let Some(description) = &head.description {
         push_meta(&mut output, "name", "description", description);
@@ -294,7 +298,7 @@ fn document_head(head: &PageHead) -> String {
     if let Some(canonical) = &head.canonical {
         let _ = write!(
             output,
-            "<link rel=\"canonical\" href=\"{}\">",
+            "<link rel=\"canonical\" href=\"{}\" data-phoenix-head>",
             html_attribute(canonical)
         );
     }
@@ -321,7 +325,7 @@ fn document_head(head: &PageHead) -> String {
 fn push_meta(output: &mut String, key: &str, name: &str, content: &str) {
     let _ = write!(
         output,
-        "<meta {key}=\"{}\" content=\"{}\">",
+        "<meta {key}=\"{}\" content=\"{}\" data-phoenix-head>",
         html_attribute(name),
         html_attribute(content)
     );
