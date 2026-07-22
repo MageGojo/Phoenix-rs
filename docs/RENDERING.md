@@ -320,3 +320,35 @@ Vite 生成：
 ## 11. 受控页面元数据
 
 `Page::head(PageHead::new(...))` 把 title、description、canonical、robots 和 Open Graph 写入同一个页面信封。完整 HTML 由 Rust 使用上下文正确的 HTML 转义生成 `<head>`；局部导航读取相同结构，不接受业务注入任意标签、脚本或样式。`Page::csrf_token(...)` 是可选协议字段，供浏览器 action 传输使用，不应进入日志或页面业务 props。
+
+## 12. 自定义 HTML 文档
+
+应用可以定制 React root 外围的 HTML，而不接管 hydration 协议：
+
+```rust
+use phoenix::prelude::{
+    DocumentSlots, DocumentTemplate, Page, TrustedHtml,
+};
+
+let document = DocumentTemplate::from_fn(|context| {
+    DocumentSlots::new()
+        .language("zh-CN")
+        .body_attribute("class", "application-shell")
+        .expect("static HTML attribute")
+        .root_attribute("class", "application-root")
+        .expect("static HTML attribute")
+        .head(TrustedHtml::new(format!(
+            "<script{} src=\"/theme.js\"></script>",
+            context.nonce_attribute(),
+        )))
+        .before_root(TrustedHtml::new("<header>Application</header>"))
+        .after_root(TrustedHtml::new("<footer>Company</footer>"))
+});
+
+let response = Page::new("dashboard/show", props)
+    .document(document);
+```
+
+`DocumentTemplate::from_fn` 每个请求接收只读 `DocumentContext`，因此布局可以按页面名或渲染模式选择 chrome，并给自定义 script/style 使用当前请求的 CSP nonce。需要返回配置错误时使用 `DocumentTemplate::try_from_fn`；失败会映射为不泄露详情的 500。
+
+框架始终拥有 `#phoenix-root`、`data-render-mode`、安全编码的 hydration JSON 和版本化 module 入口。模板只能增加经过转义的 element attributes，以及明确包装为 `TrustedHtml` 的 head/root 前后片段。`TrustedHtml` 会原样进入响应，只用于应用自有静态标记或已经按 HTML 上下文净化的内容；动态 title/meta 继续使用 `PageHead`。

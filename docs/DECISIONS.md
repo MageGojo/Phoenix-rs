@@ -256,3 +256,10 @@
 - 决定：Phoenix 提供独立于可逆加密的 `BlindIndexer`。索引固定使用 HMAC-SHA256，认证输入显式 framing 格式版本、key ID、非空有界 purpose 和原值；持久化 envelope 携带版本、算法与 key ID。active key 负责新写入，最多七个 legacy key 只用于验证和生成轮换查询候选。
 - 原因：直接保存敏感字段或无 key 的 SHA-256 会暴露原值或允许低成本字典匹配；用途 framing 避免跨表复用和拼接碰撞，有界候选避免 key ring 无限制扩大 SQL 与 CPU 成本。
 - 边界：盲索引是确定性认证标签，不是加密，会泄漏重复关系；低熵字段在索引与 key 同时泄露后仍可离线枚举。应用必须单独定义规范化规则，并让盲索引 key 与 AES-GCM、JWT、Session/Cookie、CSRF 及其他 HMAC key 完全独立。未知 key、畸形 envelope 和 tag 不匹配都失败关闭。
+
+## ADR-037：自定义文档只接管 React root 外围 chrome
+
+- 状态：已接受
+- 决定：应用通过 cloneable `DocumentTemplate` 函数按请求生成 `DocumentSlots`，定制 html/body/root attributes、head 和 root 前后标记。Phoenix 始终生成 React root、渲染模式、hydration JSON、module 入口、资源标签和请求级 CSP nonce。
+- 原因：生产应用需要品牌 shell、语言、主题、全局导航和自有 head 标签；把完整 HTML 字符串交给业务会同时复制协议标记、转义、流式 SSR 与 CSP 逻辑。受控 slots 保留可组合性，也让普通与流式文档使用同一模板。
+- 边界：attributes 始终执行 HTML attribute 转义，root 的 `id`/`data-render-mode` 保留给框架。`TrustedHtml` 只接收应用自有静态标记或已按上下文净化的内容；业务数据继续使用 React props 或 `PageHead`。模板失败映射为通用 500，局部页面协议不执行文档模板。

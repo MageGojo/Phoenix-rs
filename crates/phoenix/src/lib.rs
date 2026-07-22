@@ -44,9 +44,10 @@ pub mod prelude {
         FromMultipart, FromRequest, Handler, Header, HeaderRejection, IntoResponse,
         InvalidCspNonce, Json, JsonRejection, Method, Middleware, Mime, Multipart, MultipartData,
         MultipartField, MultipartRejection, Next, Path, PathRejection, Query, QueryRejection,
-        Redirect, Request, Response, ResponseBody, ResponseContext, RouteManifest, SecurityHeaders,
-        State, StateMiddleware, StateRejection, StatusCode, TransportScheme, TypedHandler, Uri,
-        middleware_fn, typed,
+        Redirect, Request, RequestBodyError, RequestBodyMode, RequestBodyStream,
+        RequestBodyStreamRejection, Response, ResponseBody, ResponseContext, RouteManifest,
+        SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode, StreamingHandler,
+        TransportScheme, TypedHandler, Uri, Version, middleware_fn, streaming, typed,
     };
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
     pub use phoenix_metrics::{
@@ -72,8 +73,9 @@ pub mod prelude {
     };
     pub use phoenix_view::{
         ASSET_MANIFEST_SCHEMA, Aes256GcmCodec, AssetEntry, AssetManifest, AssetManifestError,
-        EncryptionError, Island, NodeRenderer, OpenGraph, Page, PageEnvelope, PageHead,
-        PageResponseError, PayloadCodec, RenderContext, RenderFrame, RenderMode, RenderResult,
-        RendererConfig, RendererError, RendererHealth, RendererManifest, RendererStream,
+        DocumentContext, DocumentSlots, DocumentTemplate, DocumentTemplateError, EncryptionError,
+        Island, NodeRenderer, OpenGraph, Page, PageEnvelope, PageHead, PageResponseError,
+        PayloadCodec, RenderContext, RenderFrame, RenderMode, RenderResult, RendererConfig,
+        RendererError, RendererHealth, RendererManifest, RendererStream, TrustedHtml,
     };
 }

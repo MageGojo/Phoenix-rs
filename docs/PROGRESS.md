@@ -274,3 +274,11 @@
 - key ring 固定 active-first 顺序并限制为最多 8 个 active/legacy key；查询候选有界，旧 envelope 可验证，tag 使用常量时间比较。
 - 测试覆盖稳定向量、用途隔离、不同 key、轮换候选、短 key、重复/超量 key、Debug 脱敏及畸形/未知/认证失败 envelope。
 - 安全文档明确盲索引不是加密，会泄漏等值关系；低熵数据在 key 泄露后仍可离线枚举，且 key 必须独立于 Encryptor、JWT、Session 和其他用途。
+
+## 2026-07-23：可编程 HTML 文档模板
+
+- 从 `phoenix-view` 主模块拆出文档渲染边界，新增 cloneable `DocumentTemplate` 与按页面执行的 Rust 函数入口。
+- `DocumentSlots` 支持 html/body/root attributes、可信 head、root 前后 chrome；属性值统一转义并保留框架拥有的 root ID 与渲染模式。
+- `DocumentContext` 提供页面信封与当前请求 CSP nonce，供应用自有 script/style 标签使用；Phoenix 继续托管 hydration JSON、module 入口和上下文安全编码。
+- 普通、SSR/Islands 完整响应与流式响应共用同一文档模板；模板失败返回不泄露内部详情的 500，页面协议导航不执行 HTML chrome。
+- `cargo test -p phoenix-view --locked` 通过 30 个测试，覆盖自定义 chrome、属性注入防护、nonce 函数上下文和错误失败关闭。

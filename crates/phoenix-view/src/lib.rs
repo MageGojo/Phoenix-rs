@@ -12,16 +12,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
-    fmt::Write as _,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 
 mod assets;
+mod document;
 mod renderer;
 
 pub use assets::{
     ASSET_MANIFEST_SCHEMA, AssetEntry, AssetManifest, AssetManifestError, RendererManifest,
+};
+pub use document::{
+    DocumentContext, DocumentSlots, DocumentTemplate, DocumentTemplateError, TrustedHtml,
 };
 pub use renderer::{
     NodeRenderer, RenderContext, RenderFrame, RenderResult, RendererConfig, RendererError,
@@ -212,6 +215,7 @@ pub struct Page {
     server_html: Option<String>,
     script_src: String,
     stylesheets: Vec<String>,
+    document_template: DocumentTemplate,
 }
 
 impl Page {
@@ -237,6 +241,7 @@ impl Page {
             server_html: None,
             script_src: default_script_src(),
             stylesheets: Vec::new(),
+            document_template: DocumentTemplate::default(),
         }
     }
 
@@ -335,6 +340,13 @@ impl Page {
         self
     }
 
+    /// Customize the trusted HTML chrome around Phoenix's managed React root.
+    #[must_use]
+    pub fn document(mut self, template: DocumentTemplate) -> Self {
+        self.document_template = template;
+        self
+    }
+
     /// Apply HTML and island descriptors returned by the trusted SSR renderer.
     #[must_use]
     pub fn rendered(mut self, result: RenderResult) -> Self {
@@ -414,12 +426,24 @@ impl Page {
 
         let nonce = request.extensions().get::<CspNonce>().cloned();
         let has_nonce = nonce.is_some();
+        let document_slots = match self
+            .document_template
+            .render(DocumentContext::new(&self.envelope, nonce.as_ref()))
+        {
+            Ok(slots) => slots,
+            Err(error) => return PageResponseError::Document(error).into_response(),
+        };
         let context = render_context(request);
         let Ok(mut frame_stream) = renderer.render_stream(&self.envelope, &context) else {
             return Response::text("SSR renderer unavailable")
                 .with_status(StatusCode::SERVICE_UNAVAILABLE);
         };
-        let prefix = document_prefix(&self.envelope, &self.stylesheets, nonce.as_ref());
+        let prefix = document::document_prefix(
+            &self.envelope,
+            &self.stylesheets,
+            nonce.as_ref(),
+            &document_slots,
+        );
         let render_mode = self.envelope.render_mode;
         let script_src = self.script_src;
         let mut envelope = self.envelope;
@@ -450,7 +474,9 @@ impl Page {
                         b"<!-- Phoenix SSR stream interrupted -->",
                     ))
                     .await;
-            } else if let Ok(suffix) = document_suffix(&envelope, &script_src, nonce.as_ref()) {
+            } else if let Ok(suffix) =
+                document::document_suffix(&envelope, &script_src, nonce.as_ref(), &document_slots)
+            {
                 let _ = sender.send(Bytes::from(suffix)).await;
             }
         });
@@ -529,6 +555,7 @@ impl Page {
             &self.script_src,
             &self.stylesheets,
             None,
+            &self.document_template,
         )
     }
 
@@ -556,6 +583,7 @@ impl Page {
             &self.script_src,
             &self.stylesheets,
             context.csp_nonce(),
+            &self.document_template,
         )
     }
 }
@@ -740,6 +768,8 @@ pub enum PageResponseError {
     Serialization(#[from] serde_json::Error),
     #[error(transparent)]
     Encryption(#[from] EncryptionError),
+    #[error(transparent)]
+    Document(#[from] DocumentTemplateError),
 }
 
 impl IntoResponse for PageResponseError {
@@ -796,16 +826,18 @@ fn document_response(
     script_src: &str,
     stylesheets: &[String],
     nonce: Option<&CspNonce>,
+    template: &DocumentTemplate,
 ) -> Result<Response, PageResponseError> {
     let root_html = if envelope.render_mode == RenderMode::Spa {
         ""
     } else {
         server_html.unwrap_or_default()
     };
+    let slots = template.render(DocumentContext::new(envelope, nonce))?;
     let html = format!(
         "{}{root_html}{}",
-        document_prefix(envelope, stylesheets, nonce),
-        document_suffix(envelope, script_src, nonce)?
+        document::document_prefix(envelope, stylesheets, nonce, &slots),
+        document::document_suffix(envelope, script_src, nonce, &slots)?
     );
     let mut response = Response::new(StatusCode::OK, html);
     response.headers_mut().insert(
@@ -825,120 +857,6 @@ fn document_response(
         response.headers_mut().remove(header::LAST_MODIFIED);
     }
     Ok(response)
-}
-
-fn document_prefix(
-    envelope: &PageEnvelope,
-    stylesheets: &[String],
-    nonce: Option<&CspNonce>,
-) -> String {
-    let nonce_attribute = nonce_attribute(nonce);
-    let styles = stylesheets
-        .iter()
-        .fold(String::new(), |mut styles, source| {
-            let _ = write!(
-                styles,
-                "<link rel=\"stylesheet\" href=\"{}\"{nonce_attribute}>",
-                html_attribute(source),
-            );
-            styles
-        });
-    let head = document_head(&envelope.head);
-    let nonce_meta = nonce.map_or_else(String::new, |_| {
-        format!("<meta property=\"csp-nonce\"{nonce_attribute}>")
-    });
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">{nonce_meta}{head}{styles}</head><body><div id=\"phoenix-root\" data-render-mode=\"{}\">",
-        envelope.render_mode.as_str()
-    )
-}
-
-fn document_head(head: &PageHead) -> String {
-    let mut output = String::new();
-    if let Some(title) = &head.title {
-        let _ = write!(output, "<title>{}</title>", html_text(title));
-    }
-    if let Some(description) = &head.description {
-        push_meta(&mut output, "name", "description", description);
-    }
-    if let Some(canonical) = &head.canonical {
-        let _ = write!(
-            output,
-            "<link rel=\"canonical\" href=\"{}\">",
-            html_attribute(canonical)
-        );
-    }
-    if let Some(robots) = &head.robots {
-        push_meta(&mut output, "name", "robots", robots);
-    }
-    if let Some(open_graph) = &head.open_graph {
-        if let Some(value) = &open_graph.title {
-            push_meta(&mut output, "property", "og:title", value);
-        }
-        if let Some(value) = &open_graph.description {
-            push_meta(&mut output, "property", "og:description", value);
-        }
-        if let Some(value) = &open_graph.image {
-            push_meta(&mut output, "property", "og:image", value);
-        }
-        if let Some(value) = &open_graph.kind {
-            push_meta(&mut output, "property", "og:type", value);
-        }
-    }
-    output
-}
-
-fn push_meta(output: &mut String, key: &str, name: &str, content: &str) {
-    let _ = write!(
-        output,
-        "<meta {key}=\"{}\" content=\"{}\">",
-        html_attribute(name),
-        html_attribute(content)
-    );
-}
-
-fn document_suffix(
-    envelope: &PageEnvelope,
-    script_src: &str,
-    nonce: Option<&CspNonce>,
-) -> Result<String, PageResponseError> {
-    let payload = json_for_html(envelope)?;
-    let script_src = html_attribute(script_src);
-    let nonce_attribute = nonce_attribute(nonce);
-    Ok(format!(
-        "</div><script id=\"phoenix-page\" type=\"application/json\"{nonce_attribute}>{payload}</script><script type=\"module\" src=\"{script_src}\"{nonce_attribute}></script></body></html>"
-    ))
-}
-
-fn nonce_attribute(nonce: Option<&CspNonce>) -> String {
-    nonce.map_or_else(String::new, |nonce| {
-        format!(" nonce=\"{}\"", html_attribute(nonce.as_str()))
-    })
-}
-
-fn html_attribute(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-fn html_text(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-fn json_for_html(value: &impl Serialize) -> Result<String, serde_json::Error> {
-    serde_json::to_string(value).map(|json| {
-        json.replace('&', "\\u0026")
-            .replace('<', "\\u003c")
-            .replace('>', "\\u003e")
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029")
-    })
 }
 
 #[cfg(test)]
@@ -993,6 +911,48 @@ mod tests {
         let envelope: PageEnvelope = serde_json::from_slice(protocol.body()).expect("envelope");
         assert_eq!(envelope.head, head);
         assert_eq!(envelope.csrf_token.as_deref(), Some("csrf-token"));
+    }
+
+    #[test]
+    fn application_document_template_wraps_the_managed_react_protocol() {
+        let template = DocumentTemplate::from_fn(|context| {
+            DocumentSlots::new()
+                .language("zh-CN")
+                .body_attribute("class", "application-shell")
+                .unwrap()
+                .head(TrustedHtml::new(format!(
+                    "<meta name=\"page-name\" content=\"{}\">",
+                    context.envelope().page
+                )))
+                .before_root(TrustedHtml::new("<nav>Navigation</nav>"))
+                .after_root(TrustedHtml::new("<footer>Footer</footer>"))
+        });
+        let response = Page::new("dashboard/show", json!({ "ready": true }))
+            .trusted_server_html("<main>Dashboard</main>")
+            .document(template)
+            .into_response();
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(html.contains("<html lang=\"zh-CN\">"));
+        assert!(html.contains("<body class=\"application-shell\"><nav>Navigation</nav>"));
+        assert!(html.contains("<main>Dashboard</main></div><footer>Footer</footer>"));
+        assert!(html.contains("<meta name=\"page-name\" content=\"dashboard/show\">"));
+        assert!(html.contains("id=\"phoenix-page\""));
+        assert!(html.contains("type=\"module\""));
+    }
+
+    #[test]
+    fn document_template_errors_return_a_generic_server_error() {
+        let template = DocumentTemplate::try_from_fn(|_| {
+            Err(DocumentTemplateError::render("private layout failure"))
+        });
+        let response = Page::new("dashboard/show", json!({}))
+            .document(template)
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.body(), "Internal Server Error");
+        assert!(!String::from_utf8_lossy(response.body()).contains("private layout failure"));
     }
 
     #[test]
