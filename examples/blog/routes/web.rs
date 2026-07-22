@@ -1,7 +1,9 @@
 use phoenix::prelude::{RouteGroup, Routes, SecurityHeaders};
 
 use crate::{
-    controllers::{AdminController, HealthController, RegistrationController, UserController},
+    controllers::{
+        AdminController, HealthController, ReactController, RegistrationController, UserController,
+    },
     middleware::{PoweredByPhoenix, RequireExampleToken},
 };
 
@@ -16,6 +18,12 @@ pub fn routes() -> Routes {
         .name("users.show")
         .post("/register", RegistrationController::store)
         .name("register.store")
+        .get("/react", ReactController::islands)
+        .name("react.islands")
+        .get("/react/spa", ReactController::spa)
+        .name("react.spa")
+        .get("/react/ssr", ReactController::ssr)
+        .name("react.ssr")
         .group(
             RouteGroup::new()
                 .prefix("/admin")

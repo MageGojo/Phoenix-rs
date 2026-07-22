@@ -2,6 +2,7 @@ pub use phoenix_core as core;
 pub use phoenix_http as http;
 pub use phoenix_routing as routing;
 pub use phoenix_validation as validation;
+pub use phoenix_view as view;
 
 pub mod prelude {
     pub use phoenix_core::{Application, Server, ServerError, ServerHandle};
@@ -13,5 +14,9 @@ pub mod prelude {
     pub use phoenix_validation::{
         BoxedRule, Rule, RuleContext, ValidationError, ValidationErrors, Validator, custom_rule,
         min_length, required, rules, string,
+    };
+    pub use phoenix_view::{
+        Aes256GcmCodec, EncryptionError, Island, Page, PageEnvelope, PageResponseError,
+        PayloadCodec, RenderMode,
     };
 }

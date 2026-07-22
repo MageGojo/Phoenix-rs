@@ -5,6 +5,7 @@ members = [
     "crates/phoenix-http",
     "crates/phoenix-routing",
     "crates/phoenix-validation",
+    "crates/phoenix-view",
     "examples/blog",
 ]
 resolver = "3"
@@ -16,6 +17,8 @@ rust-version = "1.95"
 version = "0.1.0"
 
 [workspace.dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
 bytes = "1"
 futures-util = "0.3"
 http = "1"

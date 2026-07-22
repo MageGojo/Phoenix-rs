@@ -11,6 +11,7 @@ phoenix-core = { path = "../phoenix-core" }
 phoenix-http = { path = "../phoenix-http" }
 phoenix-routing = { path = "../phoenix-routing" }
 phoenix-validation = { path = "../phoenix-validation" }
+phoenix-view = { path = "../phoenix-view" }
 
 [lints]
 workspace = true

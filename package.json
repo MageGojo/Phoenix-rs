@@ -1,0 +1,25 @@
+{
+  "name": "phoenix-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "examples/blog"
+  ],
+  "scripts": {
+    "build:react": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr",
+    "test:react": "npm run test -w @phoenix/react && npm run test -w @phoenix/react-ssr && npm run test -w phoenix-blog-react-example",
+    "typecheck:example": "npm run typecheck -w phoenix-blog-react-example"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}
