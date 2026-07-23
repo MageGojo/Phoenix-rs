@@ -51,11 +51,10 @@ pub struct AuditEventResource {
 #[phoenix::contract(resource)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthTokenResource {
-    pub token_type: String,
+pub struct AuthSessionResource {
     pub subject: String,
+    pub name: String,
     pub role: String,
-    pub expires_in_seconds: u32,
 }
 
 #[phoenix::contract(resource)]

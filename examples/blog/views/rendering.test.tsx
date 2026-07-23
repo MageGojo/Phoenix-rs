@@ -3,7 +3,7 @@ import { renderPage } from "@phoenix/react-ssr";
 import type { PageEnvelope } from "@phoenix/react";
 
 import { routes } from "./generated/routes.js";
-import type { AuthMessageResource, AuthTokenResource, LoginInput, Member, PasswordResetInput, StoreMemberInput } from "./generated/contracts.js";
+import type { AuthMessageResource, AuthSessionResource, LoginInput, Member, PasswordResetInput, StoreMemberInput } from "./generated/contracts.js";
 import ArticleShow from "./pages/articles/show.js";
 import MembersIndex from "./pages/members/index.js";
 
@@ -44,7 +44,7 @@ describe("blog React case", () => {
     expectTypeOf(routes.members.store).parameter(0).toEqualTypeOf<StoreMemberInput>();
     expectTypeOf(routes.members.store).returns.toEqualTypeOf<Promise<Member>>();
     expectTypeOf(routes.login.store).parameter(0).toEqualTypeOf<LoginInput>();
-    expectTypeOf(routes.login.store).returns.toEqualTypeOf<Promise<AuthTokenResource>>();
+    expectTypeOf(routes.login.store).returns.toEqualTypeOf<Promise<AuthSessionResource>>();
     expectTypeOf(routes["password-reset"].store).parameter(0).toEqualTypeOf<PasswordResetInput>();
     expectTypeOf(routes["password-reset"].store).returns.toEqualTypeOf<Promise<AuthMessageResource>>();
   });

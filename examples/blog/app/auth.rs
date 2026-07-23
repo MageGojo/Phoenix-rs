@@ -1,14 +1,9 @@
-use serde::Serialize;
+//! Authentication domain: persistent users, demo fixtures and shared fixtures.
+//!
+//! The database-backed pieces live in [`crate::models::AuthStore`]; this module
+//! keeps the audit-event fixture used by the admin dashboard.
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DemoUser {
-    pub id: u32,
-    pub name: &'static str,
-    pub email: &'static str,
-    pub role: &'static str,
-    pub locked: bool,
-}
+use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,33 +13,6 @@ pub struct DemoAuditEvent {
     pub action: &'static str,
     pub subject: &'static str,
     pub occurred_at: &'static str,
-}
-
-#[must_use]
-pub fn users() -> Vec<DemoUser> {
-    vec![
-        DemoUser {
-            id: 1,
-            name: "Ada Admin",
-            email: "admin@example.test",
-            role: "owner",
-            locked: false,
-        },
-        DemoUser {
-            id: 2,
-            name: "Grace Reviewer",
-            email: "reviewer@example.test",
-            role: "auditor",
-            locked: false,
-        },
-        DemoUser {
-            id: 3,
-            name: "Lin Operator",
-            email: "operator@example.test",
-            role: "operator",
-            locked: true,
-        },
-    ]
 }
 
 #[must_use]
@@ -65,14 +33,4 @@ pub fn audit_events() -> Vec<DemoAuditEvent> {
             occurred_at: "2026-07-23T09:45:00Z",
         },
     ]
-}
-
-#[must_use]
-pub fn authenticate(email: &str, password: &str) -> Option<DemoUser> {
-    let normalized = email.trim().to_ascii_lowercase();
-    if normalized == "admin@example.test" && password == "phoenix-password" {
-        users().into_iter().find(|user| user.email == normalized)
-    } else {
-        None
-    }
 }

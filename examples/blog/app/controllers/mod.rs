@@ -4,17 +4,19 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use phoenix::prelude::{
-    IntoResponse, Json, NodeRenderer, Page, RenderMode, Request, Response, StatusCode, Validated,
+    FromRequest, IntoResponse, Json, NodeRenderer, Page, RenderMode, Request, Response, Session,
+    StatusCode, Validated,
 };
 use serde_json::json;
 
 use crate::{
     auth,
-    middleware::AuthorizedAdmin,
-    props::{AdminDashboardProps, MembersPageProps, SharedProps},
+    middleware::CurrentUser,
+    models::AuthStore,
+    props::{AdminDashboardProps, AuthUserProps, MembersPageProps, SharedProps},
     requests::{LoginInput, PasswordResetInput, StoreMemberInput, registration_validator},
     resources::{
-        AdminUserResource, AuditEventResource, AuthMessageResource, AuthTokenResource,
+        AdminUserResource, AuditEventResource, AuthMessageResource, AuthSessionResource,
         MemberResource, MemberStatus,
     },
 };
@@ -73,26 +75,49 @@ impl RegistrationController {
 pub struct AuthController;
 
 impl AuthController {
-    pub async fn login(Validated(Json(input)): Validated<Json<LoginInput>>) -> Response {
-        match auth::authenticate(&input.email, &input.password) {
-            Some(user) => Json(AuthTokenResource {
-                token_type: "Bearer".to_owned(),
-                subject: user.email.to_owned(),
-                role: user.role.to_owned(),
-                expires_in_seconds: 900,
-            })
-            .into_response(),
-            None => (
+    /// Sign in with email + password and start a session.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the session middleware is not mounted (framework misconfiguration).
+    pub async fn login(request: Request, store: AuthStore) -> Response {
+        let Validated(Json(input)) = match Validated::<Json<LoginInput>>::from_request(&request) {
+            Ok(input) => input,
+            Err(rejection) => return rejection.into_response(),
+        };
+        let session = request
+            .extensions()
+            .get::<Session>()
+            .cloned()
+            .expect("SessionMiddleware is mounted globally");
+        match store.authenticate(&input.email, &input.password).await {
+            Ok(Some(user)) => {
+                // Rotate the session id on privilege change (OWASP session fixation).
+                session.regenerate();
+                session.put("user_id", user.id);
+                Json(AuthSessionResource {
+                    subject: user.email.clone(),
+                    name: user.name,
+                    role: user.role,
+                })
+                .into_response()
+            }
+            Ok(None) => (
                 StatusCode::UNAUTHORIZED,
                 Json(AuthMessageResource {
                     message: "Invalid credentials.".to_owned(),
                 }),
             )
                 .into_response(),
+            Err(error) => Response::text(format!("login store error: {error}"))
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 
-    pub async fn logout(_request: Request) -> Json<AuthMessageResource> {
+    pub async fn logout(request: Request) -> Json<AuthMessageResource> {
+        if let Some(session) = request.extensions().get::<Session>() {
+            session.destroy();
+        }
         Json(AuthMessageResource {
             message: "Signed out.".to_owned(),
         })
@@ -101,6 +126,7 @@ impl AuthController {
     pub async fn request_password_reset(
         Validated(Json(_input)): Validated<Json<PasswordResetInput>>,
     ) -> (StatusCode, Json<AuthMessageResource>) {
+        // Non-goal for now: tokens are only recorded, never emailed (see docs/AUTH_ADMIN.md).
         (
             StatusCode::ACCEPTED,
             Json(AuthMessageResource {
@@ -113,21 +139,29 @@ impl AuthController {
 pub struct AdminController;
 
 impl AdminController {
-    pub async fn dashboard(request: Request, renderer: NodeRenderer) -> Response {
-        if request.extensions().get::<AuthorizedAdmin>().is_none() {
+    pub async fn dashboard(request: Request, renderer: NodeRenderer, store: AuthStore) -> Response {
+        let Some(current_user) = request.extensions().get::<CurrentUser>().cloned() else {
             return Response::text("Unauthorized").with_status(StatusCode::UNAUTHORIZED);
-        }
+        };
+        let users = match store.users().await {
+            Ok(users) => users,
+            Err(error) => {
+                tracing::error!(%error, "admin dashboard failed to load users");
+                return Response::text("Internal Server Error")
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
 
         let page = Page::new(
             "admin/dashboard",
             AdminDashboardProps {
-                users: auth::users()
+                users: users
                     .into_iter()
                     .map(|user| AdminUserResource {
-                        id: user.id,
-                        name: user.name.to_owned(),
-                        email: user.email.to_owned(),
-                        role: user.role.to_owned(),
+                        id: u32::try_from(user.id).unwrap_or(u32::MAX),
+                        name: user.name,
+                        email: user.email,
+                        role: user.role,
                         locked: user.locked,
                     })
                     .collect(),
@@ -141,15 +175,29 @@ impl AdminController {
                         occurred_at: event.occurred_at.to_owned(),
                     })
                     .collect(),
-                active_sessions: 2,
-                pending_password_resets: 1,
+                active_sessions: 1,
+                pending_password_resets: 0,
             },
         )
-        .shared(SharedProps {
-            framework: "Phoenix".to_owned(),
-        })
+        .shared(shared_props(&request, Some(&current_user)))
         .mode(RenderMode::Spa);
         page.respond_with_renderer(&request, &renderer).await
+    }
+}
+
+fn shared_props(request: &Request, user: Option<&CurrentUser>) -> SharedProps {
+    SharedProps {
+        framework: "Phoenix".to_owned(),
+        user: user.map(|user| AuthUserProps {
+            id: u32::try_from(user.id).unwrap_or(u32::MAX),
+            name: user.name.clone(),
+            email: user.email.clone(),
+            role: user.role.clone(),
+        }),
+        csrf_token: request
+            .extensions()
+            .get::<Session>()
+            .and_then(Session::csrf_token),
     }
 }
 
@@ -214,9 +262,7 @@ impl ReactController {
                 total: 100,
             },
         )
-        .shared(SharedProps {
-            framework: "Phoenix".to_owned(),
-        })
+        .shared(shared_props(&request, None))
         .islands();
         page.respond_with_renderer(&request, &renderer).await
     }

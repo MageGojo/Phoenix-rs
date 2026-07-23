@@ -2,9 +2,7 @@ use phoenix::prelude::{Request, RouteBuildError, Routes, UrlGenerationError};
 
 #[test]
 fn named_routes_generate_urls_with_parameters_and_group_prefixes() {
-    let router = phoenix_blog_example::routes()
-        .build()
-        .expect("routes should build");
+    let router = test_routes().build().expect("routes should build");
 
     assert_eq!(
         router
@@ -22,9 +20,7 @@ fn named_routes_generate_urls_with_parameters_and_group_prefixes() {
 
 #[test]
 fn named_routes_report_unknown_names_and_missing_parameters() {
-    let router = phoenix_blog_example::routes()
-        .build()
-        .expect("routes should build");
+    let router = test_routes().build().expect("routes should build");
 
     assert!(matches!(
         router.url("users.show", &[]),
@@ -34,6 +30,24 @@ fn named_routes_report_unknown_names_and_missing_parameters() {
         router.url("missing", &[]),
         Err(UrlGenerationError::UnknownRoute("missing".to_owned()))
     );
+}
+
+fn test_routes() -> Routes {
+    let store = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime")
+        .block_on(async {
+            let store = phoenix_blog_example::models::AuthStore::in_memory()
+                .await
+                .expect("in-memory auth store should build");
+            store
+                .seed_demo_users()
+                .await
+                .expect("demo users should seed");
+            store
+        });
+    phoenix_blog_example::web_routes_with_store(&store)
 }
 
 #[test]

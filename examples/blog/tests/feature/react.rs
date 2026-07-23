@@ -7,7 +7,7 @@ use serde_json::json;
 
 #[tokio::test]
 async fn react_pages_default_to_islands_and_offer_spa_and_ssr() {
-    let application = test_application();
+    let application = test_application().await;
 
     for (path, expected_mode) in [
         ("/react", "islands"),
@@ -48,7 +48,7 @@ async fn react_pages_default_to_islands_and_offer_spa_and_ssr() {
 
 #[tokio::test]
 async fn client_navigation_receives_the_same_business_props() {
-    let application = test_application();
+    let application = test_application().await;
 
     for path in ["/react", "/react/spa", "/react/ssr"] {
         let mut request = Request::new(Method::GET, path.parse::<Uri>().unwrap());
@@ -67,7 +67,7 @@ async fn client_navigation_receives_the_same_business_props() {
 
 #[tokio::test]
 async fn member_directory_receives_one_hundred_unique_rust_records() {
-    let application = test_application();
+    let application = test_application().await;
     let mut request = Request::new(Method::GET, Uri::from_static("/members"));
     request
         .headers_mut()
@@ -95,7 +95,7 @@ async fn member_directory_receives_one_hundred_unique_rust_records() {
 
 #[tokio::test]
 async fn member_directory_islands_contains_server_html_and_hydration_root() {
-    let application = test_application();
+    let application = test_application().await;
     let response = application
         .handle(Request::new(Method::GET, Uri::from_static("/members")))
         .await;
@@ -114,12 +114,13 @@ async fn member_directory_islands_contains_server_html_and_hydration_root() {
     assert!(html.contains("id=\"phoenix-page\""));
 }
 
-fn test_application() -> phoenix::prelude::Application {
+async fn test_application() -> phoenix::prelude::Application {
     let fixture =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/renderer.mjs");
     phoenix_blog_example::application_with_renderer(&NodeRenderer::new(RendererConfig::node(
         fixture,
     )))
+    .await
     .expect("routes should build")
 }
 

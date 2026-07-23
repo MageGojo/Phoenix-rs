@@ -8,6 +8,7 @@ use tokio::{
 #[tokio::test]
 async fn service_binds_to_a_socket_and_serves_a_request() {
     let server = phoenix_blog_example::application()
+        .await
         .expect("example routes should build")
         .spawn("127.0.0.1:0")
         .await
@@ -39,6 +40,7 @@ async fn service_binds_to_a_socket_and_serves_a_request() {
 #[tokio::test]
 async fn oversized_request_bodies_receive_413() {
     let server = phoenix_blog_example::application()
+        .await
         .expect("example routes should build")
         .spawn("127.0.0.1:0")
         .await
@@ -70,6 +72,7 @@ async fn oversized_request_bodies_receive_413() {
 #[tokio::test]
 async fn incomplete_headers_are_closed_after_the_configured_timeout() {
     let server = phoenix_blog_example::application()
+        .await
         .expect("example routes should build")
         .header_read_timeout(Duration::from_millis(50))
         .spawn("127.0.0.1:0")
@@ -95,6 +98,7 @@ async fn incomplete_headers_are_closed_after_the_configured_timeout() {
 #[tokio::test]
 async fn incomplete_bodies_receive_408_after_the_configured_timeout() {
     let server = phoenix_blog_example::application()
+        .await
         .expect("example routes should build")
         .body_read_timeout(Duration::from_millis(50))
         .spawn("127.0.0.1:0")

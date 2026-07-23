@@ -9,22 +9,34 @@ use crate::{
         AdminController, AuthController, HealthController, MemberController, ReactController,
         RegistrationController, UserController,
     },
-    middleware::{PoweredByPhoenix, RequireExampleToken},
+    middleware::{PoweredByPhoenix, RequireAuth},
+    models::AuthStore,
     requests::{LoginInput, PasswordResetInput, StoreMemberInput},
-    resources::{AuthMessageResource, AuthTokenResource, MemberResource},
+    resources::{AuthMessageResource, AuthSessionResource, MemberResource},
 };
 
 #[must_use]
 pub fn routes() -> Routes {
-    routes_with_renderer(&ssr_renderer())
+    let store = crate::models::auth_store()
+        .expect("auth store should be installed before routes are mounted");
+    routes_with_renderer(&ssr_renderer(), &store)
+}
+
+/// Routes bound to an explicit store, bypassing the process-wide registry.
+#[must_use]
+#[allow(dead_code)] // used via `web_routes_with_store`; module-level allow does not propagate
+pub fn routes_with_store(store: &AuthStore) -> Routes {
+    routes_with_renderer(&ssr_renderer(), store)
 }
 
 #[must_use]
-pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
+pub fn routes_with_renderer(renderer: &NodeRenderer, store: &AuthStore) -> Routes {
     let article_renderer = renderer.clone();
     let article_islands_renderer = renderer.clone();
     let member_renderer = renderer.clone();
     let admin_renderer = renderer.clone();
+    let login_store = store.clone();
+    let dashboard_store = store.clone();
 
     Routes::new()
         .with_middleware(security_policy())
@@ -35,9 +47,11 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
         .name("users.show")
         .post("/register", RegistrationController::store)
         .name("register.store")
-        .post("/login", typed(AuthController::login))
+        .post("/login", move |request| {
+            AuthController::login(request, login_store.clone())
+        })
         .name("login.store")
-        .action::<LoginInput, AuthTokenResource>()
+        .action::<LoginInput, AuthSessionResource>()
         .post("/logout", AuthController::logout)
         .name("logout.store")
         .post(
@@ -67,11 +81,15 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
             RouteGroup::new()
                 .prefix("/admin")
                 .name("admin.")
-                .middleware(RequireExampleToken),
+                .middleware(RequireAuth::new(store.clone())),
             |routes| {
                 routes
                     .get("/dashboard", move |request| {
-                        AdminController::dashboard(request, admin_renderer.clone())
+                        AdminController::dashboard(
+                            request,
+                            admin_renderer.clone(),
+                            dashboard_store.clone(),
+                        )
                     })
                     .name("dashboard")
             },

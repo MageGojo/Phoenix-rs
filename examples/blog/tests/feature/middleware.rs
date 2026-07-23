@@ -1,5 +1,5 @@
 use phoenix::{
-    http::HeaderValue,
+    http::{Bytes, HeaderMap, HeaderValue, header},
     prelude::{
         Method, Next, Request, Response, Routes, SecurityHeaders, StatusCode, Uri, middleware_fn,
     },
@@ -7,7 +7,9 @@ use phoenix::{
 
 #[tokio::test]
 async fn global_and_group_middleware_wrap_controller_responses() {
-    let application = phoenix_blog_example::application().expect("routes should build");
+    let application = phoenix_blog_example::application()
+        .await
+        .expect("routes should build");
 
     let response = application
         .handle(Request::new(
@@ -22,10 +24,45 @@ async fn global_and_group_middleware_wrap_controller_responses() {
     );
     assert_security_headers(&response);
 
+    // Sign in through the session-backed login, then reuse the session cookie.
+    let probe = application
+        .handle(Request::new(Method::GET, Uri::from_static("/health")))
+        .await;
+    let token = probe
+        .headers()
+        .get("x-csrf-token")
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+        .expect("Csrf middleware should emit a token");
+    let cookie = probe
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("SessionMiddleware should set a cookie")
+        .clone();
+
+    let mut login_headers = HeaderMap::new();
+    login_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    login_headers.insert(header::COOKIE, cookie.clone());
+    login_headers.insert("x-csrf-token", HeaderValue::from_str(&token).unwrap());
+    let login = Request::from_parts(
+        Method::POST,
+        Uri::from_static("/login"),
+        login_headers,
+        Bytes::from_static(br#"{"email":"admin@example.test","password":"phoenix-password"}"#),
+    );
+    let response = application.handle(login).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    // Login rotates the session id; follow the newest cookie.
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .map_or(cookie, Clone::clone);
+
     let mut request = Request::new(Method::GET, Uri::from_static("/admin/dashboard"));
-    request
-        .headers_mut()
-        .insert("x-example-token", HeaderValue::from_static("secret"));
+    request.headers_mut().insert(header::COOKIE, cookie);
     request
         .headers_mut()
         .insert("x-phoenix-page", HeaderValue::from_static("1"));
@@ -36,6 +73,7 @@ async fn global_and_group_middleware_wrap_controller_responses() {
         serde_json::from_slice(response.body()).expect("admin page envelope");
     assert_eq!(envelope.page, "admin/dashboard");
     assert_eq!(envelope.props["users"].as_array().unwrap().len(), 3);
+    assert_eq!(envelope.shared["user"]["email"], "admin@example.test");
     assert_eq!(
         response.headers().get("x-powered-by"),
         Some(&HeaderValue::from_static("Phoenix"))
