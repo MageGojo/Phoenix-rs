@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.95.0
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+
+  node:
+    name: Node tests and production builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exact Node dependencies
+        run: npm ci
+      - name: Test, typecheck, and build
+        run: npm run ci:node
+
+  crate-packages:
+    name: Crates.io package manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Verify publish package file lists
+        run: |
+          set -euo pipefail
+          crates=(
+            phoenix-http phoenix-console phoenix-config phoenix-release
+            phoenix-database phoenix-storage px phoenix-routing phoenix-metrics
+            phoenix-crypto phoenix-validation phoenix-mail phoenix-security
+            phoenix-view phoenix-queue phoenix-core phoenix-dx phoenix-auth
+            phoenix-plugin phoenix-redis phoenixrs phoenix-testing
+          )
+          for crate in "${crates[@]}"; do
+            cargo package -p "$crate" --locked --no-verify --list >/dev/null
+          done
+
+  postgres:
+    name: PostgreSQL contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: phoenix_test
+          POSTGRES_USER: phoenix
+          POSTGRES_PASSWORD: phoenix_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phoenix -d phoenix_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHOENIX_TEST_POSTGRES_URL: postgresql://phoenix:phoenix_test_password@127.0.0.1:5432/phoenix_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Run PostgreSQL contract test
+        run: >-
+          cargo test --locked -p phoenix-database --test toasty_integration
+          postgresql_crud_relations_and_pagination_when_configured -- --exact
+
+  mysql:
+    name: MySQL contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: phoenix_test
+          MYSQL_USER: phoenix
+          MYSQL_PASSWORD: phoenix_test_password
+          MYSQL_ROOT_PASSWORD: phoenix_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u phoenix --password=phoenix_test_password"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PHOENIX_TEST_MYSQL_URL: mysql://phoenix:phoenix_test_password@127.0.0.1:3306/phoenix_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Run MySQL contract test
+        run: >-
+          cargo test --locked -p phoenix-database --test toasty_integration
+          mysql_crud_relations_and_pagination_when_configured -- --exact
+
+  redis:
+    name: Redis contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PHOENIX_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Run Redis contract tests
+        run: cargo test --locked -p phoenix-redis --test contracts
+
+  csp-e2e:
+    name: Rust, Node, React CSP E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Install exact Node dependencies
+        run: npm ci
+      - name: Run cross-language CSP E2E
+        run: npm run test:e2e:ssr-csp

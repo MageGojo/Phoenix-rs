@@ -1,0 +1,48 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_FUZZ_VERSION: 0.13.2
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - http_boundaries
+          - blind_index_envelope
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+          cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      - name: Verify the fuzz dependency lock
+        working-directory: fuzz
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: Run bounded fuzz smoke test
+        working-directory: fuzz
+        run: cargo fuzz run "${{ matrix.target }}" -- -max_total_time=60 -print_final_stats=1
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.sha }}
+          path: fuzz/artifacts/
+          if-no-files-found: warn
+          retention-days: 14

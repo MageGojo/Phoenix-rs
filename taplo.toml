@@ -1,0 +1,12 @@
+# Taplo / Even Better TOML — associate JSON Schema for config autocomplete.
+# Install the "Even Better TOML" (or Taplo) extension in VS Code / Cursor.
+
+[[rule]]
+include = ["**/config/app.toml"]
+[rule.schema]
+path = "./schemas/phoenix-config-app.schema.json"
+
+[[rule]]
+include = ["**/config/database.toml"]
+[rule.schema]
+path = "./schemas/phoenix-config-database.schema.json"

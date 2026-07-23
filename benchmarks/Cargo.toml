@@ -1,0 +1,17 @@
+[package]
+name = "phoenix-benchmarks"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+[dependencies]
+criterion = "0.8.2"
+phoenix-crypto = { path = "../crates/phoenix-crypto" }
+
+[[bench]]
+name = "blind_index"
+harness = false
+
+[workspace]

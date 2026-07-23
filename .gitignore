@@ -1,8 +1,15 @@
 /target/
 **/node_modules/
 **/dist/
+/coverage/
+/benchmarks/target/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/*
+!/fuzz/corpus/.gitkeep
 examples/blog/public/ssr/
 examples/blog/public/assets/
+/examples/blog/public/1.json
 **/.vite/
 **/views/generated/*
 !**/views/generated/.gitkeep
@@ -13,6 +20,21 @@ examples/blog/public/assets/
 *.sqlite
 *.sqlite3
 .DS_Store
+**/.DS_Store
+/.idea/
+/.vscode/
+# Cursor 本地配置忽略；官方 Agent Skill 必须入库供 AI 默认读取
+/.cursor/*
+!/.cursor/skills/
+!/.cursor/skills/**
+/surge_*.conf
+
+# Local / private apps (not framework demos)
+/examples/zhizaojia/
+**/config/credentials.toml
+!**/config/credentials.example.toml
+**/data/requests/
+**/data/captures/
 
 # Runtime data
 examples/*/storage/*
