@@ -2,7 +2,7 @@
 members = [
     "crates/phoenix",
     "crates/phoenix-auth",
-    "crates/phoenix-core",
+    "crates/phoenix-runtime",
     "crates/phoenix-crypto",
     "crates/phoenix-cli",
     "crates/phoenix-config",

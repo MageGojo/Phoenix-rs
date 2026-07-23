@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phoenix.apizero.cn/schemas/phoenix-config-app.schema.json",
+  "title": "Phoenix config/app.toml",
+  "description": "Application settings (Laravel-style config/app).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema URL for editor tooling."
+    },
+    "name": {
+      "type": "string",
+      "description": "Application name (APP_NAME).",
+      "minLength": 1
+    },
+    "env": {
+      "type": "string",
+      "description": "Runtime environment (APP_ENV).",
+      "enum": ["development", "test", "production"]
+    },
+    "addr": {
+      "type": "string",
+      "description": "Listen address host:port (APP_ADDR).",
+      "examples": ["127.0.0.1:3000"]
+    },
+    "url": {
+      "type": "string",
+      "description": "Public origin without path (APP_URL).",
+      "format": "uri",
+      "examples": ["http://127.0.0.1:3000"]
+    }
+  }
+}

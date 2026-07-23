@@ -1683,29 +1683,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phoenix-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures-util",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "phoenix-http",
- "phoenix-metrics",
- "phoenix-routing",
- "rcgen",
- "rustls",
- "rustls-pemfile",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "tracing",
-]
-
-[[package]]
 name = "phoenix-crypto"
 version = "0.1.0"
 dependencies = [
@@ -1890,6 +1867,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoenix-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "phoenix-http",
+ "phoenix-metrics",
+ "phoenix-routing",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "phoenix-security"
 version = "0.1.0"
 dependencies = [
@@ -1923,9 +1923,9 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "phoenix-core",
  "phoenix-http",
  "phoenix-routing",
+ "phoenix-runtime",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -1968,7 +1968,6 @@ dependencies = [
  "phoenix-auth",
  "phoenix-config",
  "phoenix-console",
- "phoenix-core",
  "phoenix-crypto",
  "phoenix-database",
  "phoenix-dx",
@@ -1981,6 +1980,7 @@ dependencies = [
  "phoenix-queue",
  "phoenix-redis",
  "phoenix-routing",
+ "phoenix-runtime",
  "phoenix-security",
  "phoenix-storage",
  "phoenix-testing",

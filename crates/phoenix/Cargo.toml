@@ -28,7 +28,7 @@ mail = ["dep:phoenix-mail"]
 phoenix-auth = { version = "0.1.0", path = "../phoenix-auth" }
 phoenix-config = { version = "0.1.0", path = "../phoenix-config" }
 phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
-phoenix-core = { version = "0.1.0", path = "../phoenix-core" }
+phoenix-runtime = { version = "0.1.0", path = "../phoenix-runtime" }
 phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
 phoenix-database = { version = "0.1.0", path = "../phoenix-database" }
 phoenix-dx = { version = "0.1.0", path = "../phoenix-dx" }

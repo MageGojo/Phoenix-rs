@@ -2,8 +2,8 @@ pub use phoenix_auth as auth;
 pub use phoenix_config as config;
 pub use phoenix_console as console;
 pub use phoenix_console::commands;
-pub use phoenix_core as core;
-pub use phoenix_core::applications;
+pub use phoenix_runtime as core;
+pub use phoenix_runtime::applications;
 pub use phoenix_crypto as crypto;
 pub use phoenix_database as database;
 pub use phoenix_dx as dx;
@@ -39,8 +39,8 @@ pub mod prelude {
     };
     pub use phoenix_config::{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue};
     pub use phoenix_console::{CommandContext, CommandEntry, CommandResult, Console, commands};
-    pub use phoenix_core::applications;
-    pub use phoenix_core::{
+    pub use phoenix_runtime::applications;
+    pub use phoenix_runtime::{
         Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
         MultiApplicationError, Server, ServerError, ServerHandle, TlsConfig, TlsConfigError,
     };

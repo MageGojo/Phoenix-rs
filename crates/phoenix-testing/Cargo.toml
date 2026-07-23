@@ -15,7 +15,7 @@ http.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["http1", "tokio"] }
-phoenix-core = { version = "0.1.0", path = "../phoenix-core" }
+phoenix-runtime = { version = "0.1.0", path = "../phoenix-runtime" }
 phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
 serde.workspace = true

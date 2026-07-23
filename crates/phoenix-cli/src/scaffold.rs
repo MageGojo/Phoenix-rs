@@ -556,11 +556,11 @@ fn project_files(
         ("config/database.toml".into(), database_toml_template()),
         (
             "config/schemas/phoenix-config-app.schema.json".into(),
-            include_str!("../../../schemas/phoenix-config-app.schema.json").to_owned(),
+            include_str!("../schemas/phoenix-config-app.schema.json").to_owned(),
         ),
         (
             "config/schemas/phoenix-config-database.schema.json".into(),
-            include_str!("../../../schemas/phoenix-config-database.schema.json").to_owned(),
+            include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
         ),
         ("taplo.toml".into(), app_taplo_template()),
         ("deploy/restart.sh.example".into(), deploy_restart_example()),

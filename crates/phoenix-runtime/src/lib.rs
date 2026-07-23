@@ -874,7 +874,7 @@ pub enum ServerError {
 /// returns `Result<Application, MultiApplicationError>`.
 ///
 /// ```
-/// use phoenix_core::applications;
+/// use phoenix_runtime::applications;
 /// use phoenix_routing::Routes;
 ///
 /// let application = applications! {

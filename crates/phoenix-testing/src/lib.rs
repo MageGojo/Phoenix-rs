@@ -14,7 +14,7 @@ use std::{
 };
 
 use cookie::CookieJar;
-use phoenix_core::{Application, ServerError, ServerHandle};
+use phoenix_runtime::{Application, ServerError, ServerHandle};
 use phoenix_routing::{RouteBuildError, Routes};
 use serde::Serialize;
 use thiserror::Error;
