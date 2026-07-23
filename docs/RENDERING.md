@@ -61,11 +61,56 @@ export function ProjectLinks() {
 await navigate("/projects/new", { preserveFocus: true });
 ```
 
-`Link` 和文档级委托只接管同源、无修饰键的主键点击。外链、`download`、非 `_self` target、`rel="external"` 和浏览器打开新标签操作保持原生行为；同源链接需要显式完整加载时使用 `<Link href="..." reloadDocument>`。每次局部访问发送 `X-Phoenix-Page: 1`；新访问会取消旧请求，并用请求序号阻止不遵守 `AbortSignal` 的旧响应覆盖新页面。响应协议版本不一致，或当前页已知的 `asset_version` / `contract_hash` 在响应中缺失或发生变化，会在加载新组件前执行完整浏览器导航，避免旧 bundle 渲染新契约；当前页尚无 identity 时可以采用响应首次给出的值。
+`Link` 和文档级委托只接管同源、无修饰键的主键点击。外链、`download`、非 `_self` target、`rel="external"` 和浏览器打开新标签操作保持原生行为；同源链接需要显式完整加载时使用 `<Link href="..." reloadDocument>`。Active 状态可用 `match="exact" | "prefix"` 与 `activeClassName`（详见 [REACT_DX_HOOKS.md](REACT_DX_HOOKS.md)）。**Islands hydrate** 时每个岛已注入 `PhoenixPageProvider` + `navigationContext`（与整页同一 navigator），岛内 `Link` 正常拦截；**若无 Provider**（裸渲染 `Link`），不 `preventDefault`，浏览器原生跳转（详见 [REACT_DX_PERF.md](REACT_DX_PERF.md) §9）。每次局部访问发送 `X-Phoenix-Page: 1`；新访问会取消旧请求，并用请求序号阻止不遵守 `AbortSignal` 的旧响应覆盖新页面。响应协议版本不一致，或当前页已知的 `asset_version` / `contract_hash` 在响应中缺失或发生变化，会在加载新组件前执行完整浏览器导航，避免旧 bundle 渲染新契约；当前页尚无 identity 时可以采用响应首次给出的值。
 
 成功导航会同步更新 `#phoenix-page`、受控 `PageHead`、React 页面、History 和 URL。普通访问默认滚动到顶部并把焦点移到 `autofocus`、`main` 或主标题；hash、`preserveScroll` 和 `preserveFocus` 可以覆盖该行为。History 条目保存滚动坐标与带 `id`/`data-phoenix-focus-key` 的焦点位置，`popstate` 重取页面后恢复它们。`replace` 使用 `replaceState`，其余访问使用 `pushState`。
 
-运行时在 `document` 上发送 `phoenix:navigation-start`、`phoenix:navigation-success`、`phoenix:navigation-hard`、`phoenix:navigation-error` 和 `phoenix:navigation-finish` 事件。手动启动时也可以传入 `fetcher`、`decrypt`、`onNavigationError` 和测试用 `hardNavigate`；测试或卸载时使用 `stopPhoenix()` 清理监听器与 React roots。
+运行时在 `document` 上发送 `phoenix:navigation-start`、`phoenix:navigation-success`、`phoenix:navigation-hard`、`phoenix:navigation-error` 和 `phoenix:navigation-finish` 事件。`<ProgressBar />` 与 `useNavigating()` 订阅同一组事件。手动启动时也可以传入 `fetcher`、`decrypt`、`onNavigationError` 和测试用 `hardNavigate`；测试或卸载时使用 `stopPhoenix()` 清理监听器与 React roots。
+
+### 页面 hooks 与 Redirect
+
+业务组件通过 hooks 读当前信封，不必手解析 `#phoenix-page`：
+
+```tsx
+import {
+  Form,
+  Link,
+  ProgressBar,
+  redirect,
+  useCsrfToken,
+  useFlash,
+  useNavigating,
+  useNavigator,
+  usePage,
+  useShared,
+} from "@phoenix/react";
+import type { MembersPageProps, PhoenixSharedProps } from "../generated/contracts.js";
+
+function Header() {
+  const { page, props, errors } = usePage<MembersPageProps>();
+  const shared = useShared<PhoenixSharedProps>();
+  const { flash, consume } = useFlash<{ notice?: string }>();
+  const csrf = useCsrfToken();
+  const navigator = useNavigator();
+  const { processing } = useNavigating();
+  return (
+    <>
+      <ProgressBar />
+      <Link href="/members" match="prefix" activeClassName="is-active">
+        Members ({page})
+      </Link>
+      <button disabled={processing} onClick={() => void navigator.reload()}>
+        刷新
+      </button>
+      {flash.notice ? <p onClick={() => consume("notice")}>{flash.notice}</p> : null}
+      <span hidden>{csrf}</span>
+      <pre>{JSON.stringify({ props, shared, errors })}</pre>
+    </>
+  );
+}
+```
+
+`flash` 由服务端在下一跳清空；`consume` 只在当前页本地遮蔽已读 key。`redirect(url)` 默认 `replace: true`。`Form` 可设 `redirectTo`：先 `onSuccess`，未抛错再 `redirect`。完整约定见 [REACT_DX_HOOKS.md](REACT_DX_HOOKS.md)。
 
 ### 强类型表单与字段错误
 
@@ -81,6 +126,7 @@ export function MemberForm() {
     <Form<StoreMemberInput, Member>
       action={members.store}
       initialValues={{ name: "" }}
+      redirectTo="/members"
       onSuccess={(member) => console.info(member.id)}
     >
       {(form) => (
@@ -164,6 +210,7 @@ export default defineConfig({ plugins: [phoenix()] });
 - island 不允许嵌套；需要共享状态的交互区域应作为一个边界。
 - 没有交互的组件不进入客户端 bundle。
 - island 内部可使用 hooks，服务端专用代码不能被打入浏览器。
+- Islands 首屏 hydrate 为每个岛包一层 `PhoenixPageProvider` + `navigationContext`，因此岛内可直接用 `usePage` / `useNavigator` / `<Link>`；文档级 click 委托仍覆盖非 React 锚点。
 
 ## 6. 统一页面协议
 

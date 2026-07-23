@@ -38,7 +38,7 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 
 ## 建议执行顺序
 
-1. （已完成）Toasty SQLite/PostgreSQL CRUD、关系、分页、事务、隔离测试与可靠迁移执行器。
+1. （已完成）Toasty SQLite / PostgreSQL / MySQL CRUD、关系、分页、事务、隔离测试与可靠迁移执行器。
 2. （已完成）Session/CSRF/CORS/限流/可信代理/Host/安全头/request ID/日志脱敏。
 3. （已完成）版本化 client/renderer manifest、生产静态解析、contract/resource 握手、多 worker、健康状态、关闭与流式 SSR。
 4. （已完成）约定式 `routes/*.rs` 自动挂载、REST resource routes、中间件别名和异步模型绑定。
@@ -58,18 +58,19 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 1. （已完成）TLS/HTTPS/ALPN、RBAC/ABAC 和 JWT refresh/revocation 持久化首版。
 2. （已完成首版）指标 exporter、分布式限流 contract，以及带 CAS middleware/Cookie 提交边界的分布式 Session contract。
 3. （已完成首版）CSP nonce：Header/HTML/Vite/renderer 一致、缓存失败关闭和 renderer v2。
-4. （流式请求已完成首版）SSE、WebSocket、流响应生命周期/错误语义与 hydration 诊断。
-5. 队列和邮件。
-6. 管理后台、插件机制、安全评审与项目改名决策。
+4. （已完成首版）SSE 收口 + H1 WebSocket；`phoenix-redis`；`phoenix-testing` + `phoenix-storage`。见 PARALLEL_TRACKS / REALTIME / REDIS / TESTING_AND_STORAGE。
+5. （已完成首版）队列、邮件、应用控制台。见 QUEUE.md / MAIL.md / QUEUE_MAIL_CONSOLE.md。
+6. （已完成首版）插件 FeatureSet、发版流水线、品牌 Phoenix-rs（ADR-009/039/040）。见 FEATURES.md / RELEASE_PIPELINE.md。
+7. 管理后台、正式安全评审与 crates.io 发布候选验收。
 
 ## 待验证决策
 
 - Extractor 已在归一化 Request 上组合；后续需决定 State extractor 和多个 body extractor 的编译期互斥方式。
 - 异步规则采用 boxed future、关联 future 还是宏生成，哪种编译错误对新手最清楚。
 - 数据 enum、tuple/generic struct 的契约表达。
-- P0 是否只承诺 SQLite + PostgreSQL，把 MySQL 标为实验性。
 - 模型绑定是否在 P0 只提供显式 binder，还是为 Toasty 模型增加 derive 门面。
-- 工作名称 Phoenix 是否在技术预览前更换。
+- ~~P0 是否只承诺 SQLite + PostgreSQL~~ → **已决**：三库（sqlite/pgsql/mysql）均支持；MySQL 暂无 CI 契约测。
+- ~~工作名称 Phoenix 是否更换~~ → **已决**：对外 **Phoenix-rs**；crates.io CLI=`px`，门面=`phoenixrs`（ADR-009）。
 
 ## 当前增强路线
 
@@ -81,4 +82,4 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 
 ## Definition of Done
 
-HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC、持久化 token 生命周期、多实例状态 contract、指标 exporter、CSP nonce 与流式请求已有直接证据。当前下一检查点是流响应生命周期、SSE 和 WebSocket。
+HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC、持久化 token 生命周期、多实例状态 contract、指标 exporter、CSP nonce、流式请求、SSE/H1 WebSocket、队列/邮件/console、Feature 插件与发版流水线已有直接证据。当前下一检查点是 **管理后台**、正式安全评审与 **crates.io 发布候选**。

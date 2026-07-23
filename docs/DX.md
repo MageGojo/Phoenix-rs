@@ -6,14 +6,22 @@
 
 ```text
 app/
+  commands/
   controllers/
   middleware/
   models/
   requests/
   resources/
 config/
+  app.toml
+  database.toml
+  schemas/           # JSON Schema（Taplo / Even Better TOML）
+  mod.rs
 database/
   migrations/
+  seeders/
+deploy/
+  restart.sh.example # 发版切换后重启钩子
 routes/
   api.rs
   web.rs
@@ -25,10 +33,14 @@ views/
   pages/
 public/
 storage/
+dist/              # px release 制品（gitignore）
+taplo.toml
 tests/
   feature/
   unit/
 ```
+
+配置优先级与选库说明见 [CONFIG.md](CONFIG.md)。
 
 ## 2. 路由
 
@@ -152,13 +164,45 @@ let post = Bound::<Post>::from_request(&request).expect("binding middleware ran"
 安装 CLI 后创建新项目：
 
 ```bash
+# 安装 CLI（推荐：crates.io 发布后）
+cargo install px
+
+# 或从本仓库 / GitHub
 cargo install --path crates/phoenix-cli
+# cargo install --git https://github.com/ApiZero/Phoenix-rs px
+# cargo install --git https://gitcode.com/ApiZero/Phoenix-rs px
+
 px new my-app
 cd my-app
 px dev
 ```
 
-`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`、`routes/`、`database/migrations/`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约。生成项目默认安装 `NonceSecurityPolicy`：debug build 从精确 `VITE_DEV_URL` 生成 Vite HTTP/WebSocket CSP，release build 使用生产 nonce policy；配置非法会在启动时失败。默认同时执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；自动化或离线准备可以使用 `--no-install`、`--no-git`。在框架源码之外开发时，可以用 `--framework-path <path>` 显式绑定本地 Phoenix。
+`px` 是 crates.io 包名与二进制名。`px new` 在无本地框架检出时依赖门面包 `phoenixrs`（应用仍 `use phoenix::`）。详见根 README「命名」一节。
+
+`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`（含 `commands/`）、`routes/`、`database/migrations/`、`database/seeders/`、`config/app.toml` + `database.toml` + `config/schemas/` + `taplo.toml`、`deploy/restart.sh.example`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约（`.gitignore` 含 `/dist`）。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。配置入口复用 `phoenix-config`：`config/*.toml` < `.env` < 进程环境；生产校验公开 URL、数据库、可信代理与 Host allowlist。需要 JWT 或加密密钥时用 `required_secret(name, minimum_bytes)` 声明。
+
+默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认同时执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；可用 `--no-install`、`--no-git`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
+
+数据库命令：
+
+```bash
+px status
+px migrate
+px rollback --step 2
+px fresh --seed
+px seed
+```
+
+发版（见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)）：
+
+```bash
+px release --version 0.1.0 --tarball
+px release:install --tarball ./app-0.1.0.tar.gz --version 0.1.0
+px release:rollback --steps 1
+px release:status
+```
+
+第三方 Feature 插件见 [FEATURES.md](FEATURES.md)。
 
 业务生成命令：
 
@@ -173,21 +217,24 @@ px make:resource PostResource
 px make:middleware RequireLoginMiddleware
 px make:page posts/index
 px make:island LikeButton
+px make:command Update
 ```
 
 `make:model Post --all` 生成并连接一条可编译的业务切片：Toasty 模型、迁移、验证 Request、公开 Resource、控制器、七条命名 resource 路由、类型化 `store` action、Rust Page Props 和 React index 页面。生成后会自动刷新 Rust→TypeScript contracts/routes；浏览器可以直接调用生成的 `posts.store({ name })`。
+
+`make:command Update` 生成 `app/commands/update.rs` 中的 `async fn update`，并写入 `commands!` 托管区块。运行：`cargo run -- update`。
 
 生成器自动维护 `mod.rs`、模型 `ModelSet`、迁移 `all()` 和 `routes/*.rs`。嵌套名称支持 `/` 或 `::`，例如 `Admin/Post`。托管内容位于明确的 `<phoenix:...>` 标记内，标记外业务代码不改动；同名目标默认拒绝覆盖，确需重建时显式使用 `--force`。迁移中的 SQL 是安全可编译的基础骨架，提交前仍应按真实 schema 调整。
 
 ## 2.2 统一开发命令
 
-安装/构建 `phoenix-cli` 后，在应用目录运行：
+安装/构建 `px`（原 `phoenix-cli` 目录）后，在应用目录运行：
 
 ```bash
 px dev
 ```
 
-该命令同时运行 `cargo run` 与 `npm run dev -- --strictPort`。两者位于独立进程组；Ctrl-C、Rust 提前退出或 Vite 提前退出都会终止并回收另一侧的整个子进程树，避免遗留开发服务器。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
+该命令先从当前目录向上定位项目根并检查 JavaScript 依赖，再显示即将启动的后端、前端和工作目录，然后同时运行 `cargo run -- serve` 与 `npm run dev -- --strictPort`。两者位于独立进程组；Ctrl-C、Rust 提前退出或 Vite 提前退出都会终止并回收另一侧的整个子进程树，避免遗留开发服务器。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
 
 ## 3. 控制器与 React 页面
 
@@ -367,7 +414,7 @@ let post = Post::filter_by_id(id)
     .await?;
 ```
 
-SQLite 与 PostgreSQL 使用相同模型/CRUD/关系/游标分页接口。Phoenix 不复制 Toasty 查询构建器，只补充连接配置、后端元数据、迁移和测试隔离。完整 CRUD、分页与事务示例见[数据库与迁移](DATABASE.md)。
+SQLite、PostgreSQL 与 MySQL 使用相同模型/CRUD/关系/游标分页接口。Phoenix-rs 不复制 Toasty 查询构建器，只补充连接配置、后端元数据、迁移和测试隔离。完整示例见 [DATABASE.md](DATABASE.md)；选库见 [CONFIG.md](CONFIG.md)。
 
 ## 8. 迁移
 
@@ -386,7 +433,7 @@ let applied = runner.up().await?;
 let rolled_back = runner.down(1).await?;
 ```
 
-runner 自动维护 `phoenix_migrations`，验证 checksum，并按 SQLite/PostgreSQL 能力加锁和执行事务。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。迁移骨架可以通过 `px make:migration` 或 `px make:model --migration` 生成并自动注册。
+runner 自动维护 `phoenix_migrations`，验证 checksum，并按后端加锁：SQLite `BEGIN IMMEDIATE`、PostgreSQL advisory lock、MySQL `GET_LOCK`。已应用迁移不能原地改写；不可逆迁移必须显式 `.irreversible()`。迁移骨架可以通过 `px make:migration` 或 `px make:model --migration` 生成并自动注册。
 
 ## 9. 响应与错误
 
@@ -401,31 +448,45 @@ Page::new("posts/show", props).respond_to(&request, None)?;
 
 ## 10. 测试体验
 
-当前案例测试位于 `examples/blog/tests/`，可以直接运行：
+案例级回归仍位于 `examples/blog/tests/`：
 
 ```bash
 cargo test -p phoenix-blog-example
 ```
 
-测试覆盖真实 TCP 启动和关闭、body 上限、慢请求头超时、控制器、JSON MIME、HTTP 方法、严格路径参数、panic 隔离、404/405、全局/组中间件、安全头、命名 URL、重复路由名以及 trait/闭包自定义规则。
+应用测试客户端由 `phoenix-testing` 提供。它在 `127.0.0.1:0` 上启动真实 `Application`，自带 Cookie jar 与页面协议断言：
 
-下面的 `TestApp` 断言 DSL 是后续目标：
-
-```rust
-#[phoenix::test]
-async fn guest_can_view_posts(app: TestApp) {
-    let post = PostFactory::new().create(&app.db).await;
-
-    app.get(route("posts.show", post.id))
-        .send()
-        .await
-        .assert_ok()
-        .assert_page("posts/show")
-        .assert_prop("post.id", post.id);
-}
+```bash
+cargo test -p phoenix-testing --locked
 ```
 
-测试 API 必须能区分完整 HTML 响应、页面协议响应和 JSON API 响应，并默认隔离数据库状态。
+```rust
+use phoenix_testing::TestApp;
+use phoenix_http::StatusCode;
+
+let app = TestApp::spawn(routes).await;
+
+app.get("/health")
+    .send()
+    .await
+    .assert_ok()
+    .assert_status(StatusCode::OK)
+    .assert_json_path("status", "healthy");
+
+app.post_json("/login", &body).send().await.assert_ok();
+
+app.get("/members")
+    .page_protocol()
+    .send()
+    .await
+    .assert_page("members");
+
+app.shutdown().await?;
+```
+
+已实现：`get` / `post_json` / `post_form` / 自定义 Header、`assert_ok` / `assert_status` / `assert_body_contains` / `assert_json` / `assert_json_path` / `assert_page`、Cookie 往返、`Drop`/`shutdown` 停服。完整 HTML、页面协议 JSON（`X-Phoenix-Page: 1`）与普通 JSON API 可按 Content-Type 与断言区分。
+
+尚未提供：`#[phoenix::test]` 自动注入、Factory DSL、默认 `TestDatabase` 隔离（见 `docs/TESTING_AND_STORAGE.md`）。
 
 ## 11. 应用状态与安全响应
 

@@ -275,6 +275,15 @@
 - 测试覆盖稳定向量、用途隔离、不同 key、轮换候选、短 key、重复/超量 key、Debug 脱敏及畸形/未知/认证失败 envelope。
 - 安全文档明确盲索引不是加密，会泄漏等值关系；低熵数据在 key 泄露后仍可离线枚举，且 key 必须独立于 Encryptor、JWT、Session 和其他用途。
 
+## 2026-07-23：生产工程门禁
+
+- 新增 GitHub Actions 门禁，覆盖 Rustfmt、严格 Clippy、locked workspace tests、Node 测试/类型检查/生产构建、官方 React CSP E2E 和真实 PostgreSQL 17 contract test。
+- 新增 Gitleaks 全历史扫描、`cargo-deny` advisories/licenses/bans/sources、`npm audit`、Rust/JavaScript LCOV 与最低行覆盖率；本地基线分别为 Rust 89.7%、React 91.1%、React SSR 54.2%、Vite 80.5% 和博客 28.3%。
+- JWT 密码学后端从 `rust_crypto` 切换到 `aws_lc_rs`，从依赖图移除存在 RUSTSEC-2023-0071 的 `rsa`；crypto 22 项与 auth 5 项测试通过。
+- `RUSTSEC-2025-0134` 仅因 Phoenix 当前 PEM 读取和 Toasty 0.8 PostgreSQL 链路保留临时精确例外；迁移到 `rustls-pki-types` 且 Toasty 上游移除后必须删除。
+- 新增独立 locked Criterion 基准与两个 nightly libFuzzer 目标；AWS-LC 构建下盲索引本机基线为 360.89-364.79 ns/次，两个 fuzz 目标的 sanitizer smoke 均通过。
+- `actionlint`、四套 JavaScript coverage、Rust workspace coverage、CSP E2E、Gitleaks 45 个提交扫描和 `cargo-deny` 全策略均在本地通过；GitHub PostgreSQL service、Ubuntu sanitizer 与定时任务仍需托管 CI 首跑确认。
+
 ## 2026-07-23：可编程 HTML 文档模板
 
 - 从 `phoenix-view` 主模块拆出文档渲染边界，新增 cloneable `DocumentTemplate` 与按页面执行的 Rust 函数入口。
@@ -290,3 +299,142 @@
 - 声明的超限 `Content-Length` 在进入中间件/handler 前返回 413；chunked/H2 body 继续由运行时总字节限额约束，读取使用从请求进入 handler 时开始的绝对 deadline。
 - `RequestBodyError` 稳定映射 413/408/400；`Json`、`Form`、`Multipart` 在流式路由明确返回配置错误，不再把空缓冲区误解析为客户端输入。
 - 真实网络测试证明首块在上传完成前可见、客户端断连可观察、未读取 EOF 不污染 H1 pipeline、H2 同连接并发 stream 保持健康，stalled upload 会在 graceful shutdown 硬期限内终止。
+
+## 2026-07-23：三路并行开工（已由下文「交付完成」收口）
+
+- 设计文档：`docs/PARALLEL_TRACKS.md`、`docs/REDIS.md`、`docs/TESTING_AND_STORAGE.md`、`docs/工具与约定.md`。
+- 轨道 A / B / C 目标见下节完成条目（勿再按「进行中」开工）。
+  状态：已完成@工作树（见下一节）
+
+## 2026-07-23：三路并行交付完成
+
+- 轨 A：SSE 拆分收口 + H1 WebSocket 门面；`phoenix-core` 真实 TCP 验收（SSE keepalive/断开、WS echo/Origin/超大消息）。
+- 轨 B：`phoenix-redis` 实现 Session/RateLimit/Token（Lua）；无 Redis 单测通过，契约测试门控 `PHOENIX_TEST_REDIS_URL`。
+- 轨 C：`phoenix-testing::TestApp` 与 `phoenix-storage::LocalDisk` 落地。
+- 顶层 `phoenix`：prelude 重导出 SSE/WS；可选 feature `redis` / `storage` / `testing`。
+- 产物：`crates/phoenix-{http,core,redis,testing,storage}/`，`docs/{REALTIME,REDIS,TESTING_AND_STORAGE,PARALLEL_TRACKS}.md`。
+  状态：已完成@工作树（prelude + feature 已合并；相关包测试/Clippy 通过）
+
+## 2026-07-23：队列 / 邮件 / 应用控制台（开工记录，已收口）
+
+- 设计：`docs/QUEUE_MAIL_CONSOLE.md`
+- 轨道：`phoenix-queue`、`phoenix-mail`、`phoenix-console` + `px make:command`
+  状态：已完成@工作树（见下一节）
+
+## 2026-07-23：队列 / 邮件 / 应用控制台完成
+
+- `phoenix-queue`：MemoryQueue + Worker（幂等/重试/dead-letter/shutdown/metrics）。
+- `phoenix-mail`：Message builder + MemoryTransport（无内置 SMTP）。
+- `phoenix-console`：`commands!` + `Console`；脚手架 `cargo run -- serve`；`px make:command`。
+- 顶层 feature：`queue` / `mail`；console 默认导出。邮件 `Message` 在 prelude 中为 `EmailMessage`（避免与 WebSocket `Message` 冲突）。
+  状态：已完成@工作树
+
+## 2026-07-23：React DX hooks（开工记录，已收口）
+
+- 设计：`docs/REACT_DX_HOOKS.md`
+  状态：已完成@工作树（见下一节）
+
+## 2026-07-23：React DX hooks 完成
+
+- `page-state.tsx`：`PhoenixPageProvider` + hooks；flash 本地 consume；`pathMatches`
+- `progress.tsx`：顶栏 `ProgressBar`（事件驱动）
+- `redirect.ts` + `Form.redirectTo`；Active `Link`（exact/prefix）
+- `BrowserNavigator` 整页与 Islands 均注入 `PhoenixPageProvider`
+- 文档：`docs/REACT_DX_HOOKS.md`、`docs/RENDERING.md`
+- 验收：`packages/phoenix-react` 39 tests 全绿
+  状态：已完成@工作树
+
+## 2026-07-23：React DX 表单 P2（开工记录，已收口）
+
+- 设计：`docs/REACT_DX_FORMS.md`
+  状态：已完成@工作树（见下一节）
+
+## 2026-07-23：React DX 表单 P2 完成
+
+- `PageForm` / `usePageForm` + `submitPage`；VisitOptions `method`/`data`；422 回填
+- `confirm`（Link/Form/PageForm）；可注入 `setConfirmImplementation`
+- Vite 为 input 契约生成 `*Fields`；`form.field()` 绑定
+- `useOptimisticAction`（乐观更新 / 回滚 / onSuccess）
+- 非目标维持：Method spoofing Link、Multipart 上传进度
+- 验收：`phoenix-react` 50 测、`phoenix-vite` 13 测全绿
+  状态：已完成@工作树
+
+## 2026-07-23：React DX P3/P4（开工记录，已收口）
+
+- 设计：`docs/REACT_DX_PERF.md`
+  状态：已完成@工作树（见下一节）
+
+## 2026-07-23：React DX P3/P4 完成
+
+- Prefetch：`prefetchPage` + Link `hover|mount|viewport`；不写当前页 CSRF
+- Partial：`only`/`except` + `X-Phoenix-Only/Except` + 客户端 props 合并；`WhenVisible`
+- 滚动：`[data-phoenix-scroll-region]` 写入 HistorySnapshot.regions
+- ErrorBoundary / lazy 超时可重试 / `NavigationStatusBanner`
+- Remember 草稿 + `Form remember`；`PhoenixDevOverlay`
+- Island Link：有 Provider 拦截；无 Provider 原生跳转（文档+测试）
+- 验收：`packages/phoenix-react` 86 tests 全绿
+  状态：已完成@工作树
+
+## 2026-07-23：Phoenix Agent Skill
+
+- 产物：`.cursor/skills/phoenix/{SKILL,api-rust,api-react}.md`；同步 `~/.cursor/skills/phoenix/`
+- 内容：新项目清单、`px` 工作流、反模式、Rust/React API 速查
+- 文档入口：`docs/工具与约定.md`
+  状态：已完成@工作树
+
+## 2026-07-23：GitHub 发布前整理（未 push）
+
+- 说明：`fuzz/` 为框架 cargo-fuzz 质量门禁，保留
+- `.gitignore`：排除 `.cursor/*`（**保留** `skills/phoenix/`）、私有示例/密钥/抓包数据、fuzz 产物
+- 新增 `LICENSE`（MIT · 极数本源）、重写 `README.md`（署名 [ApiZero](https://apizero.cn/)）
+- 清单：`docs/RELEASE.md`
+  状态：已整理，等待用户确认后再发布
+
+## 2026-07-23：Laravel 风格 config/*.toml
+
+- `config/app.toml` + `config/database.toml`（选 `sqlite` / `pgsql` / `mysql`）
+- 优先级：TOML < `.env` < 进程环境；`DB_CONNECTION` / `DB_PASSWORD` / `DATABASE_URL`
+- 脚手架默认生成；文档：`docs/CONFIG.md`
+  状态：已完成@工作树
+
+## 2026-07-23：TOML Schema 补全 + MySQL
+
+- JSON Schema：`schemas/phoenix-config-*.schema.json` + `taplo.toml` / `.vscode/settings.json`
+- `px new` 生成 `config/schemas/`、`#:schema`、应用级 `taplo.toml`
+- Toasty `mysql` feature；`Backend::MySQL` + 迁移锁 `GET_LOCK`；`config/database.toml` 增加 `connections.mysql`
+  状态：已完成@工作树
+
+## 2026-07-23：品牌 Phoenix-rs + `cargo install px`
+
+- 对外 / GitHub：**Phoenix-rs**；ADR-009 已接受
+- CLI crates.io 包名 **`px`**（目录仍 `crates/phoenix-cli`）→ `cargo install px` 后 `px new`
+- 门面 crates.io 包名 **`phoenixrs`**，`[lib] name = "phoenix"`；脚手架 Registry 依赖已对齐
+  状态：已完成@工作树
+
+## 2026-07-23：Feature / 插件首版
+
+- `crates/phoenix-plugin`：`Plugin` / `FeatureSet` / `Capability`；冲突与能力 allowlist 失败关闭
+- 门面：`phoenix::plugin`；文档：`docs/FEATURES.md`；ADR-039
+- 示例：`examples/plugin-greeter`
+  状态：已完成@工作树
+
+## 2026-07-23：发版流水线 MVP
+
+- `crates/phoenix-release`：manifest / pack / install / rollback / status
+- `px release` / `release:install` / `release:rollback` / `release:status`
+- 文档：`docs/RELEASE_PIPELINE.md`；ADR-040；脚手架 `deploy/restart.sh.example`、`/dist` ignore
+  状态：已完成@工作树
+
+## 2026-07-23：文档对账刷新
+
+- 同步 BUSINESS_GUIDE / DX / PROJECT / PRODUCT / DATABASE / NEXT / Skill / AGENTS / README 与代码现状
+- 关闭「改名 / 仅 sqlite+pgsql / SSE 未完成 / 插件待做」等过时表述
+  状态：已完成@工作树
+
+## 2026-07-23：公开托管 README（待确认后 push）
+
+- README：双镜像徽章 + GitHub / GitCode 源码表与 clone / `cargo install --git` 说明
+- `docs/RELEASE.md`：双端空仓元数据与 `origin` + `gitcode` push 流程（**未 push**）
+- 目标仓：`ApiZero/Phoenix-rs` @ GitHub 与 GitCode
+  状态：文档已就绪，等待用户确认后再上传
+

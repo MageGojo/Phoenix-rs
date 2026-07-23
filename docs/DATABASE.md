@@ -1,6 +1,6 @@
 # 数据库与迁移
 
-本文面向应用开发者，说明如何使用 Phoenix 的 Toasty 数据库门面、SQLite/PostgreSQL、关系、游标分页、事务、迁移和测试隔离。模型与查询保持 Toasty 原生类型；Phoenix 负责连接配置、后端识别、迁移可靠性和测试数据库生命周期。
+本文面向应用开发者，说明如何使用 Phoenix-rs 的 Toasty 数据库门面、SQLite / PostgreSQL / MySQL、关系、游标分页、事务、迁移和测试隔离。模型与查询保持 Toasty 原生类型；Phoenix 负责连接配置、后端识别、迁移可靠性和测试数据库生命周期。
 
 ## 1. 定义模型与关系
 
@@ -34,7 +34,7 @@ pub struct Post {
 
 `models!(Author)` 会形成供连接和 schema 初始化使用的 `ModelSet`；相关模型会通过关系被包含。数据库模型不要直接作为浏览器响应，公开字段应转换成 Resource。
 
-## 2. 连接 SQLite 或 PostgreSQL
+## 2. 连接 SQLite、PostgreSQL 或 MySQL
 
 开发和单元测试可以使用内存 SQLite：
 
@@ -45,7 +45,7 @@ let mut database = Database::sqlite_memory(models!(Author)).await?;
 database.initialize_schema().await?;
 ```
 
-文件 SQLite 与 PostgreSQL 使用同一 builder：
+文件 SQLite、PostgreSQL 与 MySQL 使用同一 builder：
 
 ```rust
 let database = Database::builder(models!(Author))
@@ -61,9 +61,10 @@ let database = Database::builder(models!(Author))
 sqlite:...
 postgres://...
 postgresql://...
+mysql://...
 ```
 
-其他 scheme 会返回 `DatabaseError::UnsupportedBackend`。生产数据库 URL 必须来自环境或密钥服务，不要写进源码、日志或公开文档。
+其他 scheme 会返回 `DatabaseError::UnsupportedBackend`。生产数据库 URL 必须来自环境或密钥服务，不要写进源码、日志或公开文档。应用侧推荐用 `config/database.toml` 的 `default = "sqlite" | "pgsql" | "mysql"`（见 [CONFIG.md](./CONFIG.md)）。
 
 `initialize_schema()` 适用于空数据库、原型和隔离测试。已有生产数据库的版本演进应使用迁移，避免把 Toasty schema push 当作升级工具。
 
@@ -175,6 +176,21 @@ fn migrations() -> Vec<Migration> {
 
 ## 7. 执行、查看与回滚迁移
 
+标准项目直接使用应用自己的模型和迁移注册表执行命令：
+
+```bash
+px status
+px migrate
+px rollback --step 1
+px fresh
+px fresh --seed
+px seed
+```
+
+`px` 会定位项目根并调用生成项目内的 `phoenix-manage` 二进制，因此执行的是应用编译后的 `models::all()`、`migrations::all()` 和 `database/seeders/mod.rs`，不解析或猜测 Rust 源码。`fresh` 会按迁移状态回滚全部已登记迁移后重新升级；不可逆迁移、未知状态行或 checksum 漂移都会中止，不会静默删除未知业务表。`--seed` 在迁移完成后执行应用 seeder。
+
+底层库 API 同样可以直接调用：
+
 ```rust
 use phoenix::database::MigrationRunner;
 
@@ -202,10 +218,13 @@ println!("rolled back {rolled_back} migration(s)");
 
 - SQLite 使用 `BEGIN IMMEDIATE` 锁住并原子执行整批迁移；同批任一 SQL 失败会回滚该批全部 DDL 和状态记录。
 - PostgreSQL 使用 session advisory lock 防止多个实例同时迁移；每个迁移在独立事务中提交。
+- MySQL 使用 `GET_LOCK('phoenix_migrations', 0)` / `RELEASE_LOCK`；每个迁移在独立事务中提交。
 - `up()` 只执行 pending 项，重复执行返回 `0`。
 - `down(n)` 从最近 batch/ID 开始回滚最多 `n` 个迁移。
 
-应用部署应在新版本接流量前执行迁移，并确保同一数据库只有迁移 runner 负责 schema 变更。
+应用部署应在新版本接流量前执行迁移（`px release:install` 默认会在切换 `current` 前跑 `phoenix-manage migrate`），并确保同一数据库只有迁移 runner 负责 schema 变更。
+
+CI 契约测目前提供 `PHOENIX_TEST_POSTGRES_URL`（可选）；MySQL 驱动已接入，尚无对等的 `PHOENIX_TEST_MYSQL_URL` 集成测。
 
 ## 8. 测试隔离
 

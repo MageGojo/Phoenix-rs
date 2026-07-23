@@ -1,10 +1,11 @@
-# Phoenix 业务开发指南
+# Phoenix-rs 业务开发指南
 
-本文只说明如何使用 Phoenix 编写网站业务代码。示例均来自仓库中的
-`examples/blog`，并且只使用当前已经实现的公开接口。
+本文只说明如何使用 **Phoenix-rs** 编写网站业务代码。示例均来自仓库中的
+`examples/blog`，并且只使用当前已经实现的公开接口。安装 CLI：`cargo install px`（或 `cargo install --path crates/phoenix-cli`）。门面包 crates.io 名为 `phoenixrs`，代码仍 `use phoenix::`。
 
 当前可以编写：
 
+- Laravel 风格 `config/*.toml` + `.env`（见 [CONFIG.md](CONFIG.md)）；
 - 应用配置与服务启动；
 - GET、POST、PUT、PATCH、DELETE 路由；
 - 路径参数、命名路由和路由分组；
@@ -12,11 +13,13 @@
 - Query、Path、Header、JSON、Form、Multipart 强类型请求提取；
 - 验证后的 DTO、字段错误和 JSON 响应；
 - 全局、单路由和路由组中间件；
-- Toasty SQLite/PostgreSQL CRUD、关系、游标分页与事务；
+- Toasty SQLite / PostgreSQL / MySQL CRUD、关系、游标分页与事务；
 - 带 checksum、锁和回滚的迁移；
 - Session、CSRF、CORS、限流、可信代理、Host allowlist 和安全响应头；
 - React Islands、SPA 与 SSR 页面；
 - 版本化生产资源、renderer worker 池和流式 SSR；
+- 第三方 Feature（插件）显式安装（见 [FEATURES.md](FEATURES.md)）；
+- 发版制品与原子切换（见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)）；
 - 明文或可选 AES-256-GCM 页面协议；
 - 业务单元测试和功能测试。
 
@@ -34,6 +37,7 @@ examples/blog/
 │   ├── props/mod.rs         # 页面与共享 Props
 │   ├── requests/mod.rs      # 请求 DTO 与验证规则
 │   └── resources/mod.rs     # 对浏览器公开的 Resource
+├── config/                  # app.toml / database.toml（px new 脚手架）
 ├── routes/
 │   └── web.rs               # Web 路由
 ├── src/
@@ -143,12 +147,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 运行示例：
 
 ```bash
-cargo build -p phoenix-cli
+cargo build -p px
 cd examples/blog
 ../../target/debug/px dev
 ```
 
-`px dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
+`px` 包位于 `crates/phoenix-cli`。`px dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
 
 也可以通过环境变量修改监听地址：
 
@@ -1014,9 +1018,37 @@ let articles = Article::all()
     .await?;
 ```
 
-迁移 runner 提供 `status()`、`plan()`、`up()` 和 `down(steps)`，自动维护状态表并验证 checksum。测试中每个 case 使用独立 `TestDatabase`，不要共享全局 SQLite 文件。完整示例与 SQLite/PostgreSQL 差异见 [数据库与迁移](DATABASE.md)。
+迁移 runner 提供 `status()`、`plan()`、`up()` 和 `down(steps)`，自动维护状态表并验证 checksum。测试中每个 case 使用独立 `TestDatabase`，不要共享全局 SQLite 文件。完整示例与 SQLite / PostgreSQL / MySQL 差异见 [数据库与迁移](DATABASE.md)；选库见 [CONFIG.md](CONFIG.md)。
 
-## 14. Web 安全与生产边界
+## 14. Feature 插件与发版
+
+第三方扩展以 Cargo crate 实现 `Plugin`，应用用 `FeatureSet` 显式安装后合并路由 / console 命令 / 迁移：
+
+```rust
+use phoenix::plugin::{Capability, FeatureSet};
+
+let features = FeatureSet::new()
+    .allow([Capability::Routes, Capability::Commands])
+    .plugin(my_plugin::MyPlugin)?
+    .into_parts();
+// features.routes / features.commands / features.migrations
+```
+
+完整约定见 [FEATURES.md](FEATURES.md)；示例 crate：`examples/plugin-greeter`。
+
+上线打制品与服务器原子切换：
+
+```bash
+px release --version 0.1.0 --tarball
+# 运维上传后：
+px release:install --tarball ./app.tar.gz --version 0.1.0
+px release:status
+px release:rollback --steps 1   # 需要时
+```
+
+布局为 `releases/<ver>/` + `current` 软链；详见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)。脚手架含 `deploy/restart.sh.example`。
+
+## 15. Web 安全与生产边界
 
 公开 Web 应用应按顺序启用可信代理、request ID、访问日志、Host allowlist、CORS、限流、Session、CSRF 和安全策略。具体配置、Cookie 开发/生产差异与控制器用法见 [安全与数据传输](SECURITY.md#32-在应用中启用安全栈)。
 

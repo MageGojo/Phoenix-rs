@@ -1,16 +1,106 @@
-# Phoenix
+# Phoenix-rs
 
-Phoenix 是一个早期开发阶段、以 Hyper 为 HTTP 核心的 Rust 网站应用框架。项目目标是在 Rust 的类型安全与性能基础上，提供接近 Laravel 的开发体验，并默认集成 React + TypeScript 视图。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
+[![GitHub](https://img.shields.io/badge/GitHub-ApiZero%2FPhoenix--rs-181717?logo=github)](https://github.com/ApiZero/Phoenix-rs)
+[![GitCode](https://img.shields.io/badge/GitCode-ApiZero%2FPhoenix--rs-C71D23)](https://gitcode.com/ApiZero/Phoenix-rs)
 
-> `Phoenix` 目前是工作名称，与 Elixir 生态中的 Phoenix Framework 存在重名风险。正式发布前必须完成命名与 crate 可用性评估。
+**Phoenix-rs** 是由 [极数本源（ApiZero）](https://apizero.cn/) 打造的 Rust 全栈 Web 框架：以 [Hyper](https://hyper.rs/) 为 HTTP 核心，提供接近 Laravel 的开发体验，并默认集成 React + TypeScript（Islands / SPA / SSR）。
 
-## 目标体验
+> 与 Elixir 的 [Phoenix](https://www.phoenixframework.org/) 无关。本项目在 crates.io / GitHub / GitCode 使用 **Phoenix-rs** 标识，以区分同名生态。
 
-开发者负责路由、控制器、模型和 `views/` 下的 `.tsx` / `.jsx` 文件。框架负责请求解析、验证、数据库访问、React 页面响应、错误处理和安全默认值。
+一个 Key 调用全网 API → 见 [ApiZero](https://apizero.cn/)；一套约定写出完整网站 → 用 Phoenix-rs。
 
-底层控制器和路由已经可以运行：
+## 源码镜像
+
+| 平台 | 仓库 | 说明 |
+| --- | --- | --- |
+| **GitHub** | [github.com/ApiZero/Phoenix-rs](https://github.com/ApiZero/Phoenix-rs) | 国际协作 / Actions CI / crates.io 元数据 `repository` |
+| **GitCode** | [gitcode.com/ApiZero/Phoenix-rs](https://gitcode.com/ApiZero/Phoenix-rs) | 国内镜像，内容与 GitHub 同步 |
+
+克隆任选其一即可：
+
+```bash
+git clone https://github.com/ApiZero/Phoenix-rs.git
+# 或
+git clone https://gitcode.com/ApiZero/Phoenix-rs.git
+```
+
+## AI / Agent 开发（默认必读）
+
+**凡在本仓库或基于 Phoenix-rs 的应用里写代码，AI 必须先加载官方 Skill，再动手。**
+
+| 文件 | 用途 |
+| --- | --- |
+| [`.cursor/skills/phoenix/SKILL.md`](.cursor/skills/phoenix/SKILL.md) | **主 Skill**：新项目清单、`px` 工作流、铁律、反模式 |
+| [`.cursor/skills/phoenix/api-rust.md`](.cursor/skills/phoenix/api-rust.md) | Rust API 速查 |
+| [`.cursor/skills/phoenix/api-react.md`](.cursor/skills/phoenix/api-react.md) | `@phoenix/react` 速查 |
+| [`AGENTS.md`](AGENTS.md) | 仓库级 Agent 约定（指向上述 Skill） |
+
+Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按 [`AGENTS.md`](AGENTS.md) 用 Read 打开 `SKILL.md`。
+
+开发者也可直接读 Skill 代替翻完整 `docs/` 入门。
+
+## 特性一览
+
+- **Laravel 风格 DX**：命名路由、Resource、中间件别名、`px new` / `px make:*` / `px migrate` / `px dev` / `px release*`
+- **类型安全全链路**：Rust Request / Resource / Page Props 契约自动生成 TypeScript 与可调用 action
+- **React 一等公民**：Islands（默认）、SPA、SSR；页面协议局部导航；表单 / prefetch / partial reload
+- **安全默认开启**：Session、CSRF、CSP nonce、Host allowlist、限流、JWT + RBAC/ABAC
+- **数据与运维**：Toasty（SQLite / PostgreSQL / MySQL）+ 迁移、Prometheus 指标、可选 Redis / Queue / Mail / Storage
+- **扩展与发版**：编译期 Feature 插件；制品校验 + `current` 原子切换与回滚
+
+## 快速开始
+
+要求：Rust **1.95+**、Node.js（Vite / React）、可选 SQLite（默认）/ PostgreSQL / MySQL。
+
+### 安装 `px`（推荐）
+
+发布到 crates.io 之后：
+
+```bash
+cargo install px
+px new my-app
+cd my-app
+cp .env.example .env
+px migrate
+px dev
+```
+
+当前（仓库尚未推 crates 时）可用本仓库或 Git：
+
+```bash
+# 从本仓库路径安装
+cargo install --path crates/phoenix-cli
+
+# 或从 Git（任选镜像）
+# cargo install --git https://github.com/ApiZero/Phoenix-rs px
+# cargo install --git https://gitcode.com/ApiZero/Phoenix-rs px
+```
+
+`px` 是 crates.io **包名**；安装后 PATH 里就是二进制 `px`。`px new` 在无本地框架源码时，会让应用依赖 crates.io 上的门面包 `phoenixrs`（代码里仍写 `use phoenix::…`）。
+
+生成完整 CRUD 骨架：
+
+```bash
+px make:model Post --all
+```
+
+运行官方示例：
+
+```bash
+cd examples/blog
+px dev
+# http://127.0.0.1:3000
+```
+
+多应用挂载示例见 `examples/multi-app`；Feature 插件示例见 `examples/plugin-greeter`。
+
+## 最小代码
 
 ```rust
+use phoenix::prelude::*;
+
 pub struct UserController;
 
 impl UserController {
@@ -22,33 +112,7 @@ impl UserController {
 
 Routes::new()
     .get("/users/{user}", UserController::show)
-    .name("users.show")
-```
-
-React 页面通过同一个后端协议支持 Islands、SPA 与 SSR；默认使用 Islands：
-
-```tsx
-import MemberCreator from "../../islands/member-creator";
-
-export default function Members({ members }: MembersProps) {
-  return (
-    <main>
-      <MemberTable members={members} />
-      <MemberCreator client:load initialTotal={members.length} />
-    </main>
-  );
-}
-```
-
-`MemberTable` 只输出 SSR HTML；Vite 在编译期识别 `client:load`，SSR renderer 自动收集 `MemberCreator` 的 props，浏览器只动态加载页面实际出现的 island。业务代码不写 island 注册表、浏览器入口或 renderer 入口。
-
-React 调用 Rust action 时使用后端路由名，不写死 URL。框架会把 Rust 命名路由表自动注入页面协议：
-
-```rust
-Routes::new()
-    .post("/api/members", typed(MemberController::store))
-    .name("members.store")
-    .action::<StoreMemberInput, MemberResource>();
+    .name("users.show");
 ```
 
 ```tsx
@@ -57,125 +121,82 @@ import { members } from "../generated/routes.js";
 const member = await members.store({ name });
 ```
 
-路由属性由 `phoenix-vite` 自动生成，详细用法见 [业务开发指南](docs/BUSINESS_GUIDE.md#从-react-调用-rust-action)。
+更多：[业务开发指南](docs/BUSINESS_GUIDE.md) · [开发者体验](docs/DX.md) · [React 渲染](docs/RENDERING.md)
 
-## 当前状态
+## 命名（crates.io / 托管）
 
-当前已实现第一版底层垂直切片：
-
-- Hyper HTTP/1.1 + HTTP/2 自动识别、协议限制、请求 body 限制、优雅关闭和测试用临时端口。
-- Phoenix Request、Response、Handler、JSON 响应和异步控制器。
-- Query、Path、Header、JSON、Form、Multipart 与 `State<T>` extractor，以及验证后的强类型 DTO handler。
-- GET、POST、PUT、PATCH、DELETE、HEAD/OPTIONS、路径参数和 404/405。
-- Laravel 风格 `.name()`、名称前缀、路径前缀、命名 URL 生成和重复名称检查。
-- `routes/*.rs` 自动挂载、REST resource routes、中间件别名与异步模型绑定。
-- 全局、单路由和路由组中间件。
-- `field("user", rules![...])`、内置规则和 trait/闭包两种自定义验证规则。
-- Rust Input、Resource、Page Props 与 Shared Props 自动生成 TypeScript，并生成可直接调用的命名 action。
-- JSON Content-Type 检查、严格路径解码、panic 隔离和不泄露内部错误的 500 响应。
-- 可配置 body、请求头读取和优雅关闭超时，以及基础安全响应头中间件。
-- 开发文本/生产 JSON 两种结构化日志格式、`PHOENIX_LOG` 过滤和脱敏访问日志。
-- Prometheus exporter：HTTP 延迟/状态、TCP 连接、TLS、renderer、数据库、队列及安全状态指标，标签集合固定且不包含用户输入。
-- 版本化共享 Session backend：异步 load/create/save/rotate/delete、CAS 冲突、滑动 TTL、默认失败关闭、成功后 Cookie 提交和双实例共享测试。
-- HS256 JWT、refresh rotation、reuse detection、access/family 撤销和持久化 token store，以及 AES-256-GCM 应用数据加密与 Argon2id 密码哈希。
-- 默认拒绝的 RBAC/ABAC：角色继承、直接 allow/deny、资源属性 policy、决策审计、JWT principal 映射和 401/403 权限中间件。
-- 每请求 CSP nonce 自动贯穿 Header、React HTML、Vite runtime meta、CSS/模块/hydration script 与流式 renderer；带 nonce 的 HTML 禁止共享缓存。
-- 真实流式请求 body：路由级显式启用、typed one-shot extractor、声明长度预拒绝、chunked 运行时限额、绝对 deadline、断连与 H1/H2 生命周期测试。
-- 单进程多应用：官网、用户前台、管理后台可按 Host/路径独立挂载，拥有路由命名空间与强类型 State。
-- `routes!` 与 `applications!` 声明宏减少路由和多应用组装样板，同时完整保留 builder API。
-- Laravel 风格 `px new` 与控制器、模型、迁移、Request、Resource、中间件、页面和 Island 生成器。
-- `examples/blog` 可运行案例及启动、路由、中间件、控制器、路由名和验证测试。
-
-React 页面协议、三种渲染模式、自动页面/island 发现、Rust/TypeScript 契约、受控 `PageHead`、版本化生产资源、可配置 Node renderer 池、流式 SSR 和可选 AES-256-GCM 页面信封已经形成完整垂直切片。renderer 提供 deadline、资源/契约握手、健康快照、故障替换与显式关闭；Web 栈已提供 TLS/HTTPS/ALPN、服务端 Session、JWT token 生命周期、RBAC/ABAC、自动 action CSRF、精确 CORS、可信代理、Host allowlist、分布式 Session/限流 contract、指标 exporter、自动 CSP nonce、流式请求、安全头、request ID、日志脱敏以及安全重定向/下载响应。SSE/WebSocket、生产共享存储适配器和独立安全评审仍是生产发布前置条件。
-
-- [产品需求](docs/PRODUCT.md)
-- [架构设计](docs/PROJECT.md)
-- [业务开发指南](docs/BUSINESS_GUIDE.md)
-- [开发者体验与路由约定](docs/DX.md)
-- [多应用项目](docs/MULTI_APP.md)
-- [数据库与迁移](docs/DATABASE.md)
-- [Rust/TypeScript 数据契约](docs/CONTRACTS.md)
-- [React 渲染模式](docs/RENDERING.md)
-- [安全与数据传输](docs/SECURITY.md)
-- [认证、授权与 Token 生命周期](docs/AUTHORIZATION.md)
-- [Prometheus 指标](docs/METRICS.md)
-- [实时协议与流式请求](docs/REALTIME.md)
-- [技术决策](docs/DECISIONS.md)
-- [当前进度](docs/PROGRESS.md)
-- [下一阶段](docs/NEXT.md)
-
-## 快速运行
-
-安装本地 CLI 后，可以直接创建一套已经连接 Rust、React、Vite、Toasty 和类型契约的新应用：
-
-```bash
-cargo install --path crates/phoenix-cli
-px new my-app
-cd my-app
-px dev
-```
-
-`px new` 默认安装 npm 依赖、初始化本地 Git，并按开发/生产环境装配请求级 CSP nonce；从当前源码构建的 CLI 会自动使用本地 Phoenix crates/packages。生成业务切片可以运行 `px make:model Post --all`，完整命令见[开发者体验与 CLI](docs/DX.md#21-项目与业务代码生成)。
-
-运行仓库内参考应用：
-
-```bash
-cd examples/blog
-px dev
-```
-服务默认监听 `http://127.0.0.1:3000`：
-
-```bash
-curl http://127.0.0.1:3000/health
-curl http://127.0.0.1:3000/users/Ada
-```
-
-该命令在应用目录同时启动 Rust 与 Vite，并统一处理退出信号。只启动后端也可以运行：
-
-```bash
-cargo run -p phoenix-blog-example
-```
-
-`build:ssr` 在页面组件变化后重新生成服务端 bundle。成员目录位于 `http://127.0.0.1:3000/members`，每次请求的 100 条初始数据由 Rust 生成；常驻 Node renderer 输出概览与成员表格，浏览器只加载带 `client:load` 的新增成员表单。新增成员通过命名路由 `members.store` 调用 Rust 接口。
-
-运行完整检查：
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-npm run build:react
-npm run build:client -w phoenix-blog-react-example
-npm run build:ssr -w phoenix-blog-react-example
-npm run typecheck:example
-npm run test:react
-npm run test:e2e:ssr-csp
-```
+| 用途 | 名称 | 说明 |
+| --- | --- | --- |
+| CLI | **`px`** | `cargo install px` → 得到命令 `px` |
+| 应用依赖门面 | **`phoenixrs`** | `phoenix` / `phoenix-rs` / `phoenix-cli` 均已被占用；应用写 `phoenix = { package = "phoenixrs", … }`，Rust 仍 `use phoenix::` |
+| 产品 / GitHub / GitCode | **Phoenix-rs** | 对外品牌与仓库名，区别于 Elixir Phoenix |
 
 ## 仓库结构
 
 ```text
-crates/phoenix-http/    请求、响应、Handler 与中间件
-crates/phoenix-logging/ tracing 文本/JSON 初始化与日志过滤
-crates/phoenix-metrics/ Prometheus registry、HTTP 采集与运行时指标
-crates/phoenix-routing/ 路由、分组和命名 URL
-crates/phoenix-core/    Hyper 服务与应用生命周期
-crates/phoenix-crypto/  JWT、AES-GCM 与 Argon2id 密码学门面
-crates/phoenix-auth/    RBAC、ABAC、principal 与授权中间件
-crates/phoenix-database/ Toasty、迁移与测试隔离
-crates/phoenix-dx/      resource routes、中间件别名与模型绑定
-crates/phoenix-cli/     项目/业务代码生成与 Rust + Vite 开发进程监督
-crates/phoenix-security/ Session、CSRF 与 Web 安全中间件
-crates/phoenix-validation/ 验证规则与错误
-crates/phoenix-view/    页面协议、生产资源与 renderer 池
-crates/phoenix/         应用使用的统一入口
-packages/phoenix-react/ React 客户端适配层
-packages/phoenix-vite/  Vite 页面、契约与渲染构建插件
-examples/blog/          贯穿开发过程的参考应用
-examples/multi-app/     官网、前台与后台共存的最小多应用案例
-docs/                   产品、架构与项目记录
+.cursor/skills/phoenix/  # AI 官方 Skill（入库，默认先读）
+AGENTS.md                # Agent 强制约定入口
+crates/                  # Rust 框架组件与统一入口 phoenixrs（lib = phoenix）
+packages/                # @phoenix/react、@phoenix/vite、SSR 包
+schemas/                 # config/*.toml JSON Schema（Taplo）
+examples/blog            # 参考应用
+examples/multi-app
+examples/plugin-greeter  # Feature 插件示例
+fuzz/                    # cargo-fuzz 目标（HTTP / 密码学边界）
+benchmarks/              # Criterion 基准
+docs/                    # 产品、架构与领域文档
+.github/workflows        # CI（GitHub Actions）
 ```
 
-## 第一版边界
+### 关于 `fuzz/`
 
-第一版聚焦常规服务端网站应用：CLI 项目/业务代码生成、控制器、路由、请求、验证、Rust 到 TypeScript 的自动数据契约、Toasty 模型与迁移、React 页面响应、中间件、会话、CSRF、错误处理和测试工具。React 默认采用 Islands，并允许页面显式切换 SPA 或 SSR；管理后台、队列、邮件、WebSocket 与插件市场不进入首个可用版本。
+`fuzz/` **属于本框架质量门禁**，不是无关目录。它使用 [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) / libFuzzer，对 `phoenix-http` 边界与 `phoenix-crypto` 盲索引信封等做模糊测试。日常开发不必运行；CI / 安全流水线会做 smoke。产物目录（`fuzz/target`、`artifacts`、corpus 样本）已在 `.gitignore` 中排除。
+
+## 开发与检查
+
+```bash
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+npm test --workspace=@phoenix/react
+```
+
+质量门禁说明见 [docs/QUALITY_GATES.md](docs/QUALITY_GATES.md)。公开托管清单见 [docs/RELEASE.md](docs/RELEASE.md)。
+
+## 文档索引
+
+| 文档 | 内容 |
+| --- | --- |
+| [`.cursor/skills/phoenix/SKILL.md`](.cursor/skills/phoenix/SKILL.md) | **AI 默认入口** |
+| [AGENTS.md](AGENTS.md) | Agent 强制约定 |
+| [FEATURES.md](docs/FEATURES.md) | Feature / 插件扩展（第三方 crate） |
+| [RELEASE_PIPELINE.md](docs/RELEASE_PIPELINE.md) | 打版本包 / 安装 / 回滚 |
+| [CONFIG.md](docs/CONFIG.md) | Laravel 风格 `config/*.toml` 与选库 |
+| [PRODUCT.md](docs/PRODUCT.md) | 产品定位与范围 |
+| [PROJECT.md](docs/PROJECT.md) | 架构与模块边界 |
+| [BUSINESS_GUIDE.md](docs/BUSINESS_GUIDE.md) | 业务开发主路径 |
+| [DX.md](docs/DX.md) | CLI、路由约定、生成器 |
+| [CONTRACTS.md](docs/CONTRACTS.md) | Rust ↔ TypeScript 契约 |
+| [DATABASE.md](docs/DATABASE.md) | Toasty 与迁移 |
+| [SECURITY.md](docs/SECURITY.md) | 安全栈 |
+| [RENDERING.md](docs/RENDERING.md) | React 页面协议 |
+| [REACT_DX_*.md](docs/REACT_DX_HOOKS.md) | 前端 hooks / 表单 / 性能 DX |
+| [工具与约定.md](docs/工具与约定.md) | 命令、依赖、断点续作 |
+| [PROGRESS.md](docs/PROGRESS.md) | 进度表（对账线索） |
+| [NEXT.md](docs/NEXT.md) | 下一阶段优先级 |
+| [RELEASE.md](docs/RELEASE.md) | GitHub / GitCode 公开托管清单 |
+
+## 当前状态
+
+早期开发阶段（`0.1.0`）。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；邮件 SMTP、队列生产驱动、管理后台、服务端 partial props 求值等仍在演进。crates.io 正式发布前需一并发布内部 `phoenix-*` 组件 crate（命名冲突需逐个核对）。
+
+## 公司与许可
+
+- **出品**：极数本源（ApiZero）— [https://apizero.cn/](https://apizero.cn/)
+- **联系**：api@zerois.cn
+- **源码**：[GitHub](https://github.com/ApiZero/Phoenix-rs) · [GitCode](https://gitcode.com/ApiZero/Phoenix-rs)
+- **许可**：[MIT](LICENSE)
+
+---
+
+© 2026 极数本源 ApiZero. All rights reserved.

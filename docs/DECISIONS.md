@@ -63,11 +63,17 @@
 - 决定：通过应用构建器、状态类型、trait 和构造器组织依赖。
 - 原因：保持编译期检查、IDE 可导航性和可预测启动失败。
 
-## ADR-009：项目工作名称需要发布前复审
+## ADR-009：对外品牌 Phoenix-rs；crates.io 用可用名；双托管 GitHub + GitCode
 
-- 状态：待验证
-- 决定：内部暂用 Phoenix；技术预览发布前检查 crates.io、包管理器、域名、商标和与 Elixir Phoenix 的混淆风险。
-- 原因：重名会长期影响发现性和社区沟通，越晚改名成本越高。
+- 状态：已接受
+- 决定：
+  - **产品 / GitHub / GitCode**：仓库名 `Phoenix-rs`（区别 Elixir Phoenix）；双托管，内容同步；crates.io `repository` 指向 GitHub
+  - **CLI crates.io**：包名 `px`（`phoenix-cli` 已被 Solana Phoenix DEX 占用）→ `cargo install px`
+  - **框架门面 crates.io**：包名 `phoenixrs`（`phoenix` / `phoenix-rs` 已被旧 Channels 客户端占用）；`[lib] name = "phoenix"`，应用依赖写 `phoenix = { package = "phoenixrs", version = "…" }`，代码仍 `use phoenix::`
+  - 内部组件 crate 目录仍为 `crates/phoenix-*`；正式上架前逐个核对 crates.io 冲突并必要时加 `apizero-` 前缀
+- 原因：重名会长期影响发现性；保留 `use phoenix::` 降低应用迁移成本；国内镜像用 GitCode。
+- 废弃：早期“内部暂用 Phoenix、发布前再定名”的未决状态。
+- 托管清单：`docs/RELEASE.md`
 
 ## ADR-010：Rust 是前后端数据契约的唯一来源
 
@@ -270,3 +276,19 @@
 - 决定：普通路由继续在进入 middleware 前完整缓冲并验证 body；需要上传流的路由使用 `streaming(handler)`，由 Router 复用实际 method/Host/path/multi-app 选择逻辑完成预分类。`RequestBodyStream` 通过内部一次性 slot 同时服务 raw 与 typed handler。
 - 原因：仅根据 extractor 泛型自动改变网络读取方式会波及外部 extractor 与中间件，且容易让路由行为变得隐式。显式 wrapper 能保持默认安全语义，并让请求在 handler 拉取时自然继承 Hyper backpressure。
 - 限制与失败边界：`Content-Length` 超限在任何业务副作用前返回 413；未知长度由总字节上限和绝对 deadline 约束。stream 已取走后再次提取失败；`Json`、`Form`、`Multipart` 不允许读取流式路由的空缓冲区。HTTP/1 无法安全排空剩余 body 时允许关闭连接，但不得把剩余字节解释为下一请求；HTTP/2 只取消对应 stream。
+
+## ADR-039：Feature / 插件为编译期显式安装的 Cargo crate
+
+- 状态：已接受
+- 决定：第三方扩展实现 `Plugin`，应用用 `FeatureSet::plugin` 显式安装；可贡献路由、console 命令、迁移。能力用 `Capability` 声明，应用可用 `allow([...])` 拒绝未知能力。默认给路由名加 `{plugin}.` 前缀，不强制 URL path 前缀。
+- 原因：与 ADR-008/025 一致——无运行时反射与隐式全局注册；Cargo 依赖即分发通道。
+- 边界：不做 `.so` 热加载、不做 Laravel Package 自动发现；前端 views 跨 crate 自动发现留待后续。冲突（插件名 / 命令名 / 迁移 ID）失败关闭。
+- 文档：`docs/FEATURES.md`；示例：`examples/plugin-greeter`。
+
+## ADR-040：发版流水线为制品 + 部署根原子切换
+
+- 状态：已接受
+- 决定：框架提供 `px release` / `release:install` / `release:rollback` / `release:status` 与 `phoenix-release` crate。制品含二进制、`phoenix-manage`、前端 assets、非密钥 config、migrations 与 `manifest.toml`（checksum）。服务器使用 `releases/<ver>` + `current` 软链 + `shared/`（`.env`/storage）。上传由运维自行完成；迁移失败不切换；代码回滚默认不自动 `migrate down`。
+- 原因：避免本机直接覆盖生产；统一约定降低每人一套脚本的成本，同时不把多机/K8s 运维塞进框架。
+- 边界：MVP 单机 Unix symlink；不做健康检查自动回滚、不做内置 S3/多主机。
+- 文档：`docs/RELEASE_PIPELINE.md`。
