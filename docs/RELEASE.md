@@ -107,11 +107,13 @@ git push gitcode main
 所有 24 个拟发布 crate 已具备完整元数据（license/repository/description/keywords/categories），内部 path 依赖已全部带 `version = "0.1.0"`（对齐 `deny.toml` 要求）。
 `cargo package --locked -p <crate>` 的 verify 阶段需要上游内部 crate **已经发布在 crates.io**——path 只用于本地解析，verify 时按 registry 版本解析。因此**本仓库内无法完整预演 `cargo publish --dry-run`**；验证手段为逐 crate `cargo package --locked --no-verify --list`（文件清单检查，全部通过）。
 
+> **2026-07-24 更新**：`phoenix-core` 在 crates.io 被他方占用，已改名 **`phoenix-runtime`**（见下）；`px` 打包修复为内置 schemas。全部 24 个 crate 0.1.0 已发布完成（GitHub `MageGojo/Phoenix-rs`、GitCode `Roufsi/Phoenix-rs`）。
+
 按内部依赖拓扑排序的发布顺序（同层可任意顺序；`cargo publish` 后需等索引进账再发下一层）：
 
 1. 叶子层：`phoenix-config`、`phoenix-console`、`phoenix-database`、`phoenix-dx-macros`、`phoenix-http`、`phoenix-logging`、`phoenix-macros`、`phoenix-mail`、`phoenix-release`、`phoenix-routing`、`phoenix-storage`、`phoenix-validation`、`px`
 2. 二层：`phoenix-crypto`、`phoenix-dx`、`phoenix-metrics`、`phoenix-plugin`、`phoenix-queue`、`phoenix-security`、`phoenix-view`
-3. 三层：`phoenix-auth`、`phoenix-core`、`phoenix-redis`、`phoenix-testing`
+3. 三层：`phoenix-auth`、`phoenix-runtime`、`phoenix-redis`、`phoenix-testing`
 4. 门面（最后）：`phoenixrs`
 
 发布前仍红线：**不在未获用户明确确认前执行 `cargo publish` / `git push`**。

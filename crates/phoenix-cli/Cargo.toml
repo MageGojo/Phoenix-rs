@@ -1,5 +1,5 @@
 [package]
-name = "px"
+name = "px-cli"
 description = "Phoenix-rs application CLI (px new / make / migrate / dev)"
 edition.workspace = true
 license.workspace = true

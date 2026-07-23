@@ -30,7 +30,7 @@ Phoenix-rs 采用模块化单体框架结构。应用开发者通常只依赖顶
 ```text
 应用代码
   -> phoenix / phoenixrs（统一导出与 prelude）
-      -> phoenix-core（应用、错误与生命周期）
+      -> phoenix-runtime（应用、错误与生命周期）
       -> phoenix-config（config/*.toml、.env、分层配置与生产校验）
       -> phoenix-auth（RBAC、ABAC、principal 与授权中间件）
       -> phoenix-crypto（JWT、应用数据加密、密码哈希）
@@ -65,7 +65,7 @@ Phoenix-rs 采用模块化单体框架结构。应用开发者通常只依赖顶
 
 多应用模式仍返回同一个 `Application`：`ApplicationModule` 先给每套 `Routes` 应用独立 path/name scope 与中间件/State，再由组合 Router 按 Host 约束、端口精确度和最长路径前缀选择模块。单应用继续使用 `Application::new(routes)`，不增加迁移成本。
 
-### `phoenix-core`
+### `phoenix-runtime`
 
 负责应用构建器、服务容器边界、统一错误、启动和优雅关闭。首版不实现运行时反射式依赖注入；依赖通过显式 `AppState`、trait 和构造器连接。
 

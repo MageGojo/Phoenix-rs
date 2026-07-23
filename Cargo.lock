@@ -2087,7 +2087,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "px"
+name = "px-cli"
 version = "0.1.0"
 dependencies = [
  "nix",

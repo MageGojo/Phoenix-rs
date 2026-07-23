@@ -7,7 +7,7 @@
 ### 公开 API
 
 ```rust
-use phoenix_core::Application;
+use phoenix_runtime::Application;
 use phoenix_testing::TestApp;
 use phoenix_http::StatusCode;
 
