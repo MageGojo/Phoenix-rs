@@ -13,24 +13,25 @@
 
 ## 步骤与验收标准
 
-### 1. 完整本地基线（进行中）
+### 1. 完整本地基线（已完成 2026-07-24）
 
-- `cargo clippy --workspace --all-targets --locked -- -D warnings` 全绿
-- `cargo test --workspace --locked` 全绿
-- `npm run ci:node` 全绿
-- `cargo package --locked --no-verify --list` 全 22 个 crate 通过
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` 全绿 ✅
+- `cargo test --workspace --locked` 全绿 ✅
+- `npm run ci:node` 全绿 ✅
+- `cargo package --locked --no-verify --list` 24 个拟发布 crate 逐个通过 ✅
 
-### 2. 真实 PG / MySQL / Redis 契约验证
+### 2. 真实 PG / MySQL / Redis 契约验证（已完成 2026-07-24）
 
-- CI 已含三个 service job；本批补齐的是**本地真实复跑证据**（Docker 一次性容器 + 环境变量门控测试），确认 job 定义与测试门控环境变量一致，不需要改代码时只更新文档记录。
-- 若本地无法跑 Docker，则记录为「托管 CI 首跑确认」，不虚假宣称。
+- 本地 Docker 一次性容器复跑（宿主机 5432/3306/6379 被占用，改用 15432/13306/16379 映射）：
+  - `PHOENIX_TEST_POSTGRES_URL` + `PHOENIX_TEST_MYSQL_URL` → `phoenix-database --test toasty_integration`：4 passed（sqlite/pg/mysql/transactions）✅
+  - `PHOENIX_TEST_REDIS_URL` → `phoenix-redis --test contracts`：4 passed（session CAS / rate-limit / refresh family revocation / redaction）✅
+- CI service job 定义与测试门控环境变量一致，无需改代码；容器已清理。
 
-### 3. crates.io packaging 修复
+### 3. crates.io packaging 修复（已完成文档部分 2026-07-24）
 
-- 为拟发布的 crate 补齐 crates.io 必需元数据（license/repository/homepage/description/readme 等，缺的才补）。
-- 内部 path 依赖补 `version = "0.1.0"`（对齐 deny.toml 要求与 crates.io 发布硬性要求）。
-- 用 `cargo publish --dry-run`（或等价的 `cargo package` 带 verify）抽查核心 crate。
-- 任何变更用独立 commit 落地（拆分提交）。
+- 对账结论：24 个 crate 元数据（license/repository/description/keywords/categories）**已齐全**；内部 path 依赖**已全部带 `version = "0.1.0"`**，deny.toml 的硬要求已满足，无代码缺口。
+- `cargo package -p phoenixrs`（含 verify）预期失败：verify 阶段按 registry 解析内部依赖，而上层 crate 尚未发布——这是发布顺序问题而非清单问题。拓扑发布顺序已写入 `docs/RELEASE.md`「crates.io 发布顺序」。
+- 实际 `cargo publish` 保持红线：等待用户明确确认。
 
 ### 4. 管理后台 / Auth 完整链路
 

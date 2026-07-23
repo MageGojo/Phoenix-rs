@@ -448,3 +448,11 @@
 - 回归覆盖登录成功/失败、登出、密码重置 accepted、admin page envelope 与生成 named action 类型树。
 - 验收：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`、`npm run ci:node` 全部通过。
   状态：已完成首版@示例；下一步是把示例链路上升为 `px make:auth` / `px make:admin` 生成器与持久化用户模型。
+
+## 2026-07-24：发布候选工程底盘收口
+
+- 完整本地基线全绿：严格 Clippy、`cargo test --workspace --locked`、`npm run ci:node`、24 个 crate 逐个 `cargo package --locked --no-verify --list`。
+- 真实服务契约本地复跑（Docker 一次性容器，端口 15432/13306/16379 避开宿主占用）：`toasty_integration` 4 passed（PG/MySQL 真实链路）、`phoenix-redis` contracts 4 passed；CI service job 门控变量与测试一致，容器已清理。
+- crates.io packaging 对账：24 个 crate 元数据齐全、内部 path 依赖已全部带 `version`；verify 失败属「上层 crate 未发布」的顺序问题而非清单问题，拓扑发布顺序写入 `docs/RELEASE.md`。
+- 设计文档入库：`docs/RC_CLOSURE_PLAN.md`、`docs/AUTH_ADMIN.md`（拆分提交）。
+  状态：工程底盘已收口；剩余红线项为实际 `cargo publish` / `git push`（等用户确认），下一步进入 `px make:auth` 持久化链路（见 `docs/AUTH_ADMIN.md`）。
