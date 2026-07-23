@@ -97,10 +97,10 @@ git push gitcode main
 
 | 角色 | 包名 | 安装 / 依赖 |
 | --- | --- | --- |
-| CLI | `px` | `cargo install px` → `px new` |
+| CLI | `px-cli` | `cargo install px-cli` → `px new` |
 | 框架门面 | `phoenixrs` | `phoenix = { package = "phoenixrs", version = "…" }`；`use phoenix::` |
 
-说明：`phoenix`、`phoenix-rs`、`phoenix-cli` 在 crates.io 已被无关项目占用，故不采用。详见 `docs/DECISIONS.md` ADR-009。
+说明：`phoenix`、`phoenix-rs`、`phoenix-cli`、`px`、`phoenix-core` 在 crates.io 已被无关项目占用，故不采用（`phoenix-core` → `phoenix-runtime`，`px` → `px-cli`）。详见 `docs/DECISIONS.md` ADR-009。
 
 ## crates.io 发布顺序（2026-07-24 验证）
 
@@ -121,6 +121,6 @@ git push gitcode main
 从 Git 安装 CLI（镜像任选）：
 
 ```bash
-cargo install --git https://github.com/MageGojo/Phoenix-rs px
-cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
+cargo install --git https://github.com/MageGojo/Phoenix-rs px-cli
+cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px-cli
 ```

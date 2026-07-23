@@ -404,10 +404,10 @@
 - Toasty `mysql` feature；`Backend::MySQL` + 迁移锁 `GET_LOCK`；`config/database.toml` 增加 `connections.mysql`
   状态：已完成@工作树
 
-## 2026-07-23：品牌 Phoenix-rs + `cargo install px`
+## 2026-07-23：品牌 Phoenix-rs + `cargo install px-cli`
 
 - 对外 / GitHub：**Phoenix-rs**；ADR-009 已接受
-- CLI crates.io 包名 **`px`**（目录仍 `crates/phoenix-cli`）→ `cargo install px` 后 `px new`
+- CLI crates.io 包名 **`px`**（目录仍 `crates/phoenix-cli`）→ `cargo install px-cli` 后 `px new`
 - 门面 crates.io 包名 **`phoenixrs`**，`[lib] name = "phoenix"`；脚手架 Registry 依赖已对齐
   状态：已完成@工作树
 

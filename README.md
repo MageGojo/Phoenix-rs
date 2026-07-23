@@ -57,15 +57,15 @@ Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按
 从 crates.io 安装（推荐）：
 
 ```bash
-cargo install px
+cargo install px-cli
 ```
 
 或从 Git 安装（镜像任选）：
 
 ```bash
-cargo install --git https://github.com/MageGojo/Phoenix-rs px
+cargo install --git https://github.com/MageGojo/Phoenix-rs px-cli
 # 或
-cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
+cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px-cli
 ```
 
 本仓库内开发时也可用 `cargo install --path crates/phoenix-cli`。
@@ -132,7 +132,7 @@ const member = await members.store({ name });
 
 | 用途 | 名称 | 说明 |
 | --- | --- | --- |
-| CLI | **[`px`](https://crates.io/crates/px)** | `cargo install px` → 得到命令 `px` |
+| CLI | **[`px-cli`](https://crates.io/crates/px-cli)** | `cargo install px-cli` → 得到命令 `px` |
 | 应用依赖门面 | **[`phoenixrs`](https://crates.io/crates/phoenixrs)** | `phoenix` / `phoenix-rs` / `phoenix-cli` 均已被占用；应用写 `phoenix = { package = "phoenixrs", … }`，Rust 仍 `use phoenix::` |
 | 产品 / GitHub / GitCode | **Phoenix-rs** | 对外品牌与仓库名 |
 
@@ -201,7 +201,7 @@ npm run ci:node
 
 ## 当前状态
 
-早期开发阶段（`0.1.0`），处于**发布候选（RC）收口期**。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 已升级为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。RC 工程基线已于 2026-07-24 收口：Clippy / 测试 / `npm run ci:node` 全绿，PostgreSQL / MySQL / Redis 真实契约验证通过，24 个拟发布 crate 元数据与内部依赖版本就绪（见 [docs/RC_CLOSURE_PLAN.md](docs/RC_CLOSURE_PLAN.md)）。剩余演进项：邮件真实 SMTP、队列生产驱动、`px make:auth` 生成器、服务端 partial props 求值。crates.io 尚未发布，需按 [docs/RELEASE.md](docs/RELEASE.md) 拓扑顺序逐层 `cargo publish`。
+早期开发阶段（`0.1.0`）。**全部 24 个 crate 已发布至 crates.io**（2026-07-24，含门面 [`phoenixrs`](https://crates.io/crates/phoenixrs) 与 CLI [`px-cli`](https://crates.io/crates/px-cli)），GitHub / GitCode 双镜像已公开。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。仍在演进：邮件真实 SMTP、队列生产驱动、`px make:auth` 生成器、服务端 partial props 求值。
 
 ## 公司与许可
 

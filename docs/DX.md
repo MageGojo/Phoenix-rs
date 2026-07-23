@@ -165,12 +165,12 @@ let post = Bound::<Post>::from_request(&request).expect("binding middleware ran"
 
 ```bash
 # 安装 CLI（推荐：crates.io 发布后）
-cargo install px
+cargo install px-cli
 
 # 或从本仓库 / GitHub
 cargo install --path crates/phoenix-cli
-# cargo install --git https://github.com/MageGojo/Phoenix-rs px
-# cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
+# cargo install --git https://github.com/MageGojo/Phoenix-rs px-cli
+# cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px-cli
 
 px new my-app
 cd my-app

@@ -13,8 +13,8 @@ use phoenix_cli::{
 
 const HELP: &str = r"Phoenix-rs application CLI (px)
 
-Install: cargo install px
-         cargo install --git https://github.com/MageGojo/Phoenix-rs px
+Install: cargo install px-cli
+         cargo install --git https://github.com/MageGojo/Phoenix-rs px-cli
          cargo install --path crates/phoenix-cli
 
 Usage:

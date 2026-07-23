@@ -13,7 +13,7 @@
 - [`api-rust.md`](.cursor/skills/phoenix/api-rust.md) — Rust 路由 / 控制器 / 契约 / DB
 - [`api-react.md`](.cursor/skills/phoenix/api-react.md) — `@phoenix/react` 导航 / 表单 / hooks
 
-不要凭通用 Laravel / Axum / Next 经验硬套；以 Skill + `docs/` 为准。产品品牌为 **Phoenix-rs**；CLI 为 `px`（`cargo install px`）；门面包 crates.io 为 `phoenixrs`。
+不要凭通用 Laravel / Axum / Next 经验硬套；以 Skill + `docs/` 为准。产品品牌为 **Phoenix-rs**；CLI 为 `px`（`cargo install px-cli`）；门面包 crates.io 为 `phoenixrs`。
 
 ## 2. 默认工作流
 

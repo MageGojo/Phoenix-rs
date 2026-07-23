@@ -68,7 +68,7 @@
 - 状态：已接受
 - 决定：
   - **产品 / GitHub / GitCode**：仓库名 `Phoenix-rs`（区别 Elixir Phoenix）；双托管，内容同步；crates.io `repository` 指向 GitHub
-  - **CLI crates.io**：包名 `px`（`phoenix-cli` 已被 Solana Phoenix DEX 占用）→ `cargo install px`
+  - **CLI crates.io**：包名 `px-cli`（`px` 与 `phoenix-cli` 均已被占用）→ `cargo install px-cli`
   - **框架门面 crates.io**：包名 `phoenixrs`（`phoenix` / `phoenix-rs` 已被旧 Channels 客户端占用）；`[lib] name = "phoenix"`，应用依赖写 `phoenix = { package = "phoenixrs", version = "…" }`，代码仍 `use phoenix::`
   - 内部组件 crate 目录仍为 `crates/phoenix-*`；正式上架前逐个核对 crates.io 冲突并必要时加 `apizero-` 前缀
 - 原因：重名会长期影响发现性；保留 `use phoenix::` 降低应用迁移成本；国内镜像用 GitCode。

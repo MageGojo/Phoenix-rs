@@ -12,7 +12,7 @@ description: >-
 
 Phoenix-rs = Hyper HTTP + Laravel-style DX + React (Islands/SPA/SSR) + Rust→TS contracts.
 Not a Laravel port; not Elixir Phoenix. Prefer `phoenix::prelude::*` and generated `views/generated/*`.
-Install CLI: `cargo install px` (or `cargo install --path crates/phoenix-cli` from this repo).
+Install CLI: `cargo install px-cli` (binary is `px`; or `cargo install --path crates/phoenix-cli` from this repo).
 
 **Framework repo docs (source of truth):** `docs/BUSINESS_GUIDE.md`, `docs/DX.md`, `docs/CONFIG.md`, `docs/FEATURES.md` (plugins), `docs/RELEASE_PIPELINE.md`, `docs/CONTRACTS.md`, `docs/RENDERING.md`, `docs/REACT_DX_*.md`, `docs/工具与约定.md`.
 

@@ -1,7 +1,7 @@
 # Phoenix-rs 业务开发指南
 
 本文只说明如何使用 **Phoenix-rs** 编写网站业务代码。示例均来自仓库中的
-`examples/blog`，并且只使用当前已经实现的公开接口。安装 CLI：`cargo install px`（或 `cargo install --path crates/phoenix-cli`）。门面包 crates.io 名为 `phoenixrs`，代码仍 `use phoenix::`。
+`examples/blog`，并且只使用当前已经实现的公开接口。安装 CLI：`cargo install px-cli`（或 `cargo install --path crates/phoenix-cli`）。门面包 crates.io 名为 `phoenixrs`，代码仍 `use phoenix::`。
 
 当前可以编写：
 
