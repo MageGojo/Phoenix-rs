@@ -217,6 +217,17 @@ describe("Phoenix Vite plugin", () => {
     expect(contracts).toContain('"createdBy": string;');
     expect(contracts).toContain('"members/index": MembersPageProps;');
     expect(contracts).toContain("export type PhoenixSharedProps = SharedProps;");
+    expect(contracts).toContain("export type PhoenixFieldDescriptor");
+    expect(contracts).toContain("export type PhoenixFieldMap");
+    expect(contracts).toContain("export const StoreMemberInputFields = {");
+    expect(contracts).toContain(
+      '"displayName": { name: "displayName", type: "string", required: true },',
+    );
+    expect(contracts).toContain(
+      '"note": { name: "note", type: "string", required: false },',
+    );
+    expect(contracts).not.toContain("MemberResourceFields");
+    expect(contracts).not.toContain("MembersPagePropsFields");
     expect(contracts).toMatch(/export const contractHash = "fnv1a-[0-9a-f]{8}" as const;/);
   });
 

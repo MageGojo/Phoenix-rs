@@ -5,8 +5,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getPhoenixNavigator,
   Link,
+  clearPrefetchCache,
+  getPrefetched,
+  resetConfirmImplementation,
+  setConfirmImplementation,
   startPhoenix,
   stopPhoenix,
+  useCsrfToken,
+  useNavigator,
+  usePage,
   type PageEnvelope,
 } from "./index.js";
 import {
@@ -22,6 +29,8 @@ import {
 
 afterEach(async () => {
   await act(async () => stopPhoenix());
+  clearPrefetchCache();
+  resetConfirmImplementation();
   vi.restoreAllMocks();
   document.head.innerHTML = "";
   document.body.innerHTML = "";
@@ -395,5 +404,332 @@ describe("Phoenix navigation", () => {
       contract_hash: "contract-a",
     });
     expect(document.getElementById("phoenix-root")?.textContent).toBe("Next");
+  });
+
+  it("marks active Links with exact/prefix matching, activeClassName, and aria-current", async () => {
+    function NavPage() {
+      return (
+        <nav>
+          <Link id="exact-members" href="/members" activeClassName="is-active">
+            Exact
+          </Link>
+          <Link
+            id="prefix-members"
+            href="/members"
+            match="prefix"
+            activeClassName="is-active"
+            className="nav-link"
+          >
+            Prefix
+          </Link>
+          <Link
+            id="forced-active"
+            href="/other"
+            active
+            activeClassName="forced"
+            aria-current="true"
+          >
+            Forced
+          </Link>
+          <Link
+            id="forced-inactive"
+            href="/members"
+            active={false}
+            activeClassName="is-active"
+          >
+            Forced off
+          </Link>
+          <Link
+            id="aria-off"
+            href="/members"
+            match="prefix"
+            activeClassName="is-active"
+            aria-current={false}
+          >
+            Aria off
+          </Link>
+        </nav>
+      );
+    }
+
+    window.history.replaceState(null, "", "/members/42");
+    installPage(pageEnvelope("nav", {}));
+    await act(async () => {
+      await startPhoenix({ pages: { nav: NavPage } });
+    });
+
+    const exact = document.getElementById("exact-members");
+    const prefix = document.getElementById("prefix-members");
+    const forced = document.getElementById("forced-active");
+    const forcedOff = document.getElementById("forced-inactive");
+    const ariaOff = document.getElementById("aria-off");
+
+    expect(exact?.className).toBe("");
+    expect(exact?.getAttribute("aria-current")).toBeNull();
+    expect(prefix?.className).toBe("nav-link is-active");
+    expect(prefix?.getAttribute("aria-current")).toBe("page");
+    expect(forced?.className).toBe("forced");
+    expect(forced?.getAttribute("aria-current")).toBe("true");
+    expect(forcedOff?.className).toBe("");
+    expect(forcedOff?.getAttribute("aria-current")).toBeNull();
+    expect(ariaOff?.className).toBe("is-active");
+    expect(ariaOff?.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("activates exact Links when the pathname matches", async () => {
+    function NavPage() {
+      return (
+        <Link id="home" href="/" activeClassName="here">
+          Home
+        </Link>
+      );
+    }
+
+    window.history.replaceState(null, "", "/");
+    installPage(pageEnvelope("nav", {}));
+    await act(async () => {
+      await startPhoenix({ pages: { nav: NavPage } });
+    });
+
+    expect(document.getElementById("home")?.className).toBe("here");
+    expect(document.getElementById("home")?.getAttribute("aria-current")).toBe("page");
+  });
+
+  it("provides page hooks through PhoenixPageProvider after startPhoenix", async () => {
+    function HookPage() {
+      const { page, props } = usePage<{ title: string }>();
+      const csrf = useCsrfToken();
+      const navigator = useNavigator();
+      return (
+        <main
+          id="hook-page"
+          data-page={page}
+          data-title={props.title}
+          data-csrf={csrf ?? ""}
+          data-has-navigator={navigator ? "1" : "0"}
+        />
+      );
+    }
+
+    const envelope = pageEnvelope("hooks/index", { title: "Hello" });
+    envelope.csrf_token = "csrf-from-envelope";
+    installPage(envelope);
+    await act(async () => {
+      await startPhoenix({ pages: { "hooks/index": HookPage } });
+    });
+
+    const root = document.getElementById("hook-page");
+    expect(root?.dataset.page).toBe("hooks/index");
+    expect(root?.dataset.title).toBe("Hello");
+    expect(root?.dataset.csrf).toBe("csrf-from-envelope");
+    expect(root?.dataset.hasNavigator).toBe("1");
+  });
+
+  it("skips Link navigation when confirm is cancelled", async () => {
+    const confirmFn = vi.fn(() => false);
+    setConfirmImplementation(confirmFn);
+    const fetcher = vi.fn(async () => pageResponse(pageEnvelope("members", {})));
+
+    function HomePage() {
+      return (
+        <main>
+          <Link id="members-link" href="/members" confirm="Leave this page?">
+            Members
+          </Link>
+        </main>
+      );
+    }
+
+    window.history.replaceState(null, "", "/home");
+    installPage(pageEnvelope("home", {}));
+    await act(async () => {
+      await startPhoenix({
+        pages: { home: HomePage, members: () => <main>Members</main> },
+        fetcher: fetcher as typeof fetch,
+      });
+    });
+
+    document.getElementById("members-link")?.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    }));
+
+    expect(confirmFn).toHaveBeenCalledWith("Leave this page?");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/home");
+  });
+
+  it("does not preventDefault when Link has no navigation context", async () => {
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(<Link id="bare-link" href="/x">Bare</Link>);
+    });
+
+    const anchor = document.getElementById("bare-link");
+    expect(anchor).not.toBeNull();
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    });
+    const preventDefault = vi.spyOn(event, "preventDefault");
+    anchor!.dispatchEvent(event);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it("prefetches on Link hover without writing the current page", async () => {
+    const prefetched = pageEnvelope("members/index", { name: "Prefetch" });
+    prefetched.csrf_token = "prefetch-csrf";
+    const fetchMock = vi.fn(async () => pageResponse(prefetched));
+    vi.stubGlobal("fetch", fetchMock);
+
+    function HomePage() {
+      return (
+        <main>
+          <Link id="members-link" href="/members" prefetch="hover">
+            Members
+          </Link>
+        </main>
+      );
+    }
+
+    window.history.replaceState(null, "", "/home");
+    const initial = pageEnvelope("home/index", {});
+    initial.csrf_token = "page-csrf";
+    installPage(initial);
+    await act(async () => {
+      await startPhoenix({
+        pages: {
+          "home/index": HomePage,
+          "members/index": () => <main>Members</main>,
+        },
+      });
+    });
+
+    await act(async () => {
+      document.getElementById("members-link")?.focus();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getPrefetched("/members")?.csrf_token).toBe("prefetch-csrf");
+    expect(readInstalledPage().csrf_token).toBe("page-csrf");
+  });
+
+  it("prefetches on Link mount", async () => {
+    const prefetched = pageEnvelope("posts/show", { id: 1 });
+    const fetchMock = vi.fn(async () => pageResponse(prefetched));
+    vi.stubGlobal("fetch", fetchMock);
+
+    function HomePage() {
+      return (
+        <main>
+          <Link id="post-link" href="/posts/1" prefetch="mount">
+            Post
+          </Link>
+        </main>
+      );
+    }
+
+    window.history.replaceState(null, "", "/home");
+    installPage(pageEnvelope("home/index", {}));
+    await act(async () => {
+      await startPhoenix({
+        pages: {
+          "home/index": HomePage,
+          "posts/show": () => <main>Post</main>,
+        },
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(getPrefetched("/posts/1")?.page).toBe("posts/show");
+  });
+
+  it("reload with only sends X-Phoenix-Only and merges props", async () => {
+    function PostPage({
+      title,
+      comments,
+      sidebar,
+    }: {
+      title: string;
+      comments: Array<{ id: number }>;
+      sidebar: string;
+    }) {
+      return (
+        <main
+          id="post-page"
+          data-title={title}
+          data-comments={comments.map((item) => item.id).join(",")}
+          data-sidebar={sidebar}
+        />
+      );
+    }
+
+    const initial = pageEnvelope("posts/show", {
+      title: "Keep title",
+      comments: [] as Array<{ id: number }>,
+      sidebar: "keep sidebar",
+    });
+    const partial = pageEnvelope("posts/show", {
+      title: "Should ignore",
+      comments: [{ id: 7 }],
+      sidebar: "Should ignore",
+    });
+    partial.shared = { user: "ada" };
+    partial.csrf_token = "csrf-partial";
+
+    const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-phoenix-page")).toBe("1");
+      expect(headers.get("x-phoenix-only")).toBe("comments");
+      expect(headers.get("x-phoenix-except")).toBeNull();
+      return pageResponse(partial);
+    });
+
+    window.history.replaceState(null, "", "/posts/1");
+    installPage(initial);
+    vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    await act(async () => {
+      await startPhoenix({
+        pages: { "posts/show": PostPage },
+        fetcher: fetcher as typeof fetch,
+      });
+    });
+
+    await act(async () => {
+      await getPhoenixNavigator()?.reload({ only: ["comments"] });
+    });
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    const page = document.getElementById("post-page");
+    expect(page?.dataset.title).toBe("Keep title");
+    expect(page?.dataset.comments).toBe("7");
+    expect(page?.dataset.sidebar).toBe("keep sidebar");
+    expect(readInstalledPage().props).toEqual({
+      title: "Keep title",
+      comments: [{ id: 7 }],
+      sidebar: "keep sidebar",
+    });
+    expect(readInstalledPage().shared).toEqual({ user: "ada" });
+    expect(readInstalledPage().csrf_token).toBe("csrf-partial");
   });
 });

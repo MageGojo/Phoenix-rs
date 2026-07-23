@@ -3,13 +3,23 @@ import {
   createContext,
   createElement,
   type ComponentType,
+  type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
+  useCallback,
   useContext,
+  useEffect,
+  useRef,
 } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, hydrateRoot, type Root } from "react-dom/client";
 
+import { confirmAction } from "./confirm.js";
+import {
+  PhoenixErrorBoundary,
+  type ErrorFallbackProps,
+} from "./error-boundary.js";
 import { abortError, isAbortError } from "./errors.js";
 import { updatePageHead } from "./head.js";
 import {
@@ -21,7 +31,16 @@ import {
   type HistoryMode,
   type HistorySnapshot,
 } from "./history.js";
-import { fetchPage } from "./page-client.js";
+import { fetchPage, submitPage } from "./page-client.js";
+import {
+  DEFAULT_PAGE_LOAD_TIMEOUT_MS,
+  DefaultPageLoadFallback,
+  loadPageComponent,
+  toPageLoadError,
+  type PageLoadFallbackProps,
+} from "./page-load.js";
+import { mergePageEnvelope } from "./partial.js";
+import { invalidatePrefetch, prefetchPage } from "./prefetch.js";
 import {
   assertPageEnvelope,
   readPage,
@@ -32,6 +51,7 @@ import {
   type DecryptPage,
   type PageEnvelope,
 } from "./protocol.js";
+import { pathMatches, PhoenixPageProvider } from "./page-state.js";
 import {
   componentRegistry,
   pageProps,
@@ -39,11 +59,17 @@ import {
   requiredComponent,
 } from "./rendering.js";
 
+export type VisitMethod = "get" | "post" | "put" | "patch" | "delete";
+
 export interface VisitOptions {
   replace?: boolean;
   preserveScroll?: boolean;
   preserveFocus?: boolean;
   signal?: AbortSignal;
+  method?: VisitMethod;
+  data?: Record<string, unknown>;
+  only?: string[];
+  except?: string[];
 }
 
 export interface PhoenixNavigator {
@@ -61,6 +87,18 @@ export interface PhoenixOptions {
   decrypt?: DecryptPage;
   onNavigationError?: (error: unknown) => void;
   hardNavigate?: (url: string) => void;
+  errorFallback?: ComponentType<ErrorFallbackProps>;
+  pageLoadTimeoutMs?: number;
+  pageLoadFallback?: ComponentType<PageLoadFallbackProps>;
+}
+
+interface PageLoadRetryContext {
+  envelope: PageEnvelope;
+  target?: URL;
+  options?: VisitOptions;
+  historyMode?: HistoryMode;
+  restoration?: HistorySnapshot;
+  initial?: boolean;
 }
 
 const navigationContext = createContext<PhoenixNavigator | null>(null);
@@ -101,12 +139,19 @@ export function navigate(
   return navigator.visit(url, options);
 }
 
+export type LinkPrefetchMode = false | "hover" | "mount" | "viewport";
+
 export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
   href: string;
   replace?: boolean;
   preserveScroll?: boolean;
   preserveFocus?: boolean;
   reloadDocument?: boolean;
+  match?: "exact" | "prefix";
+  activeClassName?: string;
+  active?: boolean;
+  confirm?: string;
+  prefetch?: LinkPrefetchMode;
 }
 
 export function Link({
@@ -115,10 +160,63 @@ export function Link({
   preserveScroll = false,
   preserveFocus = false,
   reloadDocument = false,
+  match = "exact",
+  activeClassName,
+  active,
+  confirm,
+  prefetch = false,
+  className,
   onClick,
+  onPointerEnter,
+  onFocus,
+  "aria-current": ariaCurrent,
   ...props
 }: LinkProps): ReactElement {
   const navigator = useContext(navigationContext);
+  const anchorRef = useRef<HTMLAnchorElement>(null);
+  const location = currentLocation();
+  const hrefPath = location
+    ? new URL(href, location.href).pathname
+    : href;
+  const currentPath = location?.pathname ?? "/";
+  const isActive = active ?? pathMatches(currentPath, hrefPath, match);
+  const mergedClassName = [className, isActive ? activeClassName : undefined]
+    .filter(Boolean)
+    .join(" ") || undefined;
+  const resolvedAriaCurrent = ariaCurrent !== undefined
+    ? ariaCurrent
+    : (isActive ? "page" : undefined);
+
+  const runPrefetch = useCallback(() => {
+    if (prefetch === false) return;
+    void prefetchPage(href).catch(() => {});
+  }, [href, prefetch]);
+
+  useEffect(() => {
+    if (prefetch !== "mount") return;
+    runPrefetch();
+  }, [prefetch, runPrefetch]);
+
+  useEffect(() => {
+    if (prefetch !== "viewport") return;
+    const element = anchorRef.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === "undefined") {
+      runPrefetch();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        runPrefetch();
+        observer.disconnect();
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [prefetch, runPrefetch]);
+
   const handleClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
     if (
@@ -129,14 +227,33 @@ export function Link({
       return;
     }
     event.preventDefault();
+    if (confirm && !confirmAction(confirm)) return;
     void navigator.visit(href, { replace, preserveScroll, preserveFocus }).catch(() => {});
+  };
+  const handlePointerEnter = (event: ReactPointerEvent<HTMLAnchorElement>) => {
+    onPointerEnter?.(event);
+    if (prefetch === "hover") runPrefetch();
+  };
+  const handleFocus = (event: ReactFocusEvent<HTMLAnchorElement>) => {
+    onFocus?.(event);
+    if (prefetch === "hover") runPrefetch();
   };
   return createElement("a", {
     ...props,
+    ref: anchorRef,
     href,
+    className: mergedClassName,
+    "aria-current": resolvedAriaCurrent === false ? undefined : resolvedAriaCurrent,
     onClick: handleClick,
+    onPointerEnter: handlePointerEnter,
+    onFocus: handleFocus,
     ...(reloadDocument ? { "data-phoenix-reload": "" } : {}),
   });
+}
+
+function currentLocation(): Location | null {
+  if (typeof window !== "undefined") return window.location;
+  return null;
 }
 
 class BrowserNavigator implements PhoenixNavigator {
@@ -148,6 +265,9 @@ class BrowserNavigator implements PhoenixNavigator {
   private readonly decrypt?: DecryptPage;
   private readonly onNavigationError?: (error: unknown) => void;
   private readonly hardNavigate: (url: string) => void;
+  private readonly errorFallback?: ComponentType<ErrorFallbackProps>;
+  private readonly pageLoadTimeoutMs: number;
+  private readonly pageLoadFallback: ComponentType<PageLoadFallbackProps>;
   private readonly history: NavigationHistory;
   private currentPage: PageEnvelope;
   private fullRoot: Root | null = null;
@@ -172,6 +292,9 @@ class BrowserNavigator implements PhoenixNavigator {
     this.decrypt = options.decrypt;
     this.onNavigationError = options.onNavigationError;
     this.hardNavigate = options.hardNavigate ?? ((url) => this.windowRef.location.assign(url));
+    this.errorFallback = options.errorFallback;
+    this.pageLoadTimeoutMs = options.pageLoadTimeoutMs ?? DEFAULT_PAGE_LOAD_TIMEOUT_MS;
+    this.pageLoadFallback = options.pageLoadFallback ?? DefaultPageLoadFallback;
     this.currentPage = envelope;
   }
 
@@ -189,13 +312,24 @@ class BrowserNavigator implements PhoenixNavigator {
         this,
       );
     } else {
-      const Page = await requiredComponent(this.pages, this.currentPage.page, "page");
-      const element = this.pageElement(Page, this.currentPage);
-      if (this.currentPage.render_mode === "ssr") {
-        this.fullRoot = hydrateRoot(this.rootElement, element);
-      } else {
-        this.fullRoot = createRoot(this.rootElement);
-        this.fullRoot.render(element);
+      try {
+        const Page = await loadPageComponent(this.pages, this.currentPage.page, {
+          timeoutMs: this.pageLoadTimeoutMs,
+          fallback: this.pageLoadFallback,
+        });
+        const element = this.pageElement(Page, this.currentPage);
+        if (this.currentPage.render_mode === "ssr") {
+          this.fullRoot = hydrateRoot(this.rootElement, element);
+        } else {
+          this.fullRoot = createRoot(this.rootElement);
+          this.fullRoot.render(element);
+        }
+      } catch (error) {
+        if (this.disposed) throw error;
+        this.renderPageLoadFallback(error, {
+          envelope: this.currentPage,
+          initial: true,
+        });
       }
     }
     this.installNavigation();
@@ -241,7 +375,12 @@ class BrowserNavigator implements PhoenixNavigator {
       throw new Error("Phoenix navigation only supports same-origin URLs");
     }
 
-    if (historyMode !== "none" && isHashOnlyVisit(target, this.windowRef.location)) {
+    const method = (options.method ?? "get").toLowerCase() as VisitMethod;
+    if (
+      historyMode !== "none" &&
+      method === "get" &&
+      isHashOnlyVisit(target, this.windowRef.location)
+    ) {
       this.navigationSequence += 1;
       this.activeController?.abort();
       this.history.save();
@@ -262,9 +401,22 @@ class BrowserNavigator implements PhoenixNavigator {
     this.dispatch("phoenix:navigation-start", { url: target.href });
 
     try {
-      const envelope = await fetchPage(target.href, this.decrypt, this.fetcher, {
-        signal: controller.signal,
-      });
+      let envelope = method === "get"
+        ? await fetchPage(target.href, this.decrypt, this.fetcher, {
+          signal: controller.signal,
+          only: options.only,
+          except: options.except,
+        })
+        : await submitPage(target.href, {
+          method,
+          data: options.data,
+          signal: controller.signal,
+          decrypt: this.decrypt,
+          fetcher: this.fetcher,
+          headers: csrfHeaders(this.currentPage),
+          only: options.only,
+          except: options.except,
+        });
       if (navigation !== this.navigationSequence || controller.signal.aborted) {
         throw abortError();
       }
@@ -274,20 +426,32 @@ class BrowserNavigator implements PhoenixNavigator {
         return this.currentPage;
       }
       assertPageEnvelope(envelope);
-      const Page = await requiredComponent(this.pages, envelope.page, "page");
+      if (options.only || options.except) {
+        envelope = mergePageEnvelope(this.currentPage, envelope, options);
+      }
+      let Page: ComponentType<any>;
+      try {
+        Page = await loadPageComponent(this.pages, envelope.page, {
+          timeoutMs: this.pageLoadTimeoutMs,
+          fallback: this.pageLoadFallback,
+        });
+      } catch (loadError) {
+        if (!isAbortError(loadError) && !this.disposed) {
+          this.renderPageLoadFallback(loadError, {
+            envelope,
+            target,
+            options,
+            historyMode,
+            restoration,
+          });
+        }
+        throw loadError;
+      }
       if (navigation !== this.navigationSequence || controller.signal.aborted) {
         throw abortError();
       }
 
-      const previousSnapshot = this.history.capture();
-      if (historyMode !== "none") {
-        this.history.save();
-        this.history.write(historyMode, target, nextHistorySnapshot(previousSnapshot, options));
-      }
-      this.renderPage(Page, envelope);
-      this.history.restore(target, options, restoration, previousSnapshot);
-      this.history.save();
-      this.dispatch("phoenix:navigation-success", { url: target.href, page: envelope });
+      this.commitVisit(Page, envelope, target, options, historyMode, restoration);
       return envelope;
     } catch (error) {
       if (!isAbortError(error) && !this.disposed) {
@@ -304,28 +468,102 @@ class BrowserNavigator implements PhoenixNavigator {
 
   private pageElement(Page: ComponentType<any>, envelope: PageEnvelope): ReactElement {
     return createElement(
-      navigationContext.Provider,
-      { value: this },
+      PhoenixPageProvider,
+      { envelope, navigator: this },
       createElement(
-        PhoenixRenderProvider,
-        { mode: envelope.render_mode },
-        createElement(Page, pageProps(envelope)),
+        navigationContext.Provider,
+        { value: this },
+        createElement(
+          PhoenixRenderProvider,
+          { mode: envelope.render_mode },
+          createElement(
+            PhoenixErrorBoundary,
+            { fallback: this.errorFallback },
+            createElement(Page, pageProps(envelope)),
+          ),
+        ),
       ),
     );
+  }
+
+  private commitVisit(
+    Page: ComponentType<any>,
+    envelope: PageEnvelope,
+    target: URL,
+    options: VisitOptions,
+    historyMode: HistoryMode,
+    restoration?: HistorySnapshot,
+  ): void {
+    const previousSnapshot = this.history.capture();
+    if (historyMode !== "none") {
+      this.history.save();
+      this.history.write(historyMode, target, nextHistorySnapshot(previousSnapshot, options));
+    }
+    this.renderPage(Page, envelope);
+    this.history.restore(target, options, restoration, previousSnapshot);
+    this.history.save();
+    invalidatePrefetch(target.href);
+    this.dispatch("phoenix:navigation-success", { url: target.href, page: envelope });
   }
 
   private renderPage(Page: ComponentType<any>, envelope: PageEnvelope): void {
     this.currentPage = envelope;
     writePage(this.documentRef, envelope);
     updatePageHead(this.documentRef, envelope.head);
+    this.ensureFullRoot();
+    const element = this.pageElement(Page, envelope);
+    flushSync(() => this.fullRoot?.render(element));
+  }
+
+  private renderPageLoadFallback(error: unknown, context: PageLoadRetryContext): void {
+    const loadError = toPageLoadError(error);
+    const Fallback = this.pageLoadFallback;
+    const retry = () => {
+      void (async () => {
+        if (this.disposed) return;
+        try {
+          const Page = await loadPageComponent(this.pages, context.envelope.page, {
+            timeoutMs: this.pageLoadTimeoutMs,
+            fallback: this.pageLoadFallback,
+          });
+          if (context.initial || !context.target || !context.options || !context.historyMode) {
+            if (context.initial && this.currentPage.render_mode === "ssr" && !this.fullRoot) {
+              this.fullRoot = hydrateRoot(
+                this.rootElement,
+                this.pageElement(Page, context.envelope),
+              );
+            } else {
+              this.renderPage(Page, context.envelope);
+            }
+            return;
+          }
+          this.commitVisit(
+            Page,
+            context.envelope,
+            context.target,
+            context.options,
+            context.historyMode,
+            context.restoration,
+          );
+        } catch (retryError) {
+          if (!this.disposed) this.renderPageLoadFallback(retryError, context);
+        }
+      })();
+    };
+    this.ensureFullRoot();
+    flushSync(() => {
+      this.fullRoot?.render(createElement(Fallback, { error: loadError, retry }));
+    });
+  }
+
+  private ensureFullRoot(): Root {
     if (!this.fullRoot) {
       for (const root of this.islandRoots) root.unmount();
       this.islandRoots = [];
       this.rootElement.replaceChildren();
       this.fullRoot = createRoot(this.rootElement);
     }
-    const element = this.pageElement(Page, envelope);
-    flushSync(() => this.fullRoot?.render(element));
+    return this.fullRoot;
   }
 
   private installNavigation(): void {
@@ -373,9 +611,13 @@ async function hydrateIslands(
     return hydrateRoot(
       root,
       createElement(
-        navigationContext.Provider,
-        { value: navigator },
-        createElement(Component, descriptor.props),
+        PhoenixPageProvider,
+        { envelope, navigator },
+        createElement(
+          navigationContext.Provider,
+          { value: navigator },
+          createElement(Component, descriptor.props),
+        ),
       ),
     );
   }));
@@ -394,4 +636,9 @@ function compatibleIdentity(
   next: string | null | undefined,
 ): boolean {
   return current == null || current === next;
+}
+
+function csrfHeaders(page: PageEnvelope): Record<string, string> | undefined {
+  if (!page.csrf_token) return undefined;
+  return { "X-CSRF-Token": page.csrf_token };
 }

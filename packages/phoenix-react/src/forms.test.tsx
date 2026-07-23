@@ -5,18 +5,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FieldError,
   Form,
+  getPhoenixNavigator,
+  resetConfirmImplementation,
   RustCallError,
+  setConfirmImplementation,
   startPhoenix,
   stopPhoenix,
 } from "./index.js";
-import { installPage, pageEnvelope } from "./test-utils.js";
+import {
+  installPage,
+  nextNavigation,
+  pageEnvelope,
+  pageResponse,
+} from "./test-utils.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(async () => {
   await act(async () => stopPhoenix());
+  resetConfirmImplementation();
   vi.restoreAllMocks();
+  sessionStorage.clear();
   document.head.innerHTML = "";
   document.body.innerHTML = "";
   window.history.replaceState(null, "", "/");
@@ -206,6 +216,171 @@ describe("Phoenix typed forms", () => {
 
     expect(signal?.aborted).toBe(true);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("redirects after a successful submit when redirectTo is set", async () => {
+    const action = vi.fn(async () => ({ ok: true }));
+    const onSuccess = vi.fn();
+    const members = pageEnvelope("members", {});
+    const fetcher = vi.fn(async () => pageResponse(members));
+
+    function CreatePage() {
+      return (
+        <Form
+          action={action}
+          initialValues={{ name: "Ada" }}
+          redirectTo="/members"
+          onSuccess={onSuccess}
+        >
+          <button type="submit">Create</button>
+        </Form>
+      );
+    }
+
+    window.history.replaceState(null, "", "/create");
+    installPage(pageEnvelope("create", {}));
+    vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    await act(async () => {
+      await startPhoenix({
+        pages: {
+          create: CreatePage,
+          members: () => <main id="members-main">Members</main>,
+        },
+        fetcher: fetcher as typeof fetch,
+      });
+    });
+
+    const navigator = getPhoenixNavigator();
+    expect(navigator).not.toBeNull();
+    const visit = vi.spyOn(navigator!, "visit");
+    const finished = nextNavigation("phoenix:navigation-success");
+
+    await act(async () => {
+      submitForm();
+      await finished;
+    });
+
+    expect(onSuccess).toHaveBeenCalledWith({ ok: true });
+    expect(visit).toHaveBeenCalledWith("/members", expect.objectContaining({ replace: true }));
+    expect(window.location.pathname).toBe("/members");
+  });
+
+  it("does not redirect when onSuccess throws", async () => {
+    const action = vi.fn(async () => ({ ok: true }));
+    const onSuccess = vi.fn(() => {
+      throw new Error("toast failed");
+    });
+
+    function CreatePage() {
+      return (
+        <Form
+          action={action}
+          initialValues={{ name: "Ada" }}
+          redirectTo="/members"
+          onSuccess={onSuccess}
+        >
+          <button type="submit">Create</button>
+        </Form>
+      );
+    }
+
+    window.history.replaceState(null, "", "/create");
+    installPage(pageEnvelope("create", {}));
+    await act(async () => {
+      await startPhoenix({ pages: { create: CreatePage } });
+    });
+    const visit = vi.spyOn(getPhoenixNavigator()!, "visit");
+
+    await act(async () => {
+      submitForm();
+      await Promise.resolve();
+    });
+
+    expect(onSuccess).toHaveBeenCalledOnce();
+    expect(visit).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/create");
+  });
+
+  it("skips the action when confirm is cancelled", async () => {
+    const action = vi.fn(async () => ({ ok: true }));
+    const confirmFn = vi.fn(() => false);
+    setConfirmImplementation(confirmFn);
+    const onSuccess = vi.fn();
+
+    function CreatePage() {
+      return (
+        <Form
+          action={action}
+          initialValues={{ name: "Ada" }}
+          confirm="Create this member?"
+          onSuccess={onSuccess}
+        >
+          <button type="submit">Create</button>
+        </Form>
+      );
+    }
+
+    installPage(pageEnvelope("create", {}));
+    await act(async () => {
+      await startPhoenix({ pages: { create: CreatePage } });
+    });
+
+    await act(async () => {
+      submitForm();
+      await Promise.resolve();
+    });
+
+    expect(confirmFn).toHaveBeenCalledWith("Create this member?");
+    expect(action).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("restores remember drafts and clears them after a successful submit", async () => {
+    const { rememberKey, readRemembered, writeRemembered } = await import("./remember.js");
+    const key = rememberKey("posts.create");
+    writeRemembered(key, { title: "Draft title" });
+    const action = vi.fn(async (input: { title: string }) => ({ title: input.title }));
+    const onSuccess = vi.fn();
+
+    function CreatePage() {
+      return (
+        <Form
+          action={action}
+          initialValues={{ title: "" }}
+          remember="posts.create"
+          onSuccess={onSuccess}
+        >
+          {(form) => (
+            <>
+              <input id="title" value={form.data.title} readOnly />
+              <button type="submit">Save</button>
+            </>
+          )}
+        </Form>
+      );
+    }
+
+    installPage(pageEnvelope("create", {}));
+    await act(async () => {
+      await startPhoenix({ pages: { create: CreatePage } });
+    });
+
+    expect((document.getElementById("title") as HTMLInputElement).value)
+      .toBe("Draft title");
+
+    const succeeded = new Promise<void>((resolve) => {
+      onSuccess.mockImplementationOnce(() => resolve());
+    });
+    await act(async () => {
+      submitForm();
+      await succeeded;
+    });
+
+    expect(action).toHaveBeenCalledWith(
+      { title: "Draft title" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(readRemembered(key)).toBeUndefined();
   });
 });
 

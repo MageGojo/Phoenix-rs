@@ -8,7 +8,10 @@ export interface HistorySnapshot {
   key: string;
   scroll: [number, number];
   focus: string | null;
+  regions?: Record<string, [number, number]>;
 }
+
+const SCROLL_REGION_ATTR = "data-phoenix-scroll-region";
 
 export type HistoryMode = "push" | "replace" | "none";
 
@@ -30,6 +33,7 @@ export class NavigationHistory {
   private scrollFrame: number | null = null;
   private originalScrollRestoration: ScrollRestoration | undefined;
   private installed = false;
+  private readonly regionListeners = new Set<Element>();
 
   constructor(private readonly documentRef: Document) {
     const windowRef = documentRef.defaultView;
@@ -44,6 +48,11 @@ export class NavigationHistory {
     this.windowRef.history.scrollRestoration = "manual";
     this.documentRef.addEventListener("focusin", this.handleFocusChange);
     this.windowRef.addEventListener("scroll", this.handleScroll, { passive: true });
+    this.documentRef.addEventListener("scroll", this.handleScroll, {
+      capture: true,
+      passive: true,
+    });
+    this.syncRegionListeners();
     this.save();
   }
 
@@ -52,6 +61,8 @@ export class NavigationHistory {
     this.installed = false;
     this.documentRef.removeEventListener("focusin", this.handleFocusChange);
     this.windowRef.removeEventListener("scroll", this.handleScroll);
+    this.documentRef.removeEventListener("scroll", this.handleScroll, { capture: true });
+    this.clearRegionListeners();
     if (this.scrollFrame !== null) {
       this.windowRef.cancelAnimationFrame(this.scrollFrame);
       this.scrollFrame = null;
@@ -62,13 +73,16 @@ export class NavigationHistory {
   }
 
   capture(): HistorySnapshot {
+    this.syncRegionListeners();
     const scrollX = Number.isFinite(this.windowRef.scrollX) ? this.windowRef.scrollX : 0;
     const scrollY = Number.isFinite(this.windowRef.scrollY) ? this.windowRef.scrollY : 0;
+    const regions = captureScrollRegions(this.documentRef);
     return {
       version: 1,
       key: historySnapshot(this.windowRef.history.state)?.key ?? nextHistoryKey(),
       scroll: [scrollX, scrollY],
       focus: focusSelector(this.documentRef),
+      ...(Object.keys(regions).length > 0 ? { regions } : {}),
     };
   }
 
@@ -107,6 +121,11 @@ export class NavigationHistory {
       this.windowRef.scrollTo(0, 0);
     }
 
+    const regions = restoration?.regions
+      ?? (options.preserveScroll ? previous?.regions : undefined);
+    if (regions) restoreScrollRegions(this.documentRef, regions);
+    this.syncRegionListeners();
+
     const focus = restoration?.focus ?? (options.preserveFocus ? previous?.focus : null);
     if (focus && focusSelectorTarget(this.documentRef, focus)) return;
     if (!target.hash) focusPage(this.documentRef);
@@ -121,6 +140,64 @@ export class NavigationHistory {
   };
 
   private readonly handleFocusChange = () => this.save();
+
+  private syncRegionListeners(): void {
+    if (!this.installed) return;
+    const seen = new Set<Element>();
+    for (const element of this.documentRef.querySelectorAll(`[${SCROLL_REGION_ATTR}]`)) {
+      seen.add(element);
+      if (this.regionListeners.has(element)) continue;
+      element.addEventListener("scroll", this.handleScroll, { passive: true });
+      this.regionListeners.add(element);
+    }
+    for (const element of [...this.regionListeners]) {
+      if (seen.has(element)) continue;
+      element.removeEventListener("scroll", this.handleScroll);
+      this.regionListeners.delete(element);
+    }
+  }
+
+  private clearRegionListeners(): void {
+    for (const element of this.regionListeners) {
+      element.removeEventListener("scroll", this.handleScroll);
+    }
+    this.regionListeners.clear();
+  }
+}
+
+export function captureScrollRegions(
+  documentRef: Document,
+): Record<string, [number, number]> {
+  const regions: Record<string, [number, number]> = {};
+  let unnamed = 0;
+  for (const element of documentRef.querySelectorAll(`[${SCROLL_REGION_ATTR}]`)) {
+    const named = element.getAttribute(SCROLL_REGION_ATTR)?.trim();
+    const key = named || String(unnamed++);
+    regions[key] = [
+      Number.isFinite((element as HTMLElement).scrollLeft)
+        ? (element as HTMLElement).scrollLeft
+        : 0,
+      Number.isFinite((element as HTMLElement).scrollTop)
+        ? (element as HTMLElement).scrollTop
+        : 0,
+    ];
+  }
+  return regions;
+}
+
+export function restoreScrollRegions(
+  documentRef: Document,
+  regions: Record<string, [number, number]>,
+): void {
+  let unnamed = 0;
+  for (const element of documentRef.querySelectorAll(`[${SCROLL_REGION_ATTR}]`)) {
+    const named = element.getAttribute(SCROLL_REGION_ATTR)?.trim();
+    const key = named || String(unnamed++);
+    const position = regions[key];
+    if (!position) continue;
+    (element as HTMLElement).scrollLeft = position[0];
+    (element as HTMLElement).scrollTop = position[1];
+  }
 }
 
 export function shouldHandleLink(event: LinkClickIntent, anchor: HTMLAnchorElement): boolean {
@@ -165,6 +242,7 @@ export function nextHistorySnapshot(
     key: nextHistoryKey(),
     scroll: options.preserveScroll ? previous.scroll : [0, 0],
     focus: options.preserveFocus ? previous.focus : null,
+    ...(options.preserveScroll && previous.regions ? { regions: previous.regions } : {}),
   };
 }
 
@@ -183,7 +261,25 @@ export function historySnapshot(value: unknown): HistorySnapshot | undefined {
   ) {
     return undefined;
   }
+  if (candidate.regions !== undefined && !isScrollRegions(candidate.regions)) {
+    return undefined;
+  }
   return candidate as unknown as HistorySnapshot;
+}
+
+function isScrollRegions(value: unknown): value is Record<string, [number, number]> {
+  if (!isRecord(value)) return false;
+  for (const position of Object.values(value)) {
+    if (
+      !Array.isArray(position) ||
+      position.length !== 2 ||
+      typeof position[0] !== "number" ||
+      typeof position[1] !== "number"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function nextHistoryKey(): string {

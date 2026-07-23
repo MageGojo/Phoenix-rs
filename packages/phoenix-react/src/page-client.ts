@@ -1,7 +1,25 @@
-import type { DecryptPage, EncryptedPayload, PageEnvelope } from "./protocol.js";
+import { RustCallError } from "./actions.js";
+import { partialReloadHeaders } from "./partial.js";
+import { isRecord, type DecryptPage, type EncryptedPayload, type PageEnvelope } from "./protocol.js";
 
 export interface FetchPageOptions {
   signal?: AbortSignal;
+  method?: string;
+  body?: BodyInit | null;
+  headers?: Record<string, string>;
+  only?: string[];
+  except?: string[];
+}
+
+export interface SubmitPageOptions {
+  method?: string;
+  data?: Record<string, unknown>;
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+  decrypt?: DecryptPage;
+  fetcher?: typeof fetch;
+  only?: string[];
+  except?: string[];
 }
 
 export async function fetchPage(
@@ -10,14 +28,69 @@ export async function fetchPage(
   fetcher: typeof fetch = fetch,
   options: FetchPageOptions = {},
 ): Promise<PageEnvelope> {
-  const request: RequestInit = {
-    headers: { "X-Phoenix-Page": "1" },
+  const method = (options.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    "X-Phoenix-Page": "1",
+    ...partialReloadHeaders(options),
+    ...options.headers,
   };
+  const request: RequestInit = { headers };
   if (options.signal) request.signal = options.signal;
+  if (method !== "GET") {
+    request.method = method;
+    if (options.body !== undefined) request.body = options.body;
+  }
   const response = await fetcher(url, request);
   if (!response.ok) {
     throw new Error(`Phoenix page request failed with ${response.status}`);
   }
+  return parsePageResponse(response, decrypt);
+}
+
+/**
+ * Submit a page-protocol mutation (POST/PUT/PATCH/DELETE).
+ * On 422, throws {@link RustCallError} with field details (no page swap).
+ */
+export async function submitPage(
+  url: string,
+  options: SubmitPageOptions = {},
+): Promise<PageEnvelope> {
+  const method = (options.method ?? "POST").toUpperCase();
+  const fetcher = options.fetcher ?? fetch;
+  const headers: Record<string, string> = {
+    "X-Phoenix-Page": "1",
+    ...partialReloadHeaders(options),
+    ...options.headers,
+  };
+  let body: BodyInit | undefined;
+  if (options.data !== undefined) {
+    body = JSON.stringify(options.data);
+    if (!hasHeader(headers, "Content-Type")) {
+      headers["Content-Type"] = "application/json";
+    }
+  }
+  const request: RequestInit = { method, headers };
+  if (options.signal) request.signal = options.signal;
+  if (body !== undefined) request.body = body;
+
+  const response = await fetcher(url, request);
+  if (response.status === 422) {
+    const details = await response.json().catch(() => null) as unknown;
+    const message = isRecord(details) && typeof details.message === "string"
+      ? details.message
+      : "The submitted data is invalid.";
+    throw new RustCallError(422, message, details);
+  }
+  if (!response.ok) {
+    throw new Error(`Phoenix page request failed with ${response.status}`);
+  }
+  return parsePageResponse(response, options.decrypt);
+}
+
+async function parsePageResponse(
+  response: Response,
+  decrypt?: DecryptPage,
+): Promise<PageEnvelope> {
   if (response.headers.get("x-phoenix-encrypted") === "1") {
     if (!decrypt) {
       throw new Error("Encrypted Phoenix page response requires a decrypt callback");
@@ -25,6 +98,11 @@ export async function fetchPage(
     return decrypt((await response.json()) as EncryptedPayload);
   }
   return (await response.json()) as PageEnvelope;
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const lower = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === lower);
 }
 
 export function createAes256GcmDecryptor(

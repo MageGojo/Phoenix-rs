@@ -10,7 +10,11 @@
   ],
   "scripts": {
     "build:react": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr && npm run build -w @phoenix/vite",
-    "build:ssr": "npm run build:react && npm run build:ssr -w phoenix-blog-react-example",
+    "build:client": "npm run build:client -w phoenix-blog-react-example",
+    "build:ssr": "npm run build:react && npm run build:ssr:example",
+    "build:ssr:example": "npm run build:ssr -w phoenix-blog-react-example",
+    "ci:node": "npm run build:react && npm run test:react && npm run typecheck:example && npm run build:client && npm run build:ssr:example",
+    "test:coverage:js": "npm run build:react && npm run test -w @phoenix/react -- --coverage --coverage.reporter=lcov --coverage.reportsDirectory=../../coverage/js/phoenix-react --coverage.thresholds.lines=85 && npm run test -w @phoenix/react-ssr -- --coverage --coverage.reporter=lcov --coverage.reportsDirectory=../../coverage/js/phoenix-react-ssr --coverage.thresholds.lines=50 && npm run test -w @phoenix/vite -- --coverage --coverage.reporter=lcov --coverage.reportsDirectory=../../coverage/js/phoenix-vite --coverage.thresholds.lines=75 && npm run test -w phoenix-blog-react-example -- --coverage --coverage.reporter=lcov --coverage.reportsDirectory=../../coverage/js/blog --coverage.thresholds.lines=25",
     "test:e2e:ssr-csp": "npm run build -w @phoenix/react && npm run build -w @phoenix/react-ssr && cargo test --locked -p phoenix-view --test react_ssr_csp -- --ignored",
     "test:react": "npm run test -w @phoenix/react && npm run test -w @phoenix/react-ssr && npm run test -w @phoenix/vite && npm run test -w phoenix-blog-react-example",
     "typecheck:example": "npm run typecheck -w phoenix-blog-react-example"
@@ -19,6 +23,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "jsdom": "^26.0.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"

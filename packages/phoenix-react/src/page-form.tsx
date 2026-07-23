@@ -1,77 +1,86 @@
 import {
   createElement,
-  type Dispatch,
   type FormEvent,
   type FormHTMLAttributes,
-  type HTMLAttributes,
   type ReactElement,
   type ReactNode,
-  type SetStateAction,
   useCallback,
   useEffect,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 
 import {
   fieldErrorsFrom,
   type FieldErrors,
   type FieldName,
-  type RustCallOptions,
 } from "./actions.js";
 import { confirmAction } from "./confirm.js";
 import { abortError, isAbortError } from "./errors.js";
 import {
   fieldProps,
   type FieldMap,
-  type FieldProps,
 } from "./fields.js";
-import { redirect } from "./redirect.js";
 import {
-  clearRemembered,
-  rememberKey,
-  useRemember,
-} from "./remember.js";
+  getPhoenixNavigator,
+  type VisitMethod,
+} from "./navigation.js";
+import type { PageEnvelope } from "./protocol.js";
+import type { FormState } from "./forms.js";
 
-export type FormAction<Input, Output> = (
-  input: Input,
-  options?: RustCallOptions,
-) => Promise<Output>;
-
-export interface FormOptions<Input extends object> {
+export interface PageFormOptions<Input extends object> {
+  action: string;
+  method?: VisitMethod;
+  initialValues: Input;
+  replace?: boolean;
+  preserveScroll?: boolean;
+  preserveFocus?: boolean;
+  confirm?: string;
   fields?: FieldMap<Input>;
 }
 
-export interface FormState<Input extends object, Output> {
-  data: Input;
-  setData: Dispatch<SetStateAction<Input>>;
-  setField<Field extends FieldName<Input>>(field: Field, value: Input[Field]): void;
-  field<Field extends FieldName<Input>>(name: Field): FieldProps<Input, Field>;
-  errors: FieldErrors<Input>;
-  error(field: FieldName<Input>): string | undefined;
-  processing: boolean;
-  wasSuccessful: boolean;
-  result: Output | undefined;
-  failure: unknown;
-  submit(): Promise<Output>;
-  reset(): void;
-  clearErrors(...fields: FieldName<Input>[]): void;
-  cancel(): void;
-}
+export type PageFormState<Input extends object> = FormState<Input, PageEnvelope>;
 
-export function useForm<Input extends object, Output>(
-  action: FormAction<Input, Output>,
-  initialValues: Input,
-  options: FormOptions<Input> = {},
-): FormState<Input, Output> {
+export function usePageForm<Input extends object>(
+  options: PageFormOptions<Input>,
+): PageFormState<Input> {
+  const {
+    action,
+    method = "post",
+    initialValues,
+    replace,
+    preserveScroll,
+    preserveFocus,
+    confirm,
+    fields,
+  } = options;
   const initialValuesRef = useRef(initialValues);
-  const fieldsRef = useRef(options.fields);
-  fieldsRef.current = options.fields;
+  const fieldsRef = useRef(fields);
+  fieldsRef.current = fields;
+  const optionsRef = useRef({
+    action,
+    method,
+    replace,
+    preserveScroll,
+    preserveFocus,
+    confirm,
+  });
+  optionsRef.current = {
+    action,
+    method,
+    replace,
+    preserveScroll,
+    preserveFocus,
+    confirm,
+  };
+
   const [data, setData] = useState<Input>(initialValues);
   const [errors, setErrors] = useState<FieldErrors<Input>>({});
   const [processing, setProcessing] = useState(false);
   const [wasSuccessful, setWasSuccessful] = useState(false);
-  const [result, setResult] = useState<Output>();
+  const [result, setResult] = useState<PageEnvelope>();
   const [failure, setFailure] = useState<unknown>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const submissionRef = useRef(0);
@@ -117,7 +126,17 @@ export function useForm<Input extends object, Output>(
     setResult(undefined);
   }, []);
 
-  const submit = useCallback(async (): Promise<Output> => {
+  const submit = useCallback(async (): Promise<PageEnvelope> => {
+    const current = optionsRef.current;
+    if (current.confirm && !confirmAction(current.confirm)) {
+      return Promise.reject(abortError());
+    }
+
+    const navigator = getPhoenixNavigator();
+    if (!navigator) {
+      throw new Error("Phoenix has not been started for this document");
+    }
+
     const submission = submissionRef.current + 1;
     submissionRef.current = submission;
     controllerRef.current?.abort();
@@ -129,11 +148,21 @@ export function useForm<Input extends object, Output>(
     setErrors({});
 
     try {
-      const output = await action(data, { signal: controller.signal });
-      if (submission !== submissionRef.current) throw abortError();
-      setResult(output);
-      setWasSuccessful(true);
-      return output;
+      const envelope = await navigator.visit(current.action, {
+        method: current.method,
+        data: data as Record<string, unknown>,
+        replace: current.replace,
+        preserveScroll: current.preserveScroll,
+        preserveFocus: current.preserveFocus,
+        signal: controller.signal,
+      });
+      // Visit success may remount the tree and bump submissionRef via cleanup;
+      // still surface the envelope to onSuccess without treating it as an abort.
+      if (submission === submissionRef.current) {
+        setResult(envelope);
+        setWasSuccessful(true);
+      }
+      return envelope;
     } catch (error) {
       if (submission === submissionRef.current && !isAbortError(error)) {
         setErrors(fieldErrorsFrom<Input>(error));
@@ -146,11 +175,11 @@ export function useForm<Input extends object, Output>(
         setProcessing(false);
       }
     }
-  }, [action, data]);
+  }, [data]);
 
   return {
     data,
-    setData,
+    setData: setData as Dispatch<SetStateAction<Input>>,
     setField,
     field: (name) => fieldProps({ data, setField, errors }, name, fieldsRef.current?.[name]),
     errors,
@@ -166,73 +195,56 @@ export function useForm<Input extends object, Output>(
   };
 }
 
-export interface FormProps<Input extends object, Output> extends Omit<
+export interface PageFormProps<Input extends object> extends Omit<
   FormHTMLAttributes<HTMLFormElement>,
-  "action" | "children" | "onError" | "onSubmit"
+  "action" | "children" | "onError" | "onSubmit" | "method"
 > {
-  action: FormAction<Input, Output>;
+  action: string;
+  method?: VisitMethod;
   initialValues: Input;
-  fields?: FieldMap<Input>;
-  children: ReactNode | ((form: FormState<Input, Output>) => ReactNode);
+  replace?: boolean;
+  preserveScroll?: boolean;
+  preserveFocus?: boolean;
   confirm?: string;
-  /** sessionStorage draft key name (`phoenix:remember:<name>`); cleared after successful submit */
-  remember?: string;
-  redirectTo?: string;
-  onSuccess?: (output: Output) => void;
+  fields?: FieldMap<Input>;
+  children: ReactNode | ((form: PageFormState<Input>) => ReactNode);
+  onSuccess?: (envelope: PageEnvelope) => void;
   onError?: (error: unknown, errors: FieldErrors<Input>) => void;
 }
 
-export function Form<Input extends object, Output>({
+export function PageForm<Input extends object>({
   action,
+  method = "post",
   initialValues,
+  replace,
+  preserveScroll,
+  preserveFocus,
+  confirm,
   fields,
   children,
-  confirm,
-  remember,
-  redirectTo,
   onSuccess,
   onError,
   ...props
-}: FormProps<Input, Output>): ReactElement {
-  const form = useForm(action, initialValues, { fields });
-  const storageKey = remember ? rememberKey(remember) : "";
-  useRemember(storageKey, form.data, form.setData);
+}: PageFormProps<Input>): ReactElement {
+  const form = usePageForm<Input>({
+    action,
+    method,
+    initialValues,
+    replace,
+    preserveScroll,
+    preserveFocus,
+    confirm,
+    fields,
+  });
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (confirm && !confirmAction(confirm)) return;
     try {
-      const output = await form.submit();
-      if (storageKey) clearRemembered(storageKey);
-      onSuccess?.(output);
-      if (redirectTo) void redirect(redirectTo);
+      const envelope = await form.submit();
+      onSuccess?.(envelope);
     } catch (error) {
       if (!isAbortError(error)) onError?.(error, fieldErrorsFrom<Input>(error));
     }
   };
   const content = typeof children === "function" ? children(form) : children;
   return createElement("form", { ...props, onSubmit: handleSubmit }, content);
-}
-
-export interface FieldErrorProps<Input extends object> extends Omit<
-  HTMLAttributes<HTMLSpanElement>,
-  "children"
-> {
-  errors: FieldErrors<Input>;
-  name: FieldName<Input>;
-}
-
-export function FieldError<Input extends object>({
-  errors,
-  name,
-  role = "alert",
-  ...props
-}: FieldErrorProps<Input>): ReactElement | null {
-  const message = errors[name]?.[0]?.message;
-  if (!message) return null;
-  return createElement("span", {
-    ...props,
-    role,
-    "data-phoenix-error": name,
-    children: message,
-  });
 }
