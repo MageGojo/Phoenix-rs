@@ -99,6 +99,20 @@ git push gitcode main
 
 说明：`phoenix`、`phoenix-rs`、`phoenix-cli` 在 crates.io 已被无关项目占用，故不采用。详见 `docs/DECISIONS.md` ADR-009。
 
+## crates.io 发布顺序（2026-07-24 验证）
+
+所有 24 个拟发布 crate 已具备完整元数据（license/repository/description/keywords/categories），内部 path 依赖已全部带 `version = "0.1.0"`（对齐 `deny.toml` 要求）。
+`cargo package --locked -p <crate>` 的 verify 阶段需要上游内部 crate **已经发布在 crates.io**——path 只用于本地解析，verify 时按 registry 版本解析。因此**本仓库内无法完整预演 `cargo publish --dry-run`**；验证手段为逐 crate `cargo package --locked --no-verify --list`（文件清单检查，全部通过）。
+
+按内部依赖拓扑排序的发布顺序（同层可任意顺序；`cargo publish` 后需等索引进账再发下一层）：
+
+1. 叶子层：`phoenix-config`、`phoenix-console`、`phoenix-database`、`phoenix-dx-macros`、`phoenix-http`、`phoenix-logging`、`phoenix-macros`、`phoenix-mail`、`phoenix-release`、`phoenix-routing`、`phoenix-storage`、`phoenix-validation`、`px`
+2. 二层：`phoenix-crypto`、`phoenix-dx`、`phoenix-metrics`、`phoenix-plugin`、`phoenix-queue`、`phoenix-security`、`phoenix-view`
+3. 三层：`phoenix-auth`、`phoenix-core`、`phoenix-redis`、`phoenix-testing`
+4. 门面（最后）：`phoenixrs`
+
+发布前仍红线：**不在未获用户明确确认前执行 `cargo publish` / `git push`**。
+
 从 Git 安装 CLI（镜像任选）：
 
 ```bash
