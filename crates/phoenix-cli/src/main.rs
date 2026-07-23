@@ -14,7 +14,7 @@ use phoenix_cli::{
 const HELP: &str = r"Phoenix-rs application CLI (px)
 
 Install: cargo install px
-         cargo install --git https://github.com/ApiZero/Phoenix-rs px
+         cargo install --git https://github.com/MageGojo/Phoenix-rs px
          cargo install --path crates/phoenix-cli
 
 Usage:

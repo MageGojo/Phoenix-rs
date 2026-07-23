@@ -436,7 +436,7 @@
 - README：双镜像徽章 + GitHub / GitCode 源码表与 clone / `cargo install --git` 说明
 - `docs/RELEASE.md`：双端空仓元数据与 `origin` + `gitcode` push 流程（**未 push**）
 - 目标仓：`ApiZero/Phoenix-rs` @ GitHub 与 GitCode
-  状态：文档已就绪，等待用户确认后再上传
+  状态：已于 2026-07-24 实际上传至 `MageGojo/Phoenix-rs`（GitHub）与 `Roufsi/Phoenix-rs`（GitCode）
 
 
 ## 2026-07-24：管理后台 / Auth 示例链路首版

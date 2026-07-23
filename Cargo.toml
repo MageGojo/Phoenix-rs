@@ -38,7 +38,7 @@ rust-version = "1.95"
 version = "0.1.0"
 authors = ["ApiZero <api@zerois.cn>"]
 homepage = "https://apizero.cn/"
-repository = "https://github.com/ApiZero/Phoenix-rs"
+repository = "https://github.com/MageGojo/Phoenix-rs"
 
 [workspace.dependencies]
 aes-gcm = "0.10"

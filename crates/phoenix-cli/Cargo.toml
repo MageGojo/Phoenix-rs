@@ -8,7 +8,7 @@ version.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 homepage = "https://apizero.cn/"
-repository = "https://github.com/ApiZero/Phoenix-rs"
+repository = "https://github.com/MageGojo/Phoenix-rs"
 keywords = ["web", "framework", "cli", "laravel", "react"]
 categories = ["command-line-utilities", "development-tools", "web-programming"]
 

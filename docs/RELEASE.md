@@ -7,8 +7,8 @@
 
 | 平台 | 仓库 URL | 建议 remote 名 |
 | --- | --- | --- |
-| GitHub | https://github.com/ApiZero/Phoenix-rs | `origin`（或 `github`） |
-| GitCode | https://gitcode.com/ApiZero/Phoenix-rs | `gitcode` |
+| GitHub | https://github.com/MageGojo/Phoenix-rs | `origin`（或 `github`） |
+| GitCode | https://gitcode.com/Roufsi/Phoenix-rs | `gitcode` |
 
 crates.io 元数据 `repository` 继续指向 GitHub（见根 `Cargo.toml`），与国际包索引惯例一致；README 同时列出 GitCode 镜像。
 
@@ -61,13 +61,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 - **License**：MIT（与 `LICENSE` 一致）
 - **可见性**：Public（框架开源）
 
-### GitHub
+### GitHub（已于 2026-07-24 创建并 push）
 
-- 用 `gh repo create ApiZero/Phoenix-rs --public --source=. --remote=origin --push`  
-  **或** 网页创建空仓后：
+实际仓库：`MageGojo/Phoenix-rs`（个人账号；ApiZero 组织不存在，无法在其下建仓）。当时执行：
+
+`gh repo create MageGojo/Phoenix-rs --public --description "…" --homepage "https://apizero.cn/" --source=. --remote=origin --push`
+
+若重建或换账号：
 
 ```bash
-git remote add origin https://github.com/ApiZero/Phoenix-rs.git
+git remote add origin https://github.com/MageGojo/Phoenix-rs.git
 git push -u origin main
 ```
 
@@ -77,7 +80,7 @@ git push -u origin main
 2. 添加第二 remote 并 push：
 
 ```bash
-git remote add gitcode https://gitcode.com/ApiZero/Phoenix-rs.git
+git remote add gitcode https://gitcode.com/Roufsi/Phoenix-rs.git
 git push -u gitcode main
 ```
 
@@ -116,6 +119,6 @@ git push gitcode main
 从 Git 安装 CLI（镜像任选）：
 
 ```bash
-cargo install --git https://github.com/ApiZero/Phoenix-rs px
-cargo install --git https://gitcode.com/ApiZero/Phoenix-rs px
+cargo install --git https://github.com/MageGojo/Phoenix-rs px
+cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
 ```

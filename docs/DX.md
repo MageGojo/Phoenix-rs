@@ -169,8 +169,8 @@ cargo install px
 
 # 或从本仓库 / GitHub
 cargo install --path crates/phoenix-cli
-# cargo install --git https://github.com/ApiZero/Phoenix-rs px
-# cargo install --git https://gitcode.com/ApiZero/Phoenix-rs px
+# cargo install --git https://github.com/MageGojo/Phoenix-rs px
+# cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
 
 px new my-app
 cd my-app

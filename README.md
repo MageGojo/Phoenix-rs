@@ -2,18 +2,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
+[![GitHub](https://img.shields.io/badge/GitHub-MageGojo%2FPhoenix--rs-181717?logo=github)](https://github.com/MageGojo/Phoenix-rs)
+[![GitCode](https://img.shields.io/badge/GitCode-Roufsi%2FPhoenix--rs-C71D23)](https://gitcode.com/Roufsi/Phoenix-rs)
 
 **Phoenix-rs** 是由 [极数本源（ApiZero）](https://apizero.cn/) 打造的 Rust 全栈 Web 框架：以 [Hyper](https://hyper.rs/) 为 HTTP 核心，提供接近 Laravel 的开发体验，并默认集成 React + TypeScript（Islands / SPA / SSR）。
 
 一个 Key 调用全网 API → 见 [ApiZero](https://apizero.cn/)；一套约定写出完整网站 → 用 Phoenix-rs。
 
-## 获取源码
+## 源码镜像
+
+| 平台 | 仓库 | 说明 |
+| --- | --- | --- |
+| **GitHub** | [github.com/MageGojo/Phoenix-rs](https://github.com/MageGojo/Phoenix-rs) | 国际协作 / Actions CI / crates.io 元数据 `repository` |
+| **GitCode** | [gitcode.com/Roufsi/Phoenix-rs](https://gitcode.com/Roufsi/Phoenix-rs) | 国内镜像，内容与 GitHub 同步 |
+
+克隆任选其一即可：
 
 ```bash
-git clone <本仓库地址>
+git clone https://github.com/MageGojo/Phoenix-rs.git
+# 或
+git clone https://gitcode.com/Roufsi/Phoenix-rs.git
 ```
-
-> 公开镜像（GitHub / GitCode）上线后此处会更新为正式地址，见 [docs/RELEASE.md](docs/RELEASE.md)。
 
 ## AI / Agent 开发（默认必读）
 
@@ -43,15 +52,23 @@ Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按
 
 要求：Rust **1.95+**、Node.js（Vite / React）、可选 SQLite（默认）/ PostgreSQL / MySQL。
 
-### 安装 `px`（推荐）
+### 安装 `px`
 
-`px` 尚未发布到 crates.io，请从本仓库源码安装：
+从 crates.io 安装（推荐）：
 
 ```bash
-cargo install --path crates/phoenix-cli
+cargo install px
 ```
 
-> crates.io 发布后可改为 `cargo install px`；发布顺序见 [docs/RELEASE.md](docs/RELEASE.md)。
+或从 Git 安装（镜像任选）：
+
+```bash
+cargo install --git https://github.com/MageGojo/Phoenix-rs px
+# 或
+cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px
+```
+
+本仓库内开发时也可用 `cargo install --path crates/phoenix-cli`。
 
 然后创建并运行新项目：
 
@@ -63,7 +80,7 @@ px migrate
 px dev
 ```
 
-`px new` 默认生成本地路径依赖骨架；待 crates.io 发布后，生成的应用会改为依赖门面包 `phoenixrs`（代码里仍写 `use phoenix::…`）。
+`px` 是 crates.io **包名**；安装后 PATH 里就是二进制 `px`。`px new` 生成的应用依赖 crates.io 上的门面包 `phoenixrs`（代码里仍写 `use phoenix::…`）。
 
 生成完整 CRUD 骨架：
 
@@ -111,15 +128,13 @@ const member = await members.store({ name });
 
 更多：[业务开发指南](docs/BUSINESS_GUIDE.md) · [开发者体验](docs/DX.md) · [React 渲染](docs/RENDERING.md)
 
-## 命名（crates.io 规划）
-
-crates.io 尚未发布，以下为**规划占用**的包名（以 `cargo publish` 实际结果为准）：
+## 命名（crates.io / 托管）
 
 | 用途 | 名称 | 说明 |
 | --- | --- | --- |
-| CLI | **`px`** | `cargo install px` → 得到命令 `px` |
-| 应用依赖门面 | **`phoenixrs`** | `phoenix` / `phoenix-rs` / `phoenix-cli` 均已被占用；应用写 `phoenix = { package = "phoenixrs", … }`，Rust 仍 `use phoenix::` |
-| 产品品牌 | **Phoenix-rs** | 对外品牌与未来的公开仓库名 |
+| CLI | **[`px`](https://crates.io/crates/px)** | `cargo install px` → 得到命令 `px` |
+| 应用依赖门面 | **[`phoenixrs`](https://crates.io/crates/phoenixrs)** | `phoenix` / `phoenix-rs` / `phoenix-cli` 均已被占用；应用写 `phoenix = { package = "phoenixrs", … }`，Rust 仍 `use phoenix::` |
+| 产品 / GitHub / GitCode | **Phoenix-rs** | 对外品牌与仓库名 |
 
 ## 仓库结构
 
@@ -192,6 +207,7 @@ npm run ci:node
 
 - **出品**：极数本源（ApiZero）— [https://apizero.cn/](https://apizero.cn/)
 - **联系**：api@zerois.cn
+- **源码**：[GitHub](https://github.com/MageGojo/Phoenix-rs) · [GitCode](https://gitcode.com/Roufsi/Phoenix-rs)
 - **许可**：[MIT](LICENSE)
 
 ---
