@@ -8,8 +8,10 @@ use std::{
 use thiserror::Error;
 use tokio::process::{Child, Command};
 
+mod release;
 mod scaffold;
 
+pub use release::{release_build, release_install, release_rollback, release_status};
 pub use scaffold::{
     ControllerOptions, DependencySource, GenerateOptions, ModelOptions, NewProjectOptions,
     ProjectGenerator, ScaffoldError, create_project,
@@ -54,7 +56,7 @@ impl Default for DevConfig {
     fn default() -> Self {
         Self {
             working_directory: PathBuf::from("."),
-            rust: CommandSpec::new("cargo").arg("run"),
+            rust: CommandSpec::new("cargo").args(["run", "--", "serve"]),
             vite: CommandSpec::new("npm").args(["run", "dev", "--", "--strictPort"]),
         }
     }
@@ -240,6 +242,20 @@ mod tests {
 
     fn shell(script: &str) -> CommandSpec {
         CommandSpec::new("sh").args(["-c", script])
+    }
+
+    #[test]
+    fn default_dev_config_runs_serve() {
+        let config = DevConfig::default();
+        assert_eq!(config.rust.program, PathBuf::from("cargo"));
+        assert_eq!(
+            config.rust.args,
+            vec![
+                OsString::from("run"),
+                OsString::from("--"),
+                OsString::from("serve")
+            ]
+        );
     }
 
     #[tokio::test]

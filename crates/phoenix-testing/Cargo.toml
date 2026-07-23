@@ -1,0 +1,31 @@
+[package]
+name = "phoenix-testing"
+description = "Request test client and assertions for Phoenix applications"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["http1", "tokio"] }
+phoenix-core = { version = "0.1.0", path = "../phoenix-core" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

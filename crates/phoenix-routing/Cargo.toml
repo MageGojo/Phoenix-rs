@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
@@ -12,7 +15,7 @@ futures-util.workspace = true
 http.workspace = true
 matchit.workspace = true
 percent-encoding.workspace = true
-phoenix-http = { path = "../phoenix-http" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 thiserror.workspace = true
 
 [dev-dependencies]

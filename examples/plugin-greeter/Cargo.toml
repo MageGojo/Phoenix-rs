@@ -1,0 +1,15 @@
+[package]
+name = "phoenix-plugin-greeter"
+description = "Example Phoenix-rs Feature: greeter routes and console command"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+phoenix = { version = "0.1.0", package = "phoenixrs", path = "../../crates/phoenix" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

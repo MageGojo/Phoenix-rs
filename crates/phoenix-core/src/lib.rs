@@ -18,8 +18,9 @@ use hyper_util::{
     server::conn::auto,
 };
 use phoenix_http::{
-    ConnectionInfo, Middleware, Request, RequestBodyError, RequestBodyMode, RequestBodyStream,
-    Response, ResponseBody, StateMiddleware, TransportScheme,
+    ConnectionInfo, ConnectionUpgrade, Middleware, Request, RequestBodyError, RequestBodyMode,
+    RequestBodyStream, Response, ResponseBody, ResponseBodyError, ResponseCancellationToken,
+    StateMiddleware, TransportScheme,
 };
 use phoenix_metrics::Metrics;
 use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
@@ -509,22 +510,36 @@ impl Server {
         F: Future<Output = ()> + Send,
     {
         let (connection_shutdown_tx, _) = watch::channel(false);
+        let response_cancellation = ResponseCancellationToken::new();
         let mut connections = JoinSet::new();
         tokio::pin!(shutdown);
 
         loop {
             tokio::select! {
                 () = &mut shutdown => {
+                    response_cancellation.cancel();
                     let _ = connection_shutdown_tx.send(true);
                     break;
+                }
+                completed = connections.join_next(), if !connections.is_empty() => {
+                    if let Some(Err(error)) = completed {
+                        tracing::warn!(error = %error, "HTTP connection task failed");
+                    }
                 }
                 accepted = self.listener.accept() => {
                     let (stream, _) = accepted?;
                     let application = Arc::clone(&self.application);
                     let connection_shutdown = connection_shutdown_tx.subscribe();
+                    let response_cancellation = response_cancellation.clone();
                     let transport = self.transport.clone();
                     connections.spawn(async move {
-                        serve_transport(stream, application, connection_shutdown, transport).await;
+                        serve_transport(
+                            stream,
+                            application,
+                            connection_shutdown,
+                            response_cancellation,
+                            transport,
+                        ).await;
                     });
                 }
             }
@@ -547,6 +562,7 @@ async fn serve_transport(
     stream: TcpStream,
     application: Arc<Application>,
     shutdown: watch::Receiver<bool>,
+    response_cancellation: ResponseCancellationToken,
     transport: ServerTransport,
 ) {
     let _connection_guard = application.metrics.as_ref().map(Metrics::connection_opened);
@@ -554,7 +570,14 @@ async fn serve_transport(
     match transport {
         ServerTransport::Plain => {
             let connection_info = ConnectionInfo::new(peer_addr, TransportScheme::Http, None);
-            serve_connection(stream, application, shutdown, connection_info).await;
+            serve_connection(
+                stream,
+                application,
+                shutdown,
+                response_cancellation,
+                connection_info,
+            )
+            .await;
         }
         ServerTransport::Tls(config) => {
             let acceptor = TlsAcceptor::from(Arc::clone(&config.server_config));
@@ -570,7 +593,14 @@ async fn serve_transport(
                         .map(|protocol| String::from_utf8_lossy(protocol).into_owned());
                     let connection_info =
                         ConnectionInfo::new(peer_addr, TransportScheme::Https, alpn);
-                    serve_connection(tls_stream, application, shutdown, connection_info).await;
+                    serve_connection(
+                        tls_stream,
+                        application,
+                        shutdown,
+                        response_cancellation,
+                        connection_info,
+                    )
+                    .await;
                 }
                 Ok(Err(error)) => {
                     if let Some(metrics) = &application.metrics {
@@ -619,6 +649,7 @@ async fn serve_connection<I>(
     stream: I,
     application: Arc<Application>,
     mut shutdown: watch::Receiver<bool>,
+    response_cancellation: ResponseCancellationToken,
     connection_info: ConnectionInfo,
 ) where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -628,28 +659,67 @@ async fn serve_connection<I>(
     let service = service_fn(move |request| {
         let application = Arc::clone(&application);
         let connection_info = connection_info.clone();
-        async move { handle_hyper_request(application, request, connection_info).await }
+        let response_cancellation = response_cancellation.clone();
+        async move {
+            handle_hyper_request(application, request, connection_info, response_cancellation).await
+        }
     });
     let io = TokioIo::new(stream);
-    let mut builder = auto::Builder::new(TokioExecutor::new());
-    builder
-        .http1()
-        .timer(TokioTimer::new())
-        .header_read_timeout(header_read_timeout);
-    let builder = match http_protocol {
-        HttpProtocol::Auto => builder,
-        HttpProtocol::Http1Only => builder.http1_only(),
-        HttpProtocol::Http2Only => builder.http2_only(),
-    };
-    let connection = builder.serve_connection(io, service);
-    tokio::pin!(connection);
 
-    tokio::select! {
-        _ = &mut connection => {}
-        changed = shutdown.changed() => {
-            if changed.is_ok() && *shutdown.borrow() {
-                connection.as_mut().graceful_shutdown();
-                let _ = connection.await;
+    // `auto::Builder::serve_connection_with_upgrades` ignores http1_only/http2_only, so
+    // protocol-restricted modes use dedicated builders. Auto still upgrades HTTP/1.
+    match http_protocol {
+        HttpProtocol::Http1Only => {
+            let mut http1 = hyper::server::conn::http1::Builder::new();
+            http1.timer(TokioTimer::new());
+            http1.header_read_timeout(header_read_timeout);
+            let connection = http1.serve_connection(io, service).with_upgrades();
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = &mut connection => {}
+                changed = shutdown.changed() => {
+                    if changed.is_ok() && *shutdown.borrow() {
+                        connection.as_mut().graceful_shutdown();
+                        let _ = connection.await;
+                    }
+                }
+            }
+        }
+        HttpProtocol::Http2Only => {
+            let mut builder = auto::Builder::new(TokioExecutor::new());
+            builder
+                .http1()
+                .timer(TokioTimer::new())
+                .header_read_timeout(header_read_timeout);
+            let builder = builder.http2_only();
+            let connection = builder.serve_connection(io, service);
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = &mut connection => {}
+                changed = shutdown.changed() => {
+                    if changed.is_ok() && *shutdown.borrow() {
+                        connection.as_mut().graceful_shutdown();
+                        let _ = connection.await;
+                    }
+                }
+            }
+        }
+        HttpProtocol::Auto => {
+            let mut builder = auto::Builder::new(TokioExecutor::new());
+            builder
+                .http1()
+                .timer(TokioTimer::new())
+                .header_read_timeout(header_read_timeout);
+            let connection = builder.serve_connection_with_upgrades(io, service);
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = &mut connection => {}
+                changed = shutdown.changed() => {
+                    if changed.is_ok() && *shutdown.borrow() {
+                        connection.as_mut().graceful_shutdown();
+                        let _ = connection.await;
+                    }
+                }
             }
         }
     }
@@ -659,7 +729,8 @@ async fn handle_hyper_request(
     application: Arc<Application>,
     request: HyperRequest<Incoming>,
     connection_info: ConnectionInfo,
-) -> Result<HyperResponse<UnsyncBoxBody<Bytes, Infallible>>, Infallible> {
+    response_cancellation: ResponseCancellationToken,
+) -> Result<HyperResponse<UnsyncBoxBody<Bytes, ResponseBodyError>>, Infallible> {
     let (parts, body) = request.into_parts();
     let declared_body_too_large =
         declared_content_length_exceeds(&parts.headers, application.max_body_size);
@@ -671,6 +742,14 @@ async fn handle_hyper_request(
         parts.extensions,
         Bytes::new(),
     );
+    if let Some(on_upgrade) = request
+        .extensions_mut()
+        .remove::<hyper::upgrade::OnUpgrade>()
+    {
+        request
+            .extensions_mut()
+            .insert(ConnectionUpgrade::new(on_upgrade));
+    }
     if let Some(peer_addr) = connection_info.peer_addr() {
         request.extensions_mut().insert(peer_addr);
     }
@@ -718,7 +797,7 @@ async fn handle_hyper_request(
         }
     };
 
-    Ok(into_hyper_response(response))
+    Ok(into_hyper_response(response, response_cancellation))
 }
 
 fn drain_rejected_body(body: Incoming, max_body_size: usize, body_read_timeout: Duration) {
@@ -764,10 +843,15 @@ fn incoming_body_stream(
     ))
 }
 
-fn into_hyper_response(response: Response) -> HyperResponse<UnsyncBoxBody<Bytes, Infallible>> {
-    let (status, headers, body) = response.into_parts();
+fn into_hyper_response(
+    response: Response,
+    response_cancellation: ResponseCancellationToken,
+) -> HyperResponse<UnsyncBoxBody<Bytes, ResponseBodyError>> {
+    let (status, headers, body) = response.into_network_parts(response_cancellation);
     let body = match body {
-        ResponseBody::Buffered(bytes) => Full::new(bytes).boxed_unsync(),
+        ResponseBody::Buffered(bytes) => Full::new(bytes)
+            .map_err(|error: Infallible| match error {})
+            .boxed_unsync(),
         ResponseBody::Stream(stream) => StreamBody::new(stream.map_ok(Frame::data)).boxed_unsync(),
     };
     let mut response = HyperResponse::new(body);
@@ -843,10 +927,13 @@ macro_rules! __phoenix_application_module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::{StreamExt, stream};
+    use futures_util::{SinkExt as _, StreamExt, stream};
     use http_body_util::{Empty, StreamBody, combinators::UnsyncBoxBody};
     use hyper::client::conn::http2;
-    use phoenix_http::{Method, RequestBodyError, RequestBodyStream, State, streaming, typed};
+    use phoenix_http::{
+        CloseCode, CloseFrame, IntoResponse, KeepAlive, Method, RequestBodyError,
+        RequestBodyStream, Sse, SseEvent, State, WebSocketUpgrade, streaming, typed,
+    };
     use phoenix_routing::ApplicationContext;
     use rcgen::{CertifiedKey, generate_simple_self_signed};
     use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
@@ -860,6 +947,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::Notify;
     use tokio_rustls::TlsConnector;
+    use tokio_tungstenite::{
+        client_async,
+        tungstenite::{self, client::IntoClientRequest, protocol::Message as TungsteniteMessage},
+    };
 
     fn streaming_handler(_request: Request) -> Ready<Response> {
         ready(Response::stream(stream::iter([
@@ -1441,5 +1532,216 @@ mod tests {
             "/admin"
         );
         assert_eq!(application.router().url("partner.home", &[]).unwrap(), "/");
+    }
+
+    #[tokio::test]
+    async fn sse_tcp_delivers_events_keepalives_and_unblocks_shutdown_on_disconnect() {
+        let finished = Arc::new(Notify::new());
+        let hang_finished = Arc::clone(&finished);
+        let routes = Routes::new()
+            .get("/events", |_request: Request| async {
+                Sse::from_events(stream::iter([SseEvent::new().data("hello-sse")]))
+            })
+            .get("/keepalive", |_request: Request| async {
+                Sse::from_events(stream::pending()).keep_alive(
+                    KeepAlive::new(Duration::from_millis(20))
+                        .unwrap()
+                        .comment("tick")
+                        .unwrap(),
+                )
+            })
+            .get("/hang", move |_request: Request| {
+                let finished = Arc::clone(&hang_finished);
+                async move {
+                    let mut response =
+                        Sse::from_events(stream::pending::<SseEvent>()).into_response();
+                    response.on_body_finish(move |_| {
+                        finished.notify_waiters();
+                    });
+                    response
+                }
+            });
+
+        let server = Application::new(routes)
+            .unwrap()
+            .graceful_shutdown_timeout(Duration::from_secs(2))
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap();
+
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let body = read_http1_to_end(&mut client).await;
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("HTTP/1.1 200 OK"));
+        assert!(body.contains("text/event-stream"));
+        assert!(body.contains("data: hello-sse"));
+
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(b"GET /keepalive HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let keepalive = read_http1_until(&mut client, b": tick").await;
+        assert!(keepalive.windows(6).any(|window| window == b": tick"));
+        drop(client);
+
+        let mut client = TcpStream::connect(server.local_addr()).await.unwrap();
+        client
+            .write_all(b"GET /hang HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let _ = read_http1_until(&mut client, b"text/event-stream").await;
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(2), finished.notified())
+            .await
+            .expect("SSE stream should finish after client disconnect");
+
+        tokio::time::timeout(Duration::from_secs(2), server.shutdown())
+            .await
+            .expect("graceful shutdown should not block on finished SSE streams")
+            .unwrap();
+    }
+
+    fn websocket_test_routes() -> Routes {
+        Routes::new()
+            .get(
+                "/echo",
+                typed(|ws: WebSocketUpgrade| async move {
+                    ws.any_origin().on_upgrade(|mut socket| async move {
+                        while let Some(message) = socket.recv().await {
+                            let Ok(message) = message else { break };
+                            if message.is_close() {
+                                let _ = socket
+                                    .close(Some(CloseFrame {
+                                        code: CloseCode::NORMAL,
+                                        reason: String::new(),
+                                    }))
+                                    .await;
+                                break;
+                            }
+                            if socket.send(message).await.is_err() {
+                                break;
+                            }
+                        }
+                    })
+                }),
+            )
+            .get(
+                "/origin",
+                typed(|ws: WebSocketUpgrade| async move {
+                    ws.allowed_origin("https://app.example")
+                        .on_upgrade(|_socket| async {})
+                }),
+            )
+            .get(
+                "/small",
+                typed(|ws: WebSocketUpgrade| async move {
+                    ws.any_origin()
+                        .max_message_size(8)
+                        .unwrap()
+                        .max_frame_size(8)
+                        .unwrap()
+                        .on_upgrade(|mut socket| async move {
+                            while let Some(message) = socket.recv().await {
+                                match message {
+                                    Ok(message) if !message.is_close() => {}
+                                    _ => break,
+                                }
+                            }
+                        })
+                }),
+            )
+    }
+
+    async fn spawn_websocket_server() -> ServerHandle {
+        Application::new(websocket_test_routes())
+            .unwrap()
+            .http_protocol(HttpProtocol::Http1Only)
+            .spawn("127.0.0.1:0")
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn websocket_tcp_echo_and_graceful_close() {
+        let server = spawn_websocket_server().await;
+        let addr = server.local_addr();
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut request = format!("ws://{addr}/echo").into_client_request().unwrap();
+        request.headers_mut().insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("http://localhost"),
+        );
+        let (mut socket, response) = client_async(request, stream).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::SWITCHING_PROTOCOLS);
+        socket
+            .send(TungsteniteMessage::Text("ping-ws".into()))
+            .await
+            .unwrap();
+        let echoed = socket.next().await.unwrap().unwrap();
+        assert_eq!(echoed.into_text().unwrap(), "ping-ws");
+        socket
+            .close(Some(tungstenite::protocol::CloseFrame {
+                code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+                reason: "".into(),
+            }))
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), server.shutdown())
+            .await
+            .expect("server shutdown after websocket echo")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_tcp_rejects_disallowed_origin() {
+        let server = spawn_websocket_server().await;
+        let addr = server.local_addr();
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut request = format!("ws://{addr}/origin").into_client_request().unwrap();
+        request.headers_mut().insert(
+            http::header::ORIGIN,
+            http::HeaderValue::from_static("https://evil.example"),
+        );
+        let error = client_async(request, stream).await.unwrap_err();
+        let tungstenite::Error::Http(response) = error else {
+            panic!("expected HTTP rejection, got {error:?}");
+        };
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_tcp_closes_on_oversized_message() {
+        let server = spawn_websocket_server().await;
+        let addr = server.local_addr();
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!("ws://{addr}/small").into_client_request().unwrap();
+        let (mut socket, _) = client_async(request, stream).await.unwrap();
+        socket
+            .send(TungsteniteMessage::Text("x".repeat(64).into()))
+            .await
+            .unwrap();
+        let closed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    Some(Ok(TungsteniteMessage::Close(_)) | Err(_)) | None => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await;
+        assert!(closed.is_ok(), "oversized message should close the socket");
+
+        server.shutdown().await.unwrap();
     }
 }

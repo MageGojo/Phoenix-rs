@@ -15,6 +15,8 @@ const MODELS_START: &str = "// <phoenix:model-registry>";
 const MODELS_END: &str = "// </phoenix:model-registry>";
 const MIGRATIONS_START: &str = "// <phoenix:migration-registry>";
 const MIGRATIONS_END: &str = "// </phoenix:migration-registry>";
+const COMMANDS_START: &str = "// <phoenix:commands>";
+const COMMANDS_END: &str = "// </phoenix:commands>";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DependencySource {
@@ -430,6 +432,22 @@ impl ProjectGenerator {
         editor.commit()
     }
 
+    /// Generate a console command and register it in `app/commands/mod.rs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid names, conflicts, or malformed managed files.
+    pub fn command(
+        &self,
+        name: &str,
+        options: GenerateOptions,
+    ) -> Result<Vec<PathBuf>, ScaffoldError> {
+        let name = QualifiedName::parse(name)?;
+        let mut editor = ProjectEditor::new(&self.root, options.force);
+        add_command(&mut editor, &name)?;
+        editor.commit()
+    }
+
     fn rust_contract(
         &self,
         name: &str,
@@ -459,7 +477,9 @@ fn project_files(
 ) -> Result<Vec<(PathBuf, String)>, ScaffoldError> {
     let (rust_dependency, react, react_ssr, vite) = match dependencies {
         DependencySource::Registry => (
-            "phoenix = \"0.1.0\"".to_owned(),
+            // crates.io package is `phoenixrs` (phoenix / phoenix-rs taken);
+            // lib crate remains `phoenix` so apps keep `use phoenix::…`.
+            "phoenix = { package = \"phoenixrs\", version = \"0.1.0\" }".to_owned(),
             "0.1.0".to_owned(),
             "0.1.0".to_owned(),
             "0.1.0".to_owned(),
@@ -468,7 +488,7 @@ fn project_files(
             let root = absolute_path(root)?;
             (
                 format!(
-                    "phoenix = {{ path = {} }}",
+                    "phoenix = {{ package = \"phoenixrs\", path = {} }}",
                     json_string(&root.join("crates/phoenix").to_string_lossy())
                 ),
                 format!("file:{}", root.join("packages/phoenix-react").display()),
@@ -517,25 +537,47 @@ fn project_files(
         (
             "Cargo.toml".into(),
             format!(
-                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", features = [\"migration\", \"postgresql\", \"serde\", \"sqlite\"] }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[workspace]\n",
+                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", features = [\"migration\", \"mysql\", \"postgresql\", \"serde\", \"sqlite\"] }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[workspace]\n",
                 package = json_string(package),
             ),
         ),
         ("package.json".into(), package_json),
-        (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n.env\n.DS_Store\n".to_owned()),
-        (".env.example".into(), "APP_ADDR=127.0.0.1:3000\nDATABASE_URL=sqlite:storage/app.sqlite\nVITE_DEV_URL=http://127.0.0.1:5173\n".to_owned()),
+        (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n.env\n.DS_Store\n".to_owned()),
+        (".env.example".into(), env_example_template()),
         ("README.md".into(), project_readme(package)),
         ("src/main.rs".into(), main_template(&crate_name)),
+        (
+            "src/bin/phoenix-manage.rs".into(),
+            management_template(&crate_name),
+        ),
         ("src/lib.rs".into(), lib_template()),
+        ("config/mod.rs".into(), config_template()),
+        ("config/app.toml".into(), app_toml_template(package)),
+        ("config/database.toml".into(), database_toml_template()),
+        (
+            "config/schemas/phoenix-config-app.schema.json".into(),
+            include_str!("../../../schemas/phoenix-config-app.schema.json").to_owned(),
+        ),
+        (
+            "config/schemas/phoenix-config-database.schema.json".into(),
+            include_str!("../../../schemas/phoenix-config-database.schema.json").to_owned(),
+        ),
+        ("taplo.toml".into(), app_taplo_template()),
+        ("deploy/restart.sh.example".into(), deploy_restart_example()),
         ("app/controllers/mod.rs".into(), managed_modules(&["pub mod home_controller;", "pub use home_controller::HomeController;"])),
         ("app/controllers/home_controller.rs".into(), home_controller_template()),
         ("app/props/mod.rs".into(), managed_modules(&["pub mod home_props;", "pub use home_props::HomeProps;"])),
         ("app/props/home_props.rs".into(), home_props_template()),
-        ("app/models/mod.rs".into(), format!("{MODULES_START}\n{MODULES_END}\n\n{MODELS_START}\n{MODELS_END}\n")),
+        ("app/models/mod.rs".into(), empty_model_registry()),
         ("app/requests/mod.rs".into(), managed_modules(&[])),
         ("app/resources/mod.rs".into(), managed_modules(&[])),
         ("app/middleware/mod.rs".into(), managed_modules(&[])),
-        ("database/migrations/mod.rs".into(), format!("{MIGRATIONS_START}\n{MIGRATIONS_END}\n")),
+        ("app/commands/mod.rs".into(), commands_mod_template()),
+        (
+            "database/migrations/mod.rs".into(),
+            empty_migration_registry(),
+        ),
+        ("database/seeders/mod.rs".into(), seeder_template()),
         ("routes/web.rs".into(), home_route_template()),
         ("views/pages/home.tsx".into(), home_page_template()),
         ("views/styles.css".into(), styles_template()),
@@ -553,34 +595,331 @@ fn project_files(
     ])
 }
 
+fn env_example_template() -> String {
+    r#"# Copy to `.env` for local secrets and overrides.
+# Structured defaults live in config/app.toml and config/database.toml.
+# Precedence: config/*.toml < .env < process environment.
+
+APP_ENV=development
+APP_ADDR=127.0.0.1:3000
+APP_URL=http://127.0.0.1:3000
+
+# Database: prefer editing config/database.toml default = "sqlite" | "pgsql" | "mysql".
+# Optional overrides:
+# DB_CONNECTION=pgsql
+# DB_CONNECTION=mysql
+# DB_PASSWORD=secret
+# DATABASE_URL=postgresql://phoenix:secret@127.0.0.1:5432/phoenix
+# DATABASE_URL=mysql://phoenix:secret@127.0.0.1:3306/phoenix
+
+TRUSTED_PROXIES=none
+ALLOWED_HOSTS=127.0.0.1,localhost,[::1]
+RATE_LIMIT_REQUESTS=60
+RATE_LIMIT_WINDOW_SECONDS=60
+VITE_DEV_URL=http://127.0.0.1:5173
+PHOENIX_LOG=info,hyper=warn
+"#
+    .to_owned()
+}
+
+fn app_toml_template(package: &str) -> String {
+    format!(
+        r#"# Application settings (Laravel-style config/app).
+# Secrets and machine-specific overrides belong in `.env`.
+# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
+
+#:schema ./schemas/phoenix-config-app.schema.json
+
+name = {package}
+env = "development"
+addr = "127.0.0.1:3000"
+url = "http://127.0.0.1:3000"
+"#,
+        package = json_string(package),
+    )
+}
+
+fn database_toml_template() -> String {
+    r#"# Database connections (Laravel-style config/database).
+#
+# Switch engines by changing `default`:
+#   default = "sqlite"   # local file, zero setup
+#   default = "pgsql"    # PostgreSQL
+#   default = "mysql"    # MySQL / MariaDB
+#
+# Or set DB_CONNECTION=pgsql|mysql in `.env` without editing this file.
+# Put DB_PASSWORD in `.env` — do not commit production passwords here.
+# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
+
+#:schema ./schemas/phoenix-config-database.schema.json
+
+default = "sqlite"
+
+[connections.sqlite]
+driver = "sqlite"
+# Path is relative to the application root (creates parent dirs as needed by the OS/driver).
+database = "storage/app.sqlite"
+
+[connections.pgsql]
+driver = "pgsql"
+host = "127.0.0.1"
+port = 5432
+database = "phoenix"
+username = "phoenix"
+password = ""
+
+[connections.mysql]
+driver = "mysql"
+host = "127.0.0.1"
+port = 3306
+database = "phoenix"
+username = "phoenix"
+password = ""
+"#
+    .to_owned()
+}
+
+fn app_taplo_template() -> String {
+    r#"# Taplo / Even Better TOML schema associations for config/*.toml autocomplete.
+
+[[rule]]
+include = ["config/app.toml"]
+[rule.schema]
+path = "./config/schemas/phoenix-config-app.schema.json"
+
+[[rule]]
+include = ["config/database.toml"]
+[rule.schema]
+path = "./config/schemas/phoenix-config-database.schema.json"
+"#
+    .to_owned()
+}
+
+fn deploy_restart_example() -> String {
+    r"#!/bin/sh
+# Copy to deploy/restart.sh and make executable.
+# Used by `px release:install` / `px release:rollback` when --restart-cmd is omitted.
+set -eu
+systemctl restart my-app
+"
+    .to_owned()
+}
+
+fn config_template() -> String {
+    r#"pub use phoenix::config::{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue};
+
+/// Load this application's configuration.
+///
+/// Reads `config/app.toml` + `config/database.toml`, then `.env`, then process
+/// environment. To require JWT/encryption secrets in production:
+/// `AppConfig::builder().required_secret("JWT_SECRET", 32).load()`.
+///
+/// # Errors
+///
+/// Returns a source, validation, or production-requirement error.
+pub fn load() -> Result<AppConfig, ConfigError> {
+    AppConfig::load()
+}
+"#
+    .to_owned()
+}
+
+#[allow(clippy::too_many_lines)]
+fn management_template(crate_name: &str) -> String {
+    r#"use std::{env, error::Error, io};
+
+use phoenix::database::MigrationRunner;
+
+type CommandResult<T = ()> = Result<T, Box<dyn Error>>;
+
+#[tokio::main]
+async fn main() -> CommandResult {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    let command = arguments
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| input_error("expected migrate, status, rollback, fresh, or seed"))?;
+    let options = &arguments[1..];
+    if !matches!(command, "migrate" | "status" | "rollback" | "fresh" | "seed") {
+        return Err(input_error(format!("unknown management command `{command}`")).into());
+    }
+
+    let config = __PHOENIX_APP_CRATE__::config::load()?;
+    let mut database = __PHOENIX_APP_CRATE__::database(&config).await?;
+    if command == "seed" {
+        require_no_options(options)?;
+        __PHOENIX_APP_CRATE__::seeders::run(&mut database).await?;
+        println!("Seeders completed.");
+        return Ok(());
+    }
+
+    let mut runner = MigrationRunner::new(
+        &mut database,
+        __PHOENIX_APP_CRATE__::migrations::all(),
+    )?;
+    match command {
+        "migrate" => {
+            require_no_options(options)?;
+            let applied = runner.up().await?;
+            println!("Applied {applied} migration(s).");
+        }
+        "status" => {
+            require_no_options(options)?;
+            let plan = runner.plan().await?;
+            if plan.applied.is_empty() && plan.pending.is_empty() {
+                println!("No migrations registered or applied.");
+            }
+            for migration in plan.applied {
+                println!(
+                    "APPLIED  {}  batch={}  {}  {}",
+                    migration.id, migration.batch, migration.applied_at, migration.name
+                );
+            }
+            for id in plan.pending {
+                println!("PENDING  {id}");
+            }
+        }
+        "rollback" => {
+            let steps = parse_rollback_steps(options)?;
+            let rolled_back = runner.down(steps).await?;
+            println!("Rolled back {rolled_back} migration(s).");
+        }
+        "fresh" => {
+            let run_seeders = parse_fresh_options(options)?;
+            let applied = runner.plan().await?.applied.len();
+            let rolled_back = runner.down(applied).await?;
+            let migrated = runner.up().await?;
+            println!(
+                "Rebuilt the database: rolled back {rolled_back}, applied {migrated} migration(s)."
+            );
+            drop(runner);
+            if run_seeders {
+                __PHOENIX_APP_CRATE__::seeders::run(&mut database).await?;
+                println!("Seeders completed.");
+            }
+        }
+        "seed" => unreachable!("seed is handled before creating the migration runner"),
+        _ => unreachable!("management commands are validated before connecting"),
+    }
+    Ok(())
+}
+
+fn require_no_options(options: &[String]) -> CommandResult {
+    if options.is_empty() {
+        Ok(())
+    } else {
+        Err(input_error(format!("unexpected arguments: {}", options.join(" "))).into())
+    }
+}
+
+fn parse_rollback_steps(options: &[String]) -> CommandResult<usize> {
+    let [steps] = options else {
+        return Err(input_error("rollback expects one positive step count").into());
+    };
+    steps
+        .parse::<usize>()
+        .ok()
+        .filter(|steps| *steps > 0)
+        .ok_or_else(|| input_error("rollback step count must be a positive integer").into())
+}
+
+fn parse_fresh_options(options: &[String]) -> CommandResult<bool> {
+    match options {
+        [] => Ok(false),
+        [option] if option == "--seed" => Ok(true),
+        _ => Err(input_error("fresh only accepts --seed").into()),
+    }
+}
+
+fn input_error(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+"#
+    .replace("__PHOENIX_APP_CRATE__", crate_name)
+}
+
+fn seeder_template() -> String {
+    r"use std::error::Error;
+
+use phoenix::database::Database;
+
+/// Insert repeatable development or test data.
+///
+/// # Errors
+///
+/// Returns the first application or database error raised by a seeder.
+pub async fn run(_database: &mut Database) -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+"
+    .to_owned()
+}
+
+fn empty_model_registry() -> String {
+    format!(
+        "{MODULES_START}\n{MODULES_END}\n\n{MODELS_START}\n{}\n{MODELS_END}\n",
+        render_model_registry(&BTreeSet::new()).join("\n")
+    )
+}
+
+fn empty_migration_registry() -> String {
+    format!(
+        "{MIGRATIONS_START}\n{}\n{MIGRATIONS_END}\n",
+        render_migration_registry(&BTreeSet::new()).join("\n")
+    )
+}
+
 fn project_readme(package: &str) -> String {
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nSee Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
     )
 }
 
 fn main_template(crate_name: &str) -> String {
     format!(
-        r#"use std::error::Error;
+        r#"use phoenix::prelude::{{CommandResult, Console, LogFormat, Logging}};
+
+use {crate_name}::commands;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {{
-    let address = std::env::var("APP_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
-    let server = {crate_name}::application()?.bind(&address).await?;
-    println!("Phoenix application listening on http://{{}}", server.local_addr());
-    server
-        .run_with_shutdown(async {{
-            let _ = tokio::signal::ctrl_c().await;
+async fn main() -> CommandResult {{
+    Console::new(env!("CARGO_PKG_NAME"))
+        .about("Phoenix application")
+        .serve(|_ctx| async move {{
+            let config = {crate_name}::config::load()?;
+            let address = config.address().to_owned();
+            let public_url = config.public_url().to_owned();
+            let production = config.environment().is_production();
+            let _logging = Logging::new()
+                .format(if production {{ LogFormat::Json }} else {{ LogFormat::Compact }})
+                .ansi(!production)
+                .init()?;
+            let server = {crate_name}::application(config)?.bind(&address).await?;
+            println!(
+                "Phoenix application ready at {{public_url}} (listening on {{}})",
+                server.local_addr()
+            );
+            server
+                .run_with_shutdown(async {{
+                    let _ = tokio::signal::ctrl_c().await;
+                }})
+                .await?;
+            Ok(())
         }})
-        .await?;
-    Ok(())
+        .commands(commands::registry())
+        .run()
+        .await
 }}
 "#
     )
 }
 
 fn lib_template() -> String {
-    r#"#[path = "../app/controllers/mod.rs"]
+    r#"#[path = "../config/mod.rs"]
+pub mod config;
+#[path = "../app/commands/mod.rs"]
+pub mod commands;
+#[path = "../app/controllers/mod.rs"]
 pub mod controllers;
 #[path = "../app/middleware/mod.rs"]
 pub mod middleware;
@@ -594,21 +933,49 @@ pub mod requests;
 pub mod resources;
 #[path = "../database/migrations/mod.rs"]
 pub mod migrations;
+#[path = "../database/seeders/mod.rs"]
+pub mod seeders;
 
-use phoenix::prelude::{Application, NonceSecurityPolicy, RouteBuildError, Routes};
+use phoenix::prelude::{
+    AccessLog, Application, Csrf, Database, DatabaseError, HostAllowlist, NonceSecurityPolicy,
+    RateLimit, RateLimitConfig, RequestId, RouteBuildError, Routes, SessionConfig,
+    SessionMiddleware, SessionStore, StateMiddleware, TrustedProxies,
+};
+
+use config::AppConfig;
 
 #[must_use]
 #[allow(clippy::duplicate_mod)]
-pub fn routes() -> Routes {
-    phoenix::mount_routes!().with_middleware(content_security_policy())
+pub fn routes(config: &AppConfig) -> Routes {
+    let session_config = SessionConfig {
+        secure: config.public_url().starts_with("https://"),
+        ..SessionConfig::default()
+    };
+    let session_store = SessionStore::memory(session_config.max_age);
+
+    phoenix::mount_routes!()
+        .with_middleware(TrustedProxies::new(config.trusted_proxies().iter().copied()))
+        .with_middleware(RequestId)
+        .with_middleware(AccessLog)
+        .with_middleware(HostAllowlist::new(config.allowed_hosts().iter().cloned()))
+        .with_middleware(RateLimit::new(RateLimitConfig {
+            requests: config.rate_limit_requests(),
+            window: config.rate_limit_window(),
+        }))
+        .with_middleware(content_security_policy(config))
+        .with_middleware(SessionMiddleware::new(session_store, session_config))
+        .with_middleware(Csrf)
+        .with_middleware(StateMiddleware::new(config.clone()))
 }
 
-fn content_security_policy() -> NonceSecurityPolicy {
-    if cfg!(debug_assertions) {
-        let vite_origin = std::env::var("VITE_DEV_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
-        return NonceSecurityPolicy::development(&vite_origin)
-            .expect("VITE_DEV_URL must be one trusted HTTP(S) origin");
+fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
+    if !config.environment().is_production() {
+        return NonceSecurityPolicy::development(
+            config
+                .vite_dev_url()
+                .expect("development configuration always has a Vite origin"),
+        )
+        .expect("AppConfig validates VITE_DEV_URL as one trusted HTTP(S) origin");
     }
     NonceSecurityPolicy::default()
 }
@@ -618,11 +985,42 @@ fn content_security_policy() -> NonceSecurityPolicy {
 /// # Errors
 ///
 /// Returns a route error when route names or patterns conflict.
-pub fn application() -> Result<Application, RouteBuildError> {
-    Application::new(routes())
+pub fn application(config: AppConfig) -> Result<Application, RouteBuildError> {
+    Application::new(routes(&config))
+}
+
+/// Connect the configured database with every registered Toasty model.
+///
+/// # Errors
+///
+/// Returns a database error when the URL or connection is invalid.
+pub async fn database(config: &AppConfig) -> Result<Database, DatabaseError> {
+    Database::builder(models::all())
+        .connect(config.database_url())
+        .await
 }
 "#
     .to_owned()
+}
+
+fn commands_mod_template() -> String {
+    format!(
+        "use phoenix::prelude::commands;\n\n{MODULES_START}\n{MODULES_END}\n\ncommands! {{\n{COMMANDS_START}\n{COMMANDS_END}\n}}\n"
+    )
+}
+
+fn command_template(function_name: &str) -> String {
+    format!(
+        r#"use phoenix::prelude::{{CommandContext, CommandResult}};
+
+/// Application console command.
+#[allow(clippy::unused_async)]
+pub async fn {function_name}(_ctx: CommandContext<'_>) -> CommandResult {{
+    println!("{function_name} ran.");
+    Ok(())
+}}
+"#
+    )
 }
 
 fn home_controller_template() -> String {
@@ -796,6 +1194,61 @@ fn add_rust_item(
             format!("pub mod {module};"),
             format!("pub use {module}::{};", name.class),
         ],
+    )?;
+    Ok(())
+}
+
+fn add_command(editor: &mut ProjectEditor, name: &QualifiedName) -> Result<(), ScaffoldError> {
+    let function_name = snake_case(&name.class);
+    if matches!(function_name.as_str(), "serve" | "help") {
+        return Err(ScaffoldError::InvalidName(function_name));
+    }
+
+    let mut directory = PathBuf::from("app/commands");
+    let mut parent_module = directory.join("mod.rs");
+    let mut export_path = Vec::new();
+    for namespace in &name.modules {
+        let module = snake_case(namespace);
+        editor.update_managed_lines(
+            &parent_module,
+            MODULES_START,
+            MODULES_END,
+            &[format!("pub mod {module};")],
+        )?;
+        directory.push(&module);
+        parent_module = directory.join("mod.rs");
+        export_path.push(module);
+    }
+
+    editor.create(
+        directory.join(format!("{function_name}.rs")),
+        command_template(&function_name),
+    )?;
+    editor.update_managed_lines(
+        &parent_module,
+        MODULES_START,
+        MODULES_END,
+        &[
+            format!("pub mod {function_name};"),
+            format!("pub use {function_name}::{function_name};"),
+        ],
+    )?;
+
+    if !export_path.is_empty() {
+        let path = format!("{}::{function_name}", export_path.join("::"));
+        editor.update_managed_lines(
+            "app/commands/mod.rs",
+            MODULES_START,
+            MODULES_END,
+            &[format!("pub use {path};")],
+        )?;
+    }
+
+    editor.update_managed_lines(
+        "app/commands/mod.rs",
+        COMMANDS_START,
+        COMMANDS_END,
+        &[format!("{function_name},")],
     )?;
     Ok(())
 }
@@ -1276,15 +1729,14 @@ export default function {component}({{ initialCount = 0 }}: {component}Props) {{
 }
 
 fn render_model_registry(values: &BTreeSet<String>) -> Vec<String> {
-    if values.is_empty() {
-        return Vec::new();
-    }
     let mut lines = values
         .iter()
         .map(|value| format!("// phoenix:model: {value}"))
         .collect::<Vec<_>>();
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
     lines.extend([
-        String::new(),
         "#[must_use]".to_owned(),
         "pub fn all() -> phoenix::database::ModelSet {".to_owned(),
         "    phoenix::database::models!(".to_owned(),
@@ -1300,20 +1752,20 @@ fn render_migration_registry(values: &BTreeSet<String>) -> Vec<String> {
         lines.push(format!("// phoenix:migration: {value}"));
         lines.push(format!("pub mod {value};"));
     }
-    if !values.is_empty() {
-        lines.extend([
-            String::new(),
-            "#[must_use]".to_owned(),
-            "pub fn all() -> Vec<phoenix::database::Migration> {".to_owned(),
-            "    vec![".to_owned(),
-        ]);
-        lines.extend(
-            values
-                .iter()
-                .map(|value| format!("        {value}::migration(),")),
-        );
-        lines.extend(["    ]".to_owned(), "}".to_owned()]);
+    if !lines.is_empty() {
+        lines.push(String::new());
     }
+    lines.extend([
+        "#[must_use]".to_owned(),
+        "pub fn all() -> Vec<phoenix::database::Migration> {".to_owned(),
+        "    vec![".to_owned(),
+    ]);
+    lines.extend(
+        values
+            .iter()
+            .map(|value| format!("        {value}::migration(),")),
+    );
+    lines.extend(["    ]".to_owned(), "}".to_owned()]);
     lines
 }
 
@@ -1750,21 +2202,88 @@ mod tests {
         .unwrap();
 
         assert!(root.join("src/main.rs").is_file());
+        assert!(root.join("src/bin/phoenix-manage.rs").is_file());
+        assert!(root.join("config/app.toml").is_file());
+        assert!(root.join("config/database.toml").is_file());
+        assert!(
+            root.join("config/schemas/phoenix-config-database.schema.json")
+                .is_file()
+        );
+        assert!(root.join("taplo.toml").is_file());
+        assert!(
+            fs::read_to_string(root.join("config/database.toml"))
+                .unwrap()
+                .contains("connections.mysql")
+        );
+        assert!(root.join("app/commands/mod.rs").is_file());
+        assert!(root.join("config/mod.rs").is_file());
+        assert!(root.join("database/seeders/mod.rs").is_file());
         assert!(root.join("routes/web.rs").is_file());
         assert!(root.join("views/pages/home.tsx").is_file());
-        assert!(
-            fs::read_to_string(root.join("Cargo.toml"))
-                .unwrap()
-                .contains("crates/phoenix")
-        );
+        let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("crates/phoenix"));
+        assert!(manifest.contains("default-run = \"phoenix-cli-new-"));
         assert!(
             fs::read_to_string(root.join("package.json"))
                 .unwrap()
                 .contains("file:")
         );
+        let main = fs::read_to_string(root.join("src/main.rs")).unwrap();
+        assert!(main.contains("Console::new"));
+        assert!(main.contains("commands::registry()"));
+        assert!(main.contains(".serve("));
+        let commands = fs::read_to_string(root.join("app/commands/mod.rs")).unwrap();
+        assert!(commands.contains("commands!"));
+        assert!(commands.contains("<phoenix:commands>"));
         let application = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(application.contains("pub mod commands"));
         assert!(application.contains("NonceSecurityPolicy::development"));
-        assert!(application.contains("with_middleware(content_security_policy())"));
+        assert!(application.contains("with_middleware(content_security_policy(config))"));
+        assert!(application.contains("with_middleware(RequestId)"));
+        assert!(application.contains("with_middleware(AccessLog)"));
+        assert!(application.contains("SessionMiddleware::new"));
+        assert!(application.contains("with_middleware(Csrf)"));
+        assert!(application.contains("TrustedProxies::new"));
+        assert!(application.contains("HostAllowlist::new"));
+        assert!(application.contains("RateLimit::new"));
+        assert!(application.contains("StateMiddleware::new(config.clone())"));
+        let config = fs::read_to_string(root.join("config/mod.rs")).unwrap();
+        assert!(config.contains("AppConfig::load()"));
+        assert!(config.lines().count() < 20);
+        let manager = fs::read_to_string(root.join("src/bin/phoenix-manage.rs")).unwrap();
+        assert!(manager.contains("MigrationRunner::new"));
+        assert!(manager.contains("migrations::all()"));
+        assert!(manager.contains("seeders::run"));
+        let models = fs::read_to_string(root.join("app/models/mod.rs")).unwrap();
+        let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
+        assert!(models.contains("pub fn all()"));
+        assert!(migrations.contains("pub fn all()"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn make_command_registers_async_handler() {
+        let root = temporary_directory("command");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .initialize_git(false)
+                .install_dependencies(false),
+        )
+        .unwrap();
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        generator
+            .command("Update", GenerateOptions::default())
+            .unwrap();
+
+        assert!(root.join("app/commands/update.rs").is_file());
+        let module = fs::read_to_string(root.join("app/commands/mod.rs")).unwrap();
+        assert!(module.contains("pub mod update;"));
+        assert!(module.contains("pub use update::update;"));
+        assert!(module.contains("update,"));
+        let command = fs::read_to_string(root.join("app/commands/update.rs")).unwrap();
+        assert!(command.contains("pub async fn update"));
+        assert!(command.contains("CommandContext<'_>"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -7,6 +7,7 @@ use toasty::{Connection, Executor, stmt::Value};
 use crate::{Backend, Database};
 
 const POSTGRES_LOCK_ID: i64 = 0x0050_484f_454e_4958;
+const MYSQL_LOCK_NAME: &str = "phoenix_migrations";
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// One ordered, reversible database migration.
@@ -182,6 +183,7 @@ impl<'a> MigrationRunner<'a> {
         match backend {
             Backend::SQLite => up_sqlite(&mut connection, migrations).await,
             Backend::PostgreSQL => up_postgresql(&mut connection, migrations).await,
+            Backend::MySQL => up_mysql(&mut connection, migrations).await,
         }
     }
 
@@ -201,6 +203,7 @@ impl<'a> MigrationRunner<'a> {
         match backend {
             Backend::SQLite => down_sqlite(&mut connection, migrations, steps).await,
             Backend::PostgreSQL => down_postgresql(&mut connection, migrations, steps).await,
+            Backend::MySQL => down_mysql(&mut connection, migrations, steps).await,
         }
     }
 }
@@ -270,6 +273,11 @@ async fn ensure_state_table(
              id TEXT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, \
              batch BIGINT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         }
+        Backend::MySQL => {
+            "CREATE TABLE IF NOT EXISTS phoenix_migrations (\
+             id VARCHAR(255) PRIMARY KEY, name VARCHAR(255) NOT NULL, checksum VARCHAR(64) NOT NULL, \
+             batch BIGINT NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        }
     };
     toasty::sql::statement(sql).exec(executor).await?;
     Ok(())
@@ -282,6 +290,7 @@ async fn load_status(
     let applied_at = match backend {
         Backend::SQLite => "CAST(applied_at AS TEXT)",
         Backend::PostgreSQL => "applied_at::text",
+        Backend::MySQL => "CAST(applied_at AS CHAR)",
     };
     let rows = toasty::sql::query(format!(
         "SELECT id, name, checksum, batch, {applied_at} \
@@ -462,6 +471,71 @@ async fn release_postgres_lock(connection: &mut Connection) {
         .await;
 }
 
+async fn up_mysql(
+    connection: &mut Connection,
+    migrations: &[Migration],
+) -> Result<usize, MigrationError> {
+    acquire_mysql_lock(connection).await?;
+    let result = async {
+        let applied = load_status(connection, Backend::MySQL).await?;
+        let (pending, batch) = pending(migrations, &applied)?;
+        for migration in &pending {
+            let mut transaction = connection.transaction().await?;
+            apply_up(&mut transaction, Backend::MySQL, migration, batch).await?;
+            transaction.commit().await?;
+        }
+        Ok::<_, MigrationError>(pending.len())
+    }
+    .await;
+    release_mysql_lock(connection).await;
+    result
+}
+
+async fn down_mysql(
+    connection: &mut Connection,
+    migrations: &[Migration],
+    steps: usize,
+) -> Result<usize, MigrationError> {
+    acquire_mysql_lock(connection).await?;
+    let result = async {
+        let applied = load_status(connection, Backend::MySQL).await?;
+        let selected = rollback_selection(migrations, &applied, steps)?;
+        for migration in &selected {
+            let mut transaction = connection.transaction().await?;
+            apply_down(&mut transaction, Backend::MySQL, migration).await?;
+            transaction.commit().await?;
+        }
+        Ok::<_, MigrationError>(selected.len())
+    }
+    .await;
+    release_mysql_lock(connection).await;
+    result
+}
+
+async fn acquire_mysql_lock(connection: &mut Connection) -> Result<(), MigrationError> {
+    let rows = toasty::sql::query("SELECT GET_LOCK(?, 0)")
+        .bind(MYSQL_LOCK_NAME)
+        .exec(connection)
+        .await?;
+    let acquired = rows
+        .first()
+        .and_then(Value::as_record)
+        .and_then(|record| record.first())
+        .is_some_and(|value| matches!(value, Value::I64(1) | Value::U64(1) | Value::Bool(true)));
+    if acquired {
+        Ok(())
+    } else {
+        Err(MigrationError::LockUnavailable)
+    }
+}
+
+async fn release_mysql_lock(connection: &mut Connection) {
+    let _ = toasty::sql::query("SELECT RELEASE_LOCK(?)")
+        .bind(MYSQL_LOCK_NAME)
+        .exec(connection)
+        .await;
+}
+
 async fn apply_up(
     executor: &mut dyn Executor,
     backend: Backend,
@@ -536,6 +610,7 @@ fn placeholders(backend: Backend, count: usize) -> Vec<String> {
         .map(|index| match backend {
             Backend::SQLite => format!("?{index}"),
             Backend::PostgreSQL => format!("${index}"),
+            Backend::MySQL => "?".to_owned(),
         })
         .collect()
 }

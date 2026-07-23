@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phoenix.apizero.cn/schemas/phoenix-config-database.schema.json",
+  "title": "Phoenix config/database.toml",
+  "description": "Database connections (Laravel-style config/database).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default", "connections"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema URL for editor tooling."
+    },
+    "default": {
+      "type": "string",
+      "description": "Active connection name under [connections.*], or override with DB_CONNECTION.",
+      "minLength": 1,
+      "examples": ["sqlite", "pgsql", "mysql"]
+    },
+    "connections": {
+      "type": "object",
+      "description": "Named database connections.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/connection"
+      }
+    }
+  },
+  "$defs": {
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driver"],
+      "properties": {
+        "driver": {
+          "type": "string",
+          "description": "Backend driver.",
+          "enum": ["sqlite", "pgsql", "postgres", "postgresql", "mysql"]
+        },
+        "url": {
+          "type": "string",
+          "description": "Full DATABASE_URL. When set, host/port/database/username/password are ignored."
+        },
+        "database": {
+          "type": "string",
+          "description": "SQLite file path / :memory:, or server database name."
+        },
+        "host": {
+          "type": "string",
+          "description": "Server host (pgsql / mysql).",
+          "default": "127.0.0.1"
+        },
+        "port": {
+          "type": "integer",
+          "description": "Server port (pgsql default 5432, mysql default 3306).",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "username": {
+          "type": "string",
+          "description": "Database username (pgsql / mysql)."
+        },
+        "password": {
+          "type": "string",
+          "description": "Database password. Prefer DB_PASSWORD in `.env` for secrets."
+        }
+      }
+    }
+  }
+}

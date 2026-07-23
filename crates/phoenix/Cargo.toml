@@ -1,25 +1,51 @@
 [package]
-name = "phoenix"
-description = "Laravel-inspired web application framework built on Hyper"
+name = "phoenixrs"
+description = "Phoenix-rs: Laravel-inspired Rust + React web framework by ApiZero (crate name phoenixrs; use phoenix:: in code)"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+homepage = "https://apizero.cn/"
+repository = "https://github.com/ApiZero/Phoenix-rs"
+keywords = ["web", "framework", "hyper", "laravel", "react"]
+categories = ["web-programming", "asynchronous", "network-programming"]
+
+[lib]
+name = "phoenix"
+path = "src/lib.rs"
+
+[features]
+default = []
+redis = ["dep:phoenix-redis"]
+storage = ["dep:phoenix-storage"]
+testing = ["dep:phoenix-testing"]
+queue = ["dep:phoenix-queue"]
+mail = ["dep:phoenix-mail"]
 
 [dependencies]
-phoenix-auth = { path = "../phoenix-auth" }
-phoenix-core = { path = "../phoenix-core" }
-phoenix-crypto = { path = "../phoenix-crypto" }
-phoenix-database = { path = "../phoenix-database" }
-phoenix-dx = { path = "../phoenix-dx" }
-phoenix-http = { path = "../phoenix-http" }
-phoenix-logging = { path = "../phoenix-logging" }
-phoenix-macros = { path = "../phoenix-macros" }
-phoenix-metrics = { path = "../phoenix-metrics" }
-phoenix-routing = { path = "../phoenix-routing" }
-phoenix-security = { path = "../phoenix-security" }
-phoenix-validation = { path = "../phoenix-validation" }
-phoenix-view = { path = "../phoenix-view" }
+phoenix-auth = { version = "0.1.0", path = "../phoenix-auth" }
+phoenix-config = { version = "0.1.0", path = "../phoenix-config" }
+phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
+phoenix-core = { version = "0.1.0", path = "../phoenix-core" }
+phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
+phoenix-database = { version = "0.1.0", path = "../phoenix-database" }
+phoenix-dx = { version = "0.1.0", path = "../phoenix-dx" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-logging = { version = "0.1.0", path = "../phoenix-logging" }
+phoenix-macros = { version = "0.1.0", path = "../phoenix-macros" }
+phoenix-mail = { version = "0.1.0", path = "../phoenix-mail", optional = true }
+phoenix-metrics = { version = "0.1.0", path = "../phoenix-metrics" }
+phoenix-plugin = { version = "0.1.0", path = "../phoenix-plugin" }
+phoenix-queue = { version = "0.1.0", path = "../phoenix-queue", optional = true }
+phoenix-redis = { version = "0.1.0", path = "../phoenix-redis", optional = true }
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-security = { version = "0.1.0", path = "../phoenix-security" }
+phoenix-storage = { version = "0.1.0", path = "../phoenix-storage", optional = true }
+phoenix-testing = { version = "0.1.0", path = "../phoenix-testing", optional = true }
+phoenix-validation = { version = "0.1.0", path = "../phoenix-validation" }
+phoenix-view = { version = "0.1.0", path = "../phoenix-view" }
 
 [lints]
 workspace = true

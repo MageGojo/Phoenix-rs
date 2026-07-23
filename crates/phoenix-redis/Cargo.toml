@@ -1,0 +1,26 @@
+[package]
+name = "phoenix-redis"
+description = "Redis adapters for Phoenix session, rate-limit, and token stores"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-security = { version = "0.1.0", path = "../phoenix-security" }
+redis = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

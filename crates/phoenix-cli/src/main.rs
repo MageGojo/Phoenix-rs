@@ -1,15 +1,30 @@
-use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
+use std::{
+    env,
+    ffi::OsString,
+    path::PathBuf,
+    process::{Command, ExitCode},
+};
 
 use phoenix_cli::{
     ControllerOptions, DependencySource, DevConfig, DevSupervisor, GenerateOptions, ModelOptions,
-    NewProjectOptions, ProjectGenerator, create_project,
+    NewProjectOptions, ProjectGenerator, create_project, release_build, release_install,
+    release_rollback, release_status,
 };
 
-const HELP: &str = r"Phoenix application CLI
+const HELP: &str = r"Phoenix-rs application CLI (px)
+
+Install: cargo install px
+         cargo install --git https://github.com/ApiZero/Phoenix-rs px
+         cargo install --path crates/phoenix-cli
 
 Usage:
   px new <project> [--framework-path <path>] [--no-install] [--no-git]
   px dev
+  px migrate
+  px status
+  px rollback [--step <count>]
+  px fresh [--seed]
+  px seed
   px make:controller <name> [--resource] [--route] [--force]
   px make:model <name> [--all] [--migration] [--controller] [--resource]
                             [--request] [--api-resource] [--page] [--force]
@@ -19,13 +34,29 @@ Usage:
   px make:middleware <name> [--force]
   px make:page <path> [--force]
   px make:island <name> [--force]
+  px make:command <name> [--force]
   px list
+  px release [--version <v>] [--output <dir>] [--tarball] [--bin <name>]
+               [--skip-npm] [--skip-types] [--target <triple>]
+  px release:install --tarball <path> | --path <dir> [--deploy-root <dir>]
+                     [--version <v>] [--skip-migrate] [--no-switch]
+                     [--restart-cmd <shell>] [--dry-run]
+  px release:rollback [--deploy-root <dir>] [--to <version>] [--steps <n>]
+                      [--restart-cmd <shell>] [--skip-restart] [--dry-run]
+  px release:status [--deploy-root <dir>] [--json]
 
 Examples:
   px new my-app
+  px migrate
+  px rollback --step 2
+  px fresh --seed
   px make:model Post --all
   px make:controller Admin/ReportController --resource
   px make:page posts/index
+  px make:command Update
+  px release --version 0.1.0 --tarball
+  px release:install --tarball ./app-0.1.0.tar.gz --version 0.1.0
+  px release:status
 ";
 
 #[tokio::main]
@@ -54,14 +85,13 @@ async fn run(raw: Vec<OsString>) -> Result<(), String> {
     }
     let command = arguments.remove(0);
     match command.as_str() {
-        "dev" => {
-            require_empty(&arguments)?;
-            DevSupervisor::new(DevConfig::default())
-                .run()
-                .await
-                .map_err(|error| error.to_string())
-        }
+        "dev" => dev(arguments).await,
         "new" => new_project(arguments),
+        "migrate" => database_command("migrate", &no_options(&arguments)?),
+        "status" => database_command("status", &no_options(&arguments)?),
+        "rollback" => database_command("rollback", &rollback_options(&arguments)?),
+        "fresh" => database_command("fresh", &fresh_options(&arguments)?),
+        "seed" => database_command("seed", &no_options(&arguments)?),
         "make:controller" => make_controller(arguments),
         "make:model" => make_model(arguments),
         "make:migration" => make_simple(arguments, |generator, name, options| {
@@ -82,12 +112,105 @@ async fn run(raw: Vec<OsString>) -> Result<(), String> {
         "make:island" => make_simple(arguments, |generator, name, options| {
             generator.island(name, options)
         }),
+        "make:command" => make_simple(arguments, |generator, name, options| {
+            generator.command(name, options)
+        }),
         "list" => {
             require_empty(&arguments)?;
             print!("{HELP}");
             Ok(())
         }
+        "release" | "release:build" => release_build(arguments),
+        "release:install" => release_install(arguments),
+        "release:rollback" => release_rollback(arguments),
+        "release:status" => release_status(arguments),
         _ => Err(format!("unknown command `{command}`\n\n{HELP}")),
+    }
+}
+
+async fn dev(arguments: Vec<String>) -> Result<(), String> {
+    require_empty(&arguments)?;
+    let generator = current_generator()?;
+    if !generator.root().join("node_modules").is_dir() {
+        return Err("JavaScript dependencies are missing; run `npm install` first".to_owned());
+    }
+
+    println!("Phoenix development environment");
+    println!("  application: {}", generator.root().display());
+    println!("  backend:     cargo run -- serve");
+    println!("  frontend:    npm run dev -- --strictPort");
+    println!("Press Ctrl-C to stop both processes.\n");
+
+    DevSupervisor::new(DevConfig::default().working_directory(generator.root()))
+        .run()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn database_command(command: &str, arguments: &[String]) -> Result<(), String> {
+    let generator = current_generator()?;
+    let manager = generator.root().join("src/bin/phoenix-manage.rs");
+    if !manager.is_file() {
+        return Err(format!(
+            "{} is missing; add the Phoenix management binary before running database commands",
+            manager.display()
+        ));
+    }
+
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let status = Command::new(cargo)
+        .args(["run", "--quiet", "--bin", "phoenix-manage", "--", command])
+        .args(arguments)
+        .current_dir(generator.root())
+        .status()
+        .map_err(|error| format!("failed to start the project management binary: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "project management command `{command}` exited with {status}"
+        ))
+    }
+}
+
+fn no_options(arguments: &[String]) -> Result<Vec<String>, String> {
+    require_empty(arguments)?;
+    Ok(Vec::new())
+}
+
+fn rollback_options(arguments: &[String]) -> Result<Vec<String>, String> {
+    let mut steps = 1_usize;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--step" {
+            index += 1;
+            let value = arguments.get(index).ok_or("--step requires a count")?;
+            steps = parse_steps(value)?;
+        } else if let Some(value) = argument.strip_prefix("--step=") {
+            steps = parse_steps(value)?;
+        } else {
+            return Err(format!("unknown rollback option `{argument}`"));
+        }
+        index += 1;
+    }
+    Ok(vec![steps.to_string()])
+}
+
+fn parse_steps(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|steps| *steps > 0)
+        .ok_or_else(|| "rollback step count must be a positive integer".to_owned())
+}
+
+fn fresh_options(arguments: &[String]) -> Result<Vec<String>, String> {
+    match arguments {
+        [] => Ok(Vec::new()),
+        [option] if option == "--seed" => Ok(vec![option.clone()]),
+        [option] => Err(format!("unknown fresh option `{option}`")),
+        _ => Err(format!("unexpected arguments: {}", arguments.join(" "))),
     }
 }
 

@@ -5,19 +5,29 @@ members = [
     "crates/phoenix-core",
     "crates/phoenix-crypto",
     "crates/phoenix-cli",
+    "crates/phoenix-config",
+    "crates/phoenix-console",
     "crates/phoenix-database",
     "crates/phoenix-dx",
     "crates/phoenix-dx-macros",
     "crates/phoenix-http",
     "crates/phoenix-logging",
     "crates/phoenix-macros",
+    "crates/phoenix-mail",
     "crates/phoenix-metrics",
+    "crates/phoenix-plugin",
+    "crates/phoenix-queue",
+    "crates/phoenix-redis",
+    "crates/phoenix-release",
     "crates/phoenix-routing",
     "crates/phoenix-security",
+    "crates/phoenix-storage",
+    "crates/phoenix-testing",
     "crates/phoenix-validation",
     "crates/phoenix-view",
     "examples/blog",
     "examples/multi-app",
+    "examples/plugin-greeter",
 ]
 resolver = "3"
 
@@ -26,23 +36,28 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.95"
 version = "0.1.0"
+authors = ["ApiZero <api@zerois.cn>"]
+homepage = "https://apizero.cn/"
+repository = "https://github.com/ApiZero/Phoenix-rs"
 
 [workspace.dependencies]
 aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"
 bytes = "1"
+dotenvy = "0.15"
 futures-util = "0.3"
 http = "1"
 http-body-util = "0.1"
 hmac = "0.13"
 hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["http1", "http2", "server", "server-auto", "tokio"] }
-jsonwebtoken = { version = "10.4", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc_rs"] }
 matchit = "0.8"
 mime = "0.3"
 percent-encoding = "2"
 rand = "0.10"
+redis = { version = "0.32", features = ["aio", "connection-manager", "tokio-comp"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
 serde = { version = "1", features = ["derive"] }
@@ -55,7 +70,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 zeroize = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-toasty = { version = "0.8", features = ["migration", "postgresql", "serde", "sqlite"] }
+toasty = { version = "0.8", features = ["migration", "mysql", "postgresql", "serde", "sqlite"] }
+toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

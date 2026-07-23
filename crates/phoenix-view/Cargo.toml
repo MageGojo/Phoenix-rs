@@ -5,21 +5,24 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 aes-gcm.workspace = true
 base64.workspace = true
 futures-util.workspace = true
-phoenix-http = { path = "../phoenix-http" }
-phoenix-metrics = { path = "../phoenix-metrics" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-metrics = { version = "0.1.0", path = "../phoenix-metrics" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-phoenix-routing = { path = "../phoenix-routing" }
-phoenix-security = { path = "../phoenix-security" }
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-security = { version = "0.1.0", path = "../phoenix-security" }
 
 [lints]
 workspace = true

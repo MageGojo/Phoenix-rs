@@ -156,3 +156,16 @@ async fn postgresql_crud_relations_and_pagination_when_configured() {
         .unwrap();
     exercise_database(database).await;
 }
+
+#[tokio::test]
+async fn mysql_crud_relations_and_pagination_when_configured() {
+    let Ok(url) = std::env::var("PHOENIX_TEST_MYSQL_URL") else {
+        return;
+    };
+    let database = Database::builder(models!(Author))
+        .table_prefix("phoenix_contract_")
+        .connect(&url)
+        .await
+        .unwrap();
+    exercise_database(database).await;
+}

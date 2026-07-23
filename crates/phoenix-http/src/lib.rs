@@ -4,6 +4,7 @@ use std::{
     future::Future,
     net::SocketAddr,
     ops::{Deref, DerefMut},
+    panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -19,6 +20,19 @@ pub use mime::Mime;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
+#[doc(hidden)]
+pub use tokio_util::sync::CancellationToken as ResponseCancellationToken;
+
+mod sse;
+mod ws;
+
+pub use sse::{
+    InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError, SseEvent,
+};
+pub use ws::{
+    CloseCode, CloseFrame, ConnectionUpgrade, Message, WebSocket, WebSocketConfigError,
+    WebSocketError, WebSocketUpgrade, WebSocketUpgradeRejection,
+};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
@@ -1022,7 +1036,68 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .flatten()
 }
 
-pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send + 'static>>;
+/// A redacted response-stream failure safe to expose at the Hyper boundary.
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("response body stream failed")]
+pub struct ResponseBodyError;
+
+pub type ByteStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, ResponseBodyError>> + Send + 'static>>;
+
+/// Why a response body stopped producing bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResponseBodyOutcome {
+    Complete,
+    StreamError,
+    /// A network-owned body was dropped before EOF without server shutdown.
+    /// This normally means a client disconnect or transport cancellation.
+    DeliveryCancelled,
+    Shutdown,
+    Aborted,
+}
+
+impl ResponseBodyOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::StreamError => "stream_error",
+            Self::DeliveryCancelled => "delivery_cancelled",
+            Self::Shutdown => "shutdown",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
+/// Exactly-once summary emitted when a buffered or streaming response finishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResponseBodySummary {
+    outcome: ResponseBodyOutcome,
+    bytes_yielded: u64,
+}
+
+impl ResponseBodySummary {
+    const fn new(outcome: ResponseBodyOutcome, bytes_yielded: u64) -> Self {
+        Self {
+            outcome,
+            bytes_yielded,
+        }
+    }
+
+    #[must_use]
+    pub const fn outcome(self) -> ResponseBodyOutcome {
+        self.outcome
+    }
+
+    /// Streaming bytes yielded to Hyper, or the prepared length of a buffered body.
+    /// This does not imply that a client acknowledged them.
+    #[must_use]
+    pub const fn bytes_yielded(self) -> u64 {
+        self.bytes_yielded
+    }
+}
+
+type BodyObserver = Box<dyn FnOnce(ResponseBodySummary) + Send + 'static>;
 
 pub enum ResponseBody {
     Buffered(Bytes),
@@ -1041,11 +1116,23 @@ impl std::fmt::Debug for ResponseBody {
     }
 }
 
-#[derive(Debug)]
 pub struct Response {
     status: StatusCode,
     headers: HeaderMap,
-    body: ResponseBody,
+    body: Option<ResponseBody>,
+    body_observers: Vec<BodyObserver>,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Response")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body", &self.body)
+            .field("body_observers", &self.body_observers.len())
+            .finish()
+    }
 }
 
 impl Response {
@@ -1054,7 +1141,8 @@ impl Response {
         Self {
             status,
             headers: HeaderMap::new(),
-            body: ResponseBody::Buffered(body.into()),
+            body: Some(ResponseBody::Buffered(body.into())),
+            body_observers: Vec::new(),
         }
     }
 
@@ -1066,7 +1154,31 @@ impl Response {
         Self {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
-            body: ResponseBody::Stream(Box::pin(stream.map(Ok))),
+            body: Some(ResponseBody::Stream(Box::pin(
+                stream.map(Ok::<_, ResponseBodyError>),
+            ))),
+            body_observers: Vec::new(),
+        }
+    }
+
+    /// Return a streaming response whose source may fail after headers are committed.
+    ///
+    /// Source errors are deliberately converted to a redacted boundary error. The
+    /// connection or HTTP/2 stream terminates and lifecycle observers receive
+    /// [`ResponseBodyOutcome::StreamError`].
+    #[must_use]
+    pub fn try_stream<S, E>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Bytes, E>> + Send + 'static,
+        E: Send + 'static,
+    {
+        Self {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body: Some(ResponseBody::Stream(Box::pin(
+                stream.map(|item| item.map_err(|_| ResponseBodyError)),
+            ))),
+            body_observers: Vec::new(),
         }
     }
 
@@ -1111,7 +1223,7 @@ impl Response {
     /// before inspecting responses that may stream.
     #[must_use]
     pub fn body(&self) -> &Bytes {
-        match &self.body {
+        match self.body.as_ref().expect("response body is available") {
             ResponseBody::Buffered(body) => body,
             ResponseBody::Stream(_) => panic!("streaming response bodies are not buffered"),
         }
@@ -1119,7 +1231,7 @@ impl Response {
 
     #[must_use]
     pub const fn is_streaming(&self) -> bool {
-        matches!(self.body, ResponseBody::Stream(_))
+        matches!(&self.body, Some(ResponseBody::Stream(_)))
     }
 
     #[must_use]
@@ -1145,10 +1257,207 @@ impl Response {
         Ok(self)
     }
 
+    /// Observe the final response-body outcome exactly once.
     #[doc(hidden)]
-    pub fn into_parts(self) -> (StatusCode, HeaderMap, ResponseBody) {
-        (self.status, self.headers, self.body)
+    pub fn on_body_finish<F>(&mut self, observer: F)
+    where
+        F: FnOnce(ResponseBodySummary) + Send + 'static,
+    {
+        match self.body.as_ref().expect("response body is available") {
+            ResponseBody::Buffered(body) => notify_body_observer(
+                Box::new(observer),
+                ResponseBodySummary::new(
+                    ResponseBodyOutcome::Complete,
+                    u64::try_from(body.len()).unwrap_or(u64::MAX),
+                ),
+            ),
+            ResponseBody::Stream(_) => self.body_observers.push(Box::new(observer)),
+        }
     }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub fn into_head(mut self) -> Self {
+        let body = self.body.take().expect("response body is available");
+        match body {
+            ResponseBody::Buffered(body) => {
+                if !self.headers.contains_key(header::CONTENT_LENGTH)
+                    && !self.status.is_informational()
+                    && self.status != StatusCode::NO_CONTENT
+                {
+                    self.headers.insert(
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from_str(&body.len().to_string())
+                            .expect("a byte length is a valid header value"),
+                    );
+                }
+            }
+            ResponseBody::Stream(_) => notify_body_observers(
+                std::mem::take(&mut self.body_observers),
+                ResponseBodySummary::new(ResponseBodyOutcome::Complete, 0),
+            ),
+        }
+        self.body = Some(ResponseBody::Buffered(Bytes::new()));
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn into_parts(mut self) -> (StatusCode, HeaderMap, ResponseBody) {
+        self.take_parts(None)
+    }
+
+    #[doc(hidden)]
+    pub fn into_network_parts(
+        mut self,
+        cancellation: ResponseCancellationToken,
+    ) -> (StatusCode, HeaderMap, ResponseBody) {
+        self.take_parts(Some(cancellation))
+    }
+
+    fn take_parts(
+        &mut self,
+        cancellation: Option<ResponseCancellationToken>,
+    ) -> (StatusCode, HeaderMap, ResponseBody) {
+        let mut body = self
+            .body
+            .take()
+            .expect("response body can only be consumed once");
+        if let ResponseBody::Stream(stream) = body {
+            body = if self.body_observers.is_empty() && cancellation.is_none() {
+                ResponseBody::Stream(stream)
+            } else {
+                ResponseBody::Stream(Box::pin(LifecycleStream::new(
+                    stream,
+                    std::mem::take(&mut self.body_observers),
+                    cancellation,
+                )))
+            };
+        }
+        (self.status, std::mem::take(&mut self.headers), body)
+    }
+}
+
+impl Drop for Response {
+    fn drop(&mut self) {
+        if matches!(self.body, Some(ResponseBody::Stream(_))) {
+            notify_body_observers(
+                std::mem::take(&mut self.body_observers),
+                ResponseBodySummary::new(ResponseBodyOutcome::Aborted, 0),
+            );
+        }
+    }
+}
+
+struct LifecycleStream {
+    inner: ByteStream,
+    observers: Vec<BodyObserver>,
+    cancellation: Option<ResponseCancellationToken>,
+    cancellation_wait: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
+    bytes_yielded: u64,
+    finished: bool,
+}
+
+impl LifecycleStream {
+    fn new(
+        inner: ByteStream,
+        observers: Vec<BodyObserver>,
+        cancellation: Option<ResponseCancellationToken>,
+    ) -> Self {
+        let cancellation_wait = cancellation.as_ref().map(|token| {
+            Box::pin(token.clone().cancelled_owned())
+                as Pin<Box<dyn Future<Output = ()> + Send + 'static>>
+        });
+        Self {
+            inner,
+            observers,
+            cancellation,
+            cancellation_wait,
+            bytes_yielded: 0,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self, outcome: ResponseBodyOutcome) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        notify_body_observers(
+            std::mem::take(&mut self.observers),
+            ResponseBodySummary::new(outcome, self.bytes_yielded),
+        );
+    }
+}
+
+impl Stream for LifecycleStream {
+    type Item = Result<Bytes, ResponseBodyError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+        if this.finished {
+            return Poll::Ready(None);
+        }
+        if this
+            .cancellation_wait
+            .as_mut()
+            .is_some_and(|wait| wait.as_mut().poll(context).is_ready())
+        {
+            this.finish(ResponseBodyOutcome::Shutdown);
+            return Poll::Ready(None);
+        }
+
+        match catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll_next(context))) {
+            Ok(Poll::Ready(Some(Ok(chunk)))) => {
+                this.bytes_yielded = this
+                    .bytes_yielded
+                    .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Ok(Poll::Ready(Some(Err(error)))) => {
+                this.finish(ResponseBodyOutcome::StreamError);
+                Poll::Ready(Some(Err(error)))
+            }
+            Ok(Poll::Ready(None)) => {
+                this.finish(ResponseBodyOutcome::Complete);
+                Poll::Ready(None)
+            }
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(_) => {
+                this.finish(ResponseBodyOutcome::StreamError);
+                Poll::Ready(Some(Err(ResponseBodyError)))
+            }
+        }
+    }
+}
+
+impl Drop for LifecycleStream {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let outcome = if self
+            .cancellation
+            .as_ref()
+            .is_some_and(ResponseCancellationToken::is_cancelled)
+        {
+            ResponseBodyOutcome::Shutdown
+        } else if self.cancellation.is_some() {
+            ResponseBodyOutcome::DeliveryCancelled
+        } else {
+            ResponseBodyOutcome::Aborted
+        };
+        self.finish(outcome);
+    }
+}
+
+fn notify_body_observers(observers: Vec<BodyObserver>, summary: ResponseBodySummary) {
+    for observer in observers {
+        notify_body_observer(observer, summary);
+    }
+}
+
+fn notify_body_observer(observer: BodyObserver, summary: ResponseBodySummary) {
+    let _ = catch_unwind(AssertUnwindSafe(|| observer(summary)));
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1496,7 +1805,7 @@ impl IntoResponse for MultipartRejection {
     }
 }
 
-fn rejection_response(status: StatusCode, message: &str) -> Response {
+pub(crate) fn rejection_response(status: StatusCode, message: &str) -> Response {
     #[derive(Serialize)]
     struct RejectionBody<'a> {
         message: &'a str,
@@ -1769,6 +2078,7 @@ pub fn apply_middleware(
 mod tests {
     use futures_util::stream;
     use serde::Deserialize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -2068,6 +2378,169 @@ mod tests {
             assert_eq!(body.into_bytes().await, Err(error));
             assert_eq!(error.into_response().status(), expected_status);
         }
+    }
+
+    #[tokio::test]
+    async fn response_body_lifecycle_reports_exactly_one_redacted_outcome() {
+        fn observer(
+            observed: &Arc<Mutex<Vec<ResponseBodySummary>>>,
+        ) -> impl FnOnce(ResponseBodySummary) + Send + 'static {
+            let observed = Arc::clone(observed);
+            move |summary| observed.lock().unwrap().push(summary)
+        }
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut buffered = Response::text("body");
+        buffered.on_body_finish(observer(&observed));
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(ResponseBodyOutcome::Complete, 4)]
+        );
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut complete = Response::stream(stream::iter([
+            Bytes::from_static(b"one"),
+            Bytes::from_static(b"two"),
+        ]));
+        complete
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("6"));
+        complete.on_body_finish(observer(&observed));
+        let (_, headers, body) = complete.into_parts();
+        assert_eq!(headers[header::CONTENT_LENGTH], "6");
+        let ResponseBody::Stream(stream) = body else {
+            panic!("expected stream");
+        };
+        assert_eq!(stream.collect::<Vec<_>>().await.len(), 2);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(ResponseBodyOutcome::Complete, 6)]
+        );
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut failed = Response::try_stream(stream::iter([
+            Ok::<_, &'static str>(Bytes::from_static(b"partial")),
+            Err("private failure details"),
+        ]));
+        failed.on_body_finish(observer(&observed));
+        let (_, _, body) = failed.into_parts();
+        let ResponseBody::Stream(stream) = body else {
+            panic!("expected stream");
+        };
+        let chunks = stream.collect::<Vec<_>>().await;
+        assert_eq!(
+            chunks[1].as_ref().unwrap_err().to_string(),
+            "response body stream failed"
+        );
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(
+                ResponseBodyOutcome::StreamError,
+                7,
+            )]
+        );
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut panicking = Response::stream(stream::poll_fn(|_| -> Poll<Option<Bytes>> {
+            panic!("private stream panic")
+        }));
+        panicking.on_body_finish(observer(&observed));
+        let (_, _, body) = panicking.into_parts();
+        let ResponseBody::Stream(mut stream) = body else {
+            panic!("expected stream");
+        };
+        assert!(stream.next().await.unwrap().is_err());
+        assert!(stream.next().await.is_none());
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(
+                ResponseBodyOutcome::StreamError,
+                0,
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn network_stream_lifecycle_distinguishes_disconnect_shutdown_and_abort() {
+        fn observed_response(observed: &Arc<Mutex<Vec<ResponseBodySummary>>>) -> Response {
+            let mut response = Response::stream(stream::pending::<Bytes>());
+            let observed = Arc::clone(observed);
+            response.on_body_finish(move |summary| observed.lock().unwrap().push(summary));
+            response
+        }
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        drop(observed_response(&observed));
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(ResponseBodyOutcome::Aborted, 0)]
+        );
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (_, _, body) =
+            observed_response(&observed).into_network_parts(ResponseCancellationToken::new());
+        drop(body);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(
+                ResponseBodyOutcome::DeliveryCancelled,
+                0,
+            )]
+        );
+
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let cancellation = ResponseCancellationToken::new();
+        let (_, _, body) = observed_response(&observed).into_network_parts(cancellation.clone());
+        let ResponseBody::Stream(mut stream) = body else {
+            panic!("expected stream");
+        };
+        cancellation.cancel();
+        assert!(stream.next().await.is_none());
+        drop(stream);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(ResponseBodyOutcome::Shutdown, 0)]
+        );
+    }
+
+    #[test]
+    fn head_suppresses_bodies_without_losing_representation_length() {
+        let buffered = Response::text("hello").into_head();
+        assert!(buffered.body().is_empty());
+        assert_eq!(buffered.headers()[header::CONTENT_LENGTH], "5");
+
+        let mut explicit = Response::text("hello");
+        explicit
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("99"));
+        let explicit = explicit.into_head();
+        assert_eq!(explicit.headers()[header::CONTENT_LENGTH], "99");
+
+        let no_content = Response::text("ignored")
+            .with_status(StatusCode::NO_CONTENT)
+            .into_head();
+        assert!(!no_content.headers().contains_key(header::CONTENT_LENGTH));
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let source_polls = Arc::clone(&polls);
+        let mut stream = Response::stream(stream::poll_fn(move |_| {
+            source_polls.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(Some(Bytes::from_static(b"unexpected")))
+        }));
+        stream
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("10"));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_observed = Arc::clone(&observed);
+        stream.on_body_finish(move |summary| callback_observed.lock().unwrap().push(summary));
+        let stream = stream.into_head();
+        assert!(stream.body().is_empty());
+        assert_eq!(stream.headers()[header::CONTENT_LENGTH], "10");
+        assert_eq!(polls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            *observed.lock().unwrap(),
+            [ResponseBodySummary::new(ResponseBodyOutcome::Complete, 0)]
+        );
     }
 
     #[test]

@@ -11,13 +11,21 @@ use std::{
 };
 
 use phoenix_http::{
-    BoxFuture, IntoResponse, Method, Middleware, Next, Request, Response, StatusCode,
+    BoxFuture, IntoResponse, Method, Middleware, Next, Request, Response, ResponseBodyOutcome,
+    ResponseBodySummary, StatusCode,
 };
 
 const METHODS: [&str; 9] = [
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "OTHER",
 ];
 const STATUS_CLASSES: [&str; 6] = ["1xx", "2xx", "3xx", "4xx", "5xx", "other"];
+const RESPONSE_OUTCOMES: [&str; 5] = [
+    "complete",
+    "stream_error",
+    "delivery_cancelled",
+    "shutdown",
+    "aborted",
+];
 const DURATION_BUCKETS_MS: [u64; 11] = [5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000];
 
 struct Inner {
@@ -26,6 +34,7 @@ struct Inner {
     request_duration_count: AtomicU64,
     request_duration_micros: AtomicU64,
     active_requests: AtomicI64,
+    response_terminations: [AtomicU64; RESPONSE_OUTCOMES.len()],
     connections_total: AtomicU64,
     active_connections: AtomicI64,
     tls_success: AtomicU64,
@@ -50,6 +59,7 @@ impl Default for Inner {
             request_duration_count: AtomicU64::new(0),
             request_duration_micros: AtomicU64::new(0),
             active_requests: AtomicI64::new(0),
+            response_terminations: array::from_fn(|_| AtomicU64::new(0)),
             connections_total: AtomicU64::new(0),
             active_connections: AtomicI64::new(0),
             tls_success: AtomicU64::new(0),
@@ -230,6 +240,19 @@ impl Metrics {
             "phoenix_http_request_duration_seconds_count {count}"
         )
         .expect("writing to a String cannot fail");
+        output.push_str(
+            "# HELP phoenix_http_response_terminations_total Final response body outcomes.\n",
+        );
+        output.push_str("# TYPE phoenix_http_response_terminations_total counter\n");
+        for (index, outcome) in RESPONSE_OUTCOMES.iter().enumerate() {
+            labeled_counter(
+                &mut output,
+                "phoenix_http_response_terminations_total",
+                "outcome",
+                outcome,
+                self.0.response_terminations[index].load(Ordering::Relaxed),
+            );
+        }
         counter(
             &mut output,
             "phoenix_connections_total",
@@ -328,6 +351,7 @@ impl Metrics {
         RequestGuard {
             metrics: self.clone(),
             started: Instant::now(),
+            active: true,
         }
     }
 }
@@ -345,10 +369,11 @@ impl Drop for ConnectionGuard {
 struct RequestGuard {
     metrics: Metrics,
     started: Instant,
+    active: bool,
 }
 
 impl RequestGuard {
-    fn complete(self, method: &Method, status: StatusCode) {
+    fn complete(mut self, method: &Method, status: StatusCode, summary: ResponseBodySummary) {
         let method = method_index(method);
         let status = status_index(status);
         self.metrics.0.requests[method * STATUS_CLASSES.len() + status]
@@ -369,10 +394,30 @@ impl RequestGuard {
             u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
-        self.metrics
-            .0
-            .active_requests
-            .fetch_sub(1, Ordering::Relaxed);
+        self.metrics.0.response_terminations[response_outcome_index(summary.outcome())]
+            .fetch_add(1, Ordering::Relaxed);
+        self.release();
+    }
+
+    fn release(&mut self) {
+        if self.active {
+            self.active = false;
+            self.metrics
+                .0
+                .active_requests
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.metrics.0.response_terminations
+                [response_outcome_index(ResponseBodyOutcome::Aborted)]
+            .fetch_add(1, Ordering::Relaxed);
+            self.release();
+        }
     }
 }
 
@@ -394,8 +439,11 @@ impl Middleware for MetricsMiddleware {
         Box::pin(async move {
             let method = request.method().clone();
             let guard = metrics.request_started();
-            let response = next.run(request).await;
-            guard.complete(&method, response.status());
+            let mut response = next.run(request).await;
+            let status = response.status();
+            response.on_body_finish(move |summary| {
+                guard.complete(&method, status, summary);
+            });
             response
         })
     }
@@ -449,6 +497,16 @@ fn status_index(status: StatusCode) -> usize {
     }
 }
 
+const fn response_outcome_index(outcome: ResponseBodyOutcome) -> usize {
+    match outcome {
+        ResponseBodyOutcome::Complete => 0,
+        ResponseBodyOutcome::StreamError => 1,
+        ResponseBodyOutcome::DeliveryCancelled => 2,
+        ResponseBodyOutcome::Shutdown => 3,
+        ResponseBodyOutcome::Aborted => 4,
+    }
+}
+
 fn counter(output: &mut String, name: &str, value: u64) {
     writeln!(output, "# TYPE {name} counter\n{name} {value}")
         .expect("writing to a String cannot fail");
@@ -497,6 +555,8 @@ fn renderer_metrics(output: &mut String, renderer: &RendererAtomics) {
 
 #[cfg(test)]
 mod tests {
+    use futures_util::{StreamExt, stream};
+    use phoenix_http::{Bytes, ResponseBody};
     use phoenix_routing::Routes;
 
     use super::*;
@@ -531,5 +591,38 @@ mod tests {
             metrics.response().headers()[phoenix_http::header::CONTENT_TYPE],
             "text/plain; version=0.0.4; charset=utf-8"
         );
+    }
+
+    #[tokio::test]
+    async fn streaming_requests_remain_active_until_the_body_finishes() {
+        let metrics = Metrics::new();
+        let router = Routes::new()
+            .get("/stream", |_request: Request| async {
+                Response::stream(stream::iter([
+                    Bytes::from_static(b"first"),
+                    Bytes::from_static(b"second"),
+                ]))
+            })
+            .with_middleware(MetricsMiddleware::new(metrics.clone()))
+            .build()
+            .unwrap();
+        let response = router
+            .handle(Request::new(Method::GET, "/stream".parse().unwrap()))
+            .await;
+
+        let before = metrics.render();
+        assert!(before.contains("phoenix_http_active_requests 1"));
+        assert!(!before.contains("method=\"GET\",status_class=\"2xx\"} 1"));
+        let (_, _, body) = response.into_parts();
+        let ResponseBody::Stream(stream) = body else {
+            panic!("expected stream");
+        };
+        let chunks = stream.collect::<Vec<_>>().await;
+        assert_eq!(chunks.len(), 2);
+
+        let after = metrics.render();
+        assert!(after.contains("phoenix_http_active_requests 0"));
+        assert!(after.contains("method=\"GET\",status_class=\"2xx\"} 1"));
+        assert!(after.contains("phoenix_http_response_terminations_total{outcome=\"complete\"} 1"));
     }
 }

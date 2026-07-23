@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 aes-gcm.workspace = true
@@ -13,7 +16,7 @@ base64.workspace = true
 http.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
-phoenix-http = { path = "../phoenix-http" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,7 +25,7 @@ thiserror.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-phoenix-routing = { path = "../phoenix-routing" }
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
 tokio.workspace = true
 
 [lints]

@@ -150,6 +150,18 @@ impl Routes {
         self
     }
 
+    /// Number of route declarations currently registered (before [`Self::build`]).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.definitions.len()
+    }
+
+    /// Return true when no route declarations are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.definitions.is_empty()
+    }
+
     /// Merge declarations from another route file while preserving their
     /// registration order. Global middleware from `other` remains scoped to
     /// the imported declarations.
@@ -668,10 +680,7 @@ impl RouterInner {
                 request.set_route(route.name.clone(), params);
                 let response = route.handler.call(request).await;
                 return if is_head {
-                    let (status, headers, _) = response.into_parts();
-                    let mut response = Response::new(status, Bytes::new());
-                    *response.headers_mut() = headers;
-                    response
+                    response.into_head()
                 } else {
                     response
                 };

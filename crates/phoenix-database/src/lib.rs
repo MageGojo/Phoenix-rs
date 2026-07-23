@@ -22,6 +22,7 @@ pub use toasty::{
 pub enum Backend {
     SQLite,
     PostgreSQL,
+    MySQL,
 }
 
 /// A Toasty database handle with Phoenix deployment metadata.
@@ -93,7 +94,7 @@ impl DerefMut for Database {
     }
 }
 
-/// Connection and pool configuration shared by `SQLite` and `PostgreSQL`.
+/// Connection and pool configuration shared by SQL backends.
 pub struct DatabaseBuilder {
     inner: toasty::db::Builder,
 }
@@ -119,7 +120,7 @@ impl DatabaseBuilder {
         self
     }
 
-    /// Connect using a `sqlite:` or `postgresql:` URL.
+    /// Connect using a `sqlite:`, `postgresql:`, or `mysql:` URL.
     ///
     /// # Errors
     ///
@@ -158,6 +159,7 @@ fn backend_from_url(url: &str) -> Result<Backend, DatabaseError> {
     match scheme {
         "sqlite" => Ok(Backend::SQLite),
         "postgres" | "postgresql" => Ok(Backend::PostgreSQL),
+        "mysql" => Ok(Backend::MySQL),
         _ => Err(DatabaseError::UnsupportedBackend(scheme.to_owned())),
     }
 }
@@ -207,7 +209,7 @@ impl DerefMut for TestDatabase {
 /// Database setup error with stable Phoenix categories.
 #[derive(Debug, Error)]
 pub enum DatabaseError {
-    #[error("unsupported database URL scheme `{0}`; expected sqlite or postgresql")]
+    #[error("unsupported database URL scheme `{0}`; expected sqlite, postgresql, or mysql")]
     UnsupportedBackend(String),
     #[error("database operation failed: {0}")]
     Toasty(#[from] toasty::Error),
@@ -256,6 +258,10 @@ mod tests {
             backend_from_url("postgresql://db.invalid/app").unwrap(),
             Backend::PostgreSQL
         );
-        assert!(backend_from_url("mysql://db.invalid/app").is_err());
+        assert_eq!(
+            backend_from_url("mysql://db.invalid/app").unwrap(),
+            Backend::MySQL
+        );
+        assert!(backend_from_url("redis://db.invalid/app").is_err());
     }
 }

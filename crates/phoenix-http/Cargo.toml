@@ -5,20 +5,27 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
-futures-util.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
 http.workspace = true
+hyper.workspace = true
+hyper-util = { workspace = true, features = ["tokio"] }
 mime.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_urlencoded.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
-tokio.workspace = true
 
 [lints]
 workspace = true

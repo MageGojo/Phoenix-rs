@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
-phoenix-dx-macros = { path = "../phoenix-dx-macros" }
-phoenix-http = { path = "../phoenix-http" }
-phoenix-routing = { path = "../phoenix-routing" }
+phoenix-dx-macros = { version = "0.1.0", path = "../phoenix-dx-macros" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
 thiserror.workspace = true
 
 [dev-dependencies]

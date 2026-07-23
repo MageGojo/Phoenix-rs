@@ -5,12 +5,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
-phoenix-http = { path = "../phoenix-http" }
+phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 
 [dev-dependencies]
-phoenix-routing = { path = "../phoenix-routing" }
+futures-util.workspace = true
+phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
 tokio.workspace = true
 
 [lints]

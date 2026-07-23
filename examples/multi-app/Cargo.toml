@@ -8,7 +8,7 @@ version.workspace = true
 publish = false
 
 [dependencies]
-phoenix = { path = "../../crates/phoenix" }
+phoenix = { version = "0.1.0", package = "phoenixrs", path = "../../crates/phoenix" }
 tokio.workspace = true
 
 [lints]

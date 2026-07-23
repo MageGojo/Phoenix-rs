@@ -18,7 +18,8 @@ use futures_util::FutureExt;
 use http::uri::Authority;
 use phoenix_http::{
     BoxFuture, Bytes, ConnectionInfo, CspNonce, HeaderMap, HeaderName, HeaderValue, Method,
-    Middleware, Next, Request, Response, StatusCode, TransportScheme, Uri, header,
+    Middleware, Next, Request, Response, ResponseBodyOutcome, ResponseBodySummary, StatusCode,
+    TransportScheme, Uri, header,
 };
 use phoenix_metrics::Metrics;
 use serde_json::Value;
@@ -1797,28 +1798,67 @@ pub struct AccessLog;
 
 impl Middleware for AccessLog {
     fn handle(&self, request: Request, next: Next) -> BoxFuture<Response> {
-        let method = request.method().clone();
-        let path = request.uri().path().to_owned();
-        let request_id = request
-            .extensions()
-            .get::<RequestIdValue>()
-            .map_or_else(|| "missing".to_owned(), |value| value.0.clone());
-        let client_ip = request.extensions().get::<ClientIp>().map(|value| value.0);
+        let guard = AccessLogGuard {
+            method: request.method().clone(),
+            path: request.uri().path().to_owned(),
+            request_id: request
+                .extensions()
+                .get::<RequestIdValue>()
+                .map_or_else(|| "missing".to_owned(), |value| value.0.clone()),
+            client_ip: request.extensions().get::<ClientIp>().map(|value| value.0),
+            started: Instant::now(),
+            status: None,
+            finished: false,
+        };
         Box::pin(async move {
-            let started = Instant::now();
-            let response = next.run(request).await;
-            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            tracing::info!(
-                http.method = %method,
-                http.path = %path,
-                http.status = response.status().as_u16(),
-                duration_ms,
-                request_id,
-                client_ip = ?client_ip,
-                "request completed"
-            );
+            let mut guard = guard;
+            let mut response = next.run(request).await;
+            guard.status = Some(response.status());
+            response.on_body_finish(move |summary| guard.finish(summary));
             response
         })
+    }
+}
+
+struct AccessLogGuard {
+    method: Method,
+    path: String,
+    request_id: String,
+    client_ip: Option<IpAddr>,
+    started: Instant,
+    status: Option<StatusCode>,
+    finished: bool,
+}
+
+impl AccessLogGuard {
+    fn finish(mut self, summary: ResponseBodySummary) {
+        self.finished = true;
+        self.emit(summary.outcome(), summary.bytes_yielded());
+    }
+
+    fn emit(&self, outcome: ResponseBodyOutcome, body_bytes: u64) {
+        let duration_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        tracing::info!(
+            http.method = %self.method,
+            http.path = %self.path,
+            http.status = self.status.map_or(0, |status| status.as_u16()),
+            http.response_available = self.status.is_some(),
+            duration_ms,
+            request_id = %self.request_id,
+            client_ip = ?self.client_ip,
+            body_outcome = outcome.as_str(),
+            response_body_bytes_yielded = body_bytes,
+            "request finished"
+        );
+    }
+}
+
+impl Drop for AccessLogGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.finished = true;
+            self.emit(ResponseBodyOutcome::Aborted, 0);
+        }
     }
 }
 
