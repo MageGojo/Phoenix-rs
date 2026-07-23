@@ -9,10 +9,14 @@ use phoenix::prelude::{
 use serde_json::json;
 
 use crate::{
+    auth,
     middleware::AuthorizedAdmin,
-    props::{MembersPageProps, SharedProps},
-    requests::{StoreMemberInput, registration_validator},
-    resources::{MemberResource, MemberStatus},
+    props::{AdminDashboardProps, MembersPageProps, SharedProps},
+    requests::{LoginInput, PasswordResetInput, StoreMemberInput, registration_validator},
+    resources::{
+        AdminUserResource, AuditEventResource, AuthMessageResource, AuthTokenResource,
+        MemberResource, MemberStatus,
+    },
 };
 
 pub struct HealthController;
@@ -66,15 +70,86 @@ impl RegistrationController {
     }
 }
 
+pub struct AuthController;
+
+impl AuthController {
+    pub async fn login(Validated(Json(input)): Validated<Json<LoginInput>>) -> Response {
+        match auth::authenticate(&input.email, &input.password) {
+            Some(user) => Json(AuthTokenResource {
+                token_type: "Bearer".to_owned(),
+                subject: user.email.to_owned(),
+                role: user.role.to_owned(),
+                expires_in_seconds: 900,
+            })
+            .into_response(),
+            None => (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthMessageResource {
+                    message: "Invalid credentials.".to_owned(),
+                }),
+            )
+                .into_response(),
+        }
+    }
+
+    pub async fn logout(_request: Request) -> Json<AuthMessageResource> {
+        Json(AuthMessageResource {
+            message: "Signed out.".to_owned(),
+        })
+    }
+
+    pub async fn request_password_reset(
+        Validated(Json(_input)): Validated<Json<PasswordResetInput>>,
+    ) -> (StatusCode, Json<AuthMessageResource>) {
+        (
+            StatusCode::ACCEPTED,
+            Json(AuthMessageResource {
+                message: "If the account exists, reset instructions will be sent.".to_owned(),
+            }),
+        )
+    }
+}
+
 pub struct AdminController;
 
 impl AdminController {
-    pub async fn dashboard(request: Request) -> &'static str {
-        if request.extensions().get::<AuthorizedAdmin>().is_some() {
-            "admin dashboard"
-        } else {
-            "missing authorization context"
+    pub async fn dashboard(request: Request, renderer: NodeRenderer) -> Response {
+        if request.extensions().get::<AuthorizedAdmin>().is_none() {
+            return Response::text("Unauthorized").with_status(StatusCode::UNAUTHORIZED);
         }
+
+        let page = Page::new(
+            "admin/dashboard",
+            AdminDashboardProps {
+                users: auth::users()
+                    .into_iter()
+                    .map(|user| AdminUserResource {
+                        id: user.id,
+                        name: user.name.to_owned(),
+                        email: user.email.to_owned(),
+                        role: user.role.to_owned(),
+                        locked: user.locked,
+                    })
+                    .collect(),
+                audit_events: auth::audit_events()
+                    .into_iter()
+                    .map(|event| AuditEventResource {
+                        id: event.id,
+                        actor: event.actor.to_owned(),
+                        action: event.action.to_owned(),
+                        subject: event.subject.to_owned(),
+                        occurred_at: event.occurred_at.to_owned(),
+                    })
+                    .collect(),
+                active_sessions: 2,
+                pending_password_resets: 1,
+            },
+        )
+        .shared(SharedProps {
+            framework: "Phoenix".to_owned(),
+        })
+        .mode(RenderMode::Spa);
+        page.respond_with_renderer(&request, &renderer).await
     }
 }
 

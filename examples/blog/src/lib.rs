@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+#[path = "../app/auth.rs"]
+pub mod auth;
 #[path = "../app/controllers/mod.rs"]
 pub mod controllers;
 #[path = "../app/middleware/mod.rs"]

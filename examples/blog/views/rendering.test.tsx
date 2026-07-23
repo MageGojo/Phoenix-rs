@@ -3,7 +3,7 @@ import { renderPage } from "@phoenix/react-ssr";
 import type { PageEnvelope } from "@phoenix/react";
 
 import { routes } from "./generated/routes.js";
-import type { Member, StoreMemberInput } from "./generated/contracts.js";
+import type { AuthMessageResource, AuthTokenResource, LoginInput, Member, PasswordResetInput, StoreMemberInput } from "./generated/contracts.js";
 import ArticleShow from "./pages/articles/show.js";
 import MembersIndex from "./pages/members/index.js";
 
@@ -30,14 +30,23 @@ describe("blog React case", () => {
     expect(routes).toEqual({
       admin: { dashboard: "admin.dashboard" },
       health: "health",
+      login: { store: expect.any(Function) },
+      logout: { store: "logout.store" },
       members: { index: "members.index", store: expect.any(Function) },
+      "password-reset": { store: expect.any(Function) },
       react: { islands: "react.islands", spa: "react.spa", ssr: "react.ssr" },
       register: { store: "register.store" },
       users: { show: "users.show" },
     });
     expect(routes.members.store.routeName).toBe("members.store");
+    expect(routes.login.store.routeName).toBe("login.store");
+    expect(routes["password-reset"].store.routeName).toBe("password-reset.store");
     expectTypeOf(routes.members.store).parameter(0).toEqualTypeOf<StoreMemberInput>();
     expectTypeOf(routes.members.store).returns.toEqualTypeOf<Promise<Member>>();
+    expectTypeOf(routes.login.store).parameter(0).toEqualTypeOf<LoginInput>();
+    expectTypeOf(routes.login.store).returns.toEqualTypeOf<Promise<AuthTokenResource>>();
+    expectTypeOf(routes["password-reset"].store).parameter(0).toEqualTypeOf<PasswordResetInput>();
+    expectTypeOf(routes["password-reset"].store).returns.toEqualTypeOf<Promise<AuthMessageResource>>();
   });
 
   it("discovers article islands while rendering server HTML", () => {

@@ -154,3 +154,57 @@ async fn member_controller_maps_typed_json_rejections() {
         serde_json::from_slice(response.body()).expect("rejection should be JSON");
     assert_eq!(body["message"], "The request body contains invalid JSON.");
 }
+
+#[tokio::test]
+async fn auth_flow_logs_in_logs_out_and_accepts_reset_requests() {
+    let application = phoenix_blog_example::application().expect("routes should build");
+
+    let login = json_request(
+        Method::POST,
+        "/login",
+        br#"{"email":"admin@example.test","password":"phoenix-password"}"#,
+    );
+    let response = application.handle(login).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body["tokenType"], "Bearer");
+    assert_eq!(body["subject"], "admin@example.test");
+    assert_eq!(body["role"], "owner");
+
+    let rejected = json_request(
+        Method::POST,
+        "/login",
+        br#"{"email":"admin@example.test","password":"wrong-password"}"#,
+    );
+    let response = application.handle(rejected).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let reset = json_request(
+        Method::POST,
+        "/password-reset",
+        br#"{"email":"admin@example.test"}"#,
+    );
+    let response = application.handle(reset).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let response = application
+        .handle(Request::new(Method::POST, Uri::from_static("/logout")))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body["message"], "Signed out.");
+}
+
+fn json_request(method: Method, uri: &'static str, body: &'static [u8]) -> Request {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Request::from_parts(
+        method,
+        Uri::from_static(uri),
+        headers,
+        Bytes::from_static(body),
+    )
+}

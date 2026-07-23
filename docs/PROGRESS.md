@@ -438,3 +438,13 @@
 - 目标仓：`ApiZero/Phoenix-rs` @ GitHub 与 GitCode
   状态：文档已就绪，等待用户确认后再上传
 
+
+## 2026-07-24：管理后台 / Auth 示例链路首版
+
+- `examples/blog` 新增 Auth 示例域：固定演示账号、登录、登出、密码重置请求、用户清单与审计事件 fixture。
+- 新增 Rust 契约：`LoginInput`、`PasswordResetInput`、`AuthTokenResource`、`AuthMessageResource`、`AdminUserResource`、`AuditEventResource`、`AdminDashboardProps`。
+- 新增页面：`views/pages/admin/dashboard.tsx`，展示管理后台指标、用户/角色表与审计日志。
+- 路由新增 `/login`、`/logout`、`/password-reset` 与受 `RequireExampleToken` 保护的 `/admin/dashboard` 页面协议链路。
+- 回归覆盖登录成功/失败、登出、密码重置 accepted、admin page envelope 与生成 named action 类型树。
+- 验收：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`、`npm run ci:node` 全部通过。
+  状态：已完成首版@示例；下一步是把示例链路上升为 `px make:auth` / `px make:admin` 生成器与持久化用户模型。

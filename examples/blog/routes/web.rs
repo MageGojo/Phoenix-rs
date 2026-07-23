@@ -6,12 +6,12 @@ use phoenix::prelude::{
 
 use crate::{
     controllers::{
-        AdminController, HealthController, MemberController, ReactController,
+        AdminController, AuthController, HealthController, MemberController, ReactController,
         RegistrationController, UserController,
     },
     middleware::{PoweredByPhoenix, RequireExampleToken},
-    requests::StoreMemberInput,
-    resources::MemberResource,
+    requests::{LoginInput, PasswordResetInput, StoreMemberInput},
+    resources::{AuthMessageResource, AuthTokenResource, MemberResource},
 };
 
 #[must_use]
@@ -24,6 +24,7 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
     let article_renderer = renderer.clone();
     let article_islands_renderer = renderer.clone();
     let member_renderer = renderer.clone();
+    let admin_renderer = renderer.clone();
 
     Routes::new()
         .with_middleware(security_policy())
@@ -34,6 +35,17 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
         .name("users.show")
         .post("/register", RegistrationController::store)
         .name("register.store")
+        .post("/login", typed(AuthController::login))
+        .name("login.store")
+        .action::<LoginInput, AuthTokenResource>()
+        .post("/logout", AuthController::logout)
+        .name("logout.store")
+        .post(
+            "/password-reset",
+            typed(AuthController::request_password_reset),
+        )
+        .name("password-reset.store")
+        .action::<PasswordResetInput, AuthMessageResource>()
         .post("/api/members", typed(MemberController::store))
         .name("members.store")
         .action::<StoreMemberInput, MemberResource>()
@@ -58,7 +70,9 @@ pub fn routes_with_renderer(renderer: &NodeRenderer) -> Routes {
                 .middleware(RequireExampleToken),
             |routes| {
                 routes
-                    .get("/dashboard", AdminController::dashboard)
+                    .get("/dashboard", move |request| {
+                        AdminController::dashboard(request, admin_renderer.clone())
+                    })
                     .name("dashboard")
             },
         )

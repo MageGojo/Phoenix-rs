@@ -61,7 +61,7 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 4. （已完成首版）SSE 收口 + H1 WebSocket；`phoenix-redis`；`phoenix-testing` + `phoenix-storage`。见 PARALLEL_TRACKS / REALTIME / REDIS / TESTING_AND_STORAGE。
 5. （已完成首版）队列、邮件、应用控制台。见 QUEUE.md / MAIL.md / QUEUE_MAIL_CONSOLE.md。
 6. （已完成首版）插件 FeatureSet、发版流水线、品牌 Phoenix-rs（ADR-009/039/040）。见 FEATURES.md / RELEASE_PIPELINE.md。
-7. 管理后台、正式安全评审与 crates.io 发布候选验收。
+7. （已开始首版）管理后台/Auth 示例链路；正式安全评审与 crates.io 发布候选验收。
 
 ## 待验证决策
 
@@ -82,4 +82,4 @@ Laravel 风格 CLI 也已完成：`px new`、`px dev` 和 controller/model/migra
 
 ## Definition of Done
 
-HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC、持久化 token 生命周期、多实例状态 contract、指标 exporter、CSP nonce、流式请求、SSE/H1 WebSocket、队列/邮件/console、Feature 插件与发版流水线已有直接证据。当前下一检查点是 **管理后台**、正式安全评审与 **crates.io 发布候选**。
+HTTP/2、日志、JWT/密码学、多应用、宏、三应用示例、TLS/ALPN、RBAC/ABAC、持久化 token 生命周期、多实例状态 contract、指标 exporter、CSP nonce、流式请求、SSE/H1 WebSocket、队列/邮件/console、Feature 插件与发版流水线已有直接证据。当前下一检查点是把 **管理后台/Auth 示例链路** 上升为生成器与持久化实现，并继续正式安全评审与 **crates.io 发布候选**。

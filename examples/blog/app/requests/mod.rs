@@ -52,3 +52,44 @@ impl Validate for StoreMemberInput {
             .validate()
     }
 }
+
+#[phoenix::contract(input)]
+#[derive(Debug, Deserialize)]
+pub struct LoginInput {
+    pub email: String,
+    pub password: String,
+}
+
+impl Validate for LoginInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({ "email": self.email, "password": self.password });
+        Validator::new(&data)
+            .field(
+                "email",
+                rules![required(), string(), min_length(3), max_length(120)],
+            )
+            .field(
+                "password",
+                rules![required(), string(), min_length(8), max_length(1024)],
+            )
+            .validate()
+    }
+}
+
+#[phoenix::contract(input)]
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetInput {
+    pub email: String,
+}
+
+impl Validate for PasswordResetInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({ "email": self.email });
+        Validator::new(&data)
+            .field(
+                "email",
+                rules![required(), string(), min_length(3), max_length(120)],
+            )
+            .validate()
+    }
+}

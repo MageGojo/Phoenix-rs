@@ -26,10 +26,16 @@ async fn global_and_group_middleware_wrap_controller_responses() {
     request
         .headers_mut()
         .insert("x-example-token", HeaderValue::from_static("secret"));
+    request
+        .headers_mut()
+        .insert("x-phoenix-page", HeaderValue::from_static("1"));
     let response = application.handle(request).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.body(), "admin dashboard");
+    let envelope: phoenix::prelude::PageEnvelope =
+        serde_json::from_slice(response.body()).expect("admin page envelope");
+    assert_eq!(envelope.page, "admin/dashboard");
+    assert_eq!(envelope.props["users"].as_array().unwrap().len(), 3);
     assert_eq!(
         response.headers().get("x-powered-by"),
         Some(&HeaderValue::from_static("Phoenix"))
