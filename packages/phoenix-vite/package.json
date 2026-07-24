@@ -1,6 +1,6 @@
 {
   "name": "@apizero/vite",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Phoenix-rs Vite plugin: page/island discovery and route type generation",
   "license": "MIT",
   "author": "ApiZero",

@@ -79,8 +79,8 @@ pub fn write_staging(
     #[cfg(unix)]
     set_executable(&manage_dest)?;
 
-    copy_tree(&sources.public_assets, &public_dir)?;
-    copy_tree(&sources.public_ssr, &public_dir)?;
+    copy_tree(&sources.public_assets, &staging.join("public/assets"))?;
+    copy_tree(&sources.public_ssr, &staging.join("public/ssr"))?;
     copy_tree(&sources.config, &config_dir)?;
 
     let migration_count = copy_tree(&sources.migrations, &migrations_dir)?;
@@ -343,8 +343,12 @@ mod tests {
         fs::write(&binary, b"bin").unwrap();
         fs::write(&manage, b"manage").unwrap();
 
-        let public = dir.path().join("public");
-        fs::create_dir_all(&public).unwrap();
+        let public_assets = dir.path().join("public/assets");
+        let public_ssr = dir.path().join("public/ssr");
+        fs::create_dir_all(&public_assets).unwrap();
+        fs::create_dir_all(&public_ssr).unwrap();
+        fs::write(public_assets.join("app.js"), b"js").unwrap();
+        fs::write(public_ssr.join("renderer.js"), b"ssr").unwrap();
 
         let staging = dir.path().join("staging");
         let manifest = write_staging(
@@ -365,8 +369,8 @@ mod tests {
             &StagingSources {
                 binary,
                 phoenix_manage: manage,
-                public_assets: public.clone(),
-                public_ssr: public,
+                public_assets,
+                public_ssr,
                 config: dir.path().join("config"),
                 migrations: dir.path().join("migrations"),
             },
@@ -374,7 +378,10 @@ mod tests {
         .unwrap();
 
         assert!(staging.join("bin/demo").is_file());
+        assert!(staging.join("public/assets/app.js").is_file());
+        assert!(staging.join("public/ssr/renderer.js").is_file());
         assert!(manifest.checksums.contains_key("bin/demo"));
+        assert!(manifest.checksums.contains_key("public/assets/app.js"));
 
         let tarball = dir.path().join("demo.tar.gz");
         create_tarball(&staging, &tarball).unwrap();

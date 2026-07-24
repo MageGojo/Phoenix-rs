@@ -1934,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-release"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "serde",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-view"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "phoenixrs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-auth",
  "phoenix-config",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "px-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "nix",
  "notify",

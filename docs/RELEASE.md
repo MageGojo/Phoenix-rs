@@ -108,19 +108,19 @@ git push gitcode main
 | --- | --- | --- | --- |
 | React 客户端 | `@apizero/react` | `packages/phoenix-react` | `…/@apizero/react/-/react-0.1.2.tgz` |
 | SSR renderer | `@apizero/react-ssr` | `packages/phoenix-react-ssr` | `…/@apizero/react-ssr/-/react-ssr-0.1.2.tgz` |
-| Vite 插件 | `@apizero/vite` | `packages/phoenix-vite` | `…/@apizero/vite/-/vite-0.1.2.tgz` |
+| Vite 插件 | `@apizero/vite` | `packages/phoenix-vite` | `…/@apizero/vite/-/vite-0.1.3.tgz` |
 
-说明：2026-07-24 实测 `npm publish` PUT 200、tarball 可下载，但 **packument（`npm view` / 按名安装）仍 404**。因此 `px new` Registry 模式把依赖写成 **tarball URL**，而不是版本号。
+说明：优先用 tarball URL 安装（历史 packument 偶发 404）。`@apizero/vite@0.1.3` 起默认 `resolve.dedupe` 消除生产双份 React。
 
 ```bash
 npm run build:react
 npm publish -w @apizero/react --access public
 npm publish -w @apizero/vite --access public
 npm publish -w @apizero/react-ssr --access public
-curl -I https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz
+curl -I https://registry.npmjs.org/@apizero/vite/-/vite-0.1.3.tgz
 ```
 
-红线：未获确认前不要 `git push`；`npm publish` 需账号方明确授权。
+用户已授权实时同步时：`git push` 双远端 + `npm publish` / `cargo publish --registry crates-io` 按本清单执行。
 
 说明：`phoenix`、`phoenix-rs`、`phoenix-cli`、`px`、`phoenix-core` 在 crates.io 已被无关项目占用，故不采用（`phoenix-core` → `phoenix-runtime`，`px` → `px-cli`）。详见 `docs/DECISIONS.md` ADR-009。
 

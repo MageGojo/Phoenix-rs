@@ -485,7 +485,7 @@ fn project_files(
             "phoenix = { package = \"phoenixrs\", version = \"0.1.0\" }".to_owned(),
             "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
             "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-0.1.2.tgz".to_owned(),
-            "https://registry.npmjs.org/@apizero/vite/-/vite-0.1.2.tgz".to_owned(),
+            "https://registry.npmjs.org/@apizero/vite/-/vite-0.1.3.tgz".to_owned(),
         ),
         DependencySource::Local(root) => {
             let root = absolute_path(root)?;
@@ -940,26 +940,32 @@ pub mod migrations;
 pub mod seeders;
 
 use phoenix::prelude::{
-    AccessLog, Application, Csrf, Database, DatabaseError, HostAllowlist, NonceSecurityPolicy,
-    RateLimit, RateLimitConfig, RequestId, RouteBuildError, Routes, SessionConfig,
-    SessionMiddleware, SessionStore, StateMiddleware, TrustedProxies,
+    AccessLog, Application, AssetManifest, Csrf, Database, DatabaseError, HostAllowlist,
+    NonceSecurityPolicy, RateLimit, RateLimitConfig, RequestId, RouteBuildError, Routes,
+    ServeProductionAssets, SessionConfig, SessionMiddleware, SessionStore, StateMiddleware,
+    TrustedProxies,
 };
 
 use config::AppConfig;
 
 #[must_use]
 #[allow(clippy::duplicate_mod)]
-pub fn routes(config: &AppConfig) -> Routes {
+pub fn routes(config: &AppConfig, assets: Option<&AssetManifest>) -> Routes {
     let session_config = SessionConfig {
         secure: config.public_url().starts_with("https://"),
         ..SessionConfig::default()
     };
     let session_store = SessionStore::memory(session_config.max_age);
 
-    phoenix::mount_routes!()
+    let mut routes = phoenix::mount_routes!()
         .with_middleware(TrustedProxies::new(config.trusted_proxies().iter().copied()))
         .with_middleware(RequestId)
-        .with_middleware(AccessLog)
+        .with_middleware(AccessLog);
+    if let Some(assets) = assets.cloned() {
+        // Serve hashed Vite assets before session/CSRF so static GETs stay cheap.
+        routes = routes.with_middleware(ServeProductionAssets::new(assets, "public/assets"));
+    }
+    routes
         .with_middleware(HostAllowlist::new(config.allowed_hosts().iter().cloned()))
         .with_middleware(RateLimit::new(RateLimitConfig {
             requests: config.rate_limit_requests(),
@@ -969,6 +975,7 @@ pub fn routes(config: &AppConfig) -> Routes {
         .with_middleware(SessionMiddleware::new(session_store, session_config))
         .with_middleware(Csrf)
         .with_middleware(StateMiddleware::new(config.clone()))
+        .with_middleware(StateMiddleware::new(assets.cloned()))
 }
 
 fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
@@ -989,7 +996,8 @@ fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
 ///
 /// Returns a route error when route names or patterns conflict.
 pub fn application(config: AppConfig) -> Result<Application, RouteBuildError> {
-    Application::new(routes(&config))
+    let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
+    Application::new(routes(&config, assets.as_ref()))
 }
 
 /// Connect the configured database with every registered Toasty model.
@@ -1027,26 +1035,41 @@ pub async fn {function_name}(_ctx: CommandContext<'_>) -> CommandResult {{
 }
 
 fn home_controller_template() -> String {
-    r#"use phoenix::prelude::{Page, PageResponseError, Request, Response};
+    r#"use phoenix::prelude::{AssetManifest, IntoResponse, Page, Request, Response, StatusCode};
 
 use crate::props::HomeProps;
 
 pub struct HomeController;
 
 impl HomeController {
-    pub async fn index(request: Request) -> Result<Response, PageResponseError> {
-        Page::new(
+    pub async fn index(request: Request) -> Response {
+        let assets = request
+            .extensions()
+            .get::<Option<AssetManifest>>()
+            .and_then(Option::as_ref);
+        let mut page = Page::new(
             "home",
             HomeProps {
                 title: "Phoenix is ready".to_owned(),
                 description: "Rust owns the application contract; React renders the page.".to_owned(),
             },
         )
-        .spa()
-        .respond_to(&request, None)
+        .spa();
+        if let Some(assets) = assets {
+            page = match page.production_assets(assets, "client") {
+                Ok(page) => page,
+                Err(error) => {
+                    return Response::text(format!("asset manifest error: {error}"))
+                        .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            };
+        }
+        page.respond_to(&request, None)
+            .unwrap_or_else(IntoResponse::into_response)
     }
 }
-"#.to_owned()
+"#
+    .to_owned()
 }
 
 fn home_props_template() -> String {

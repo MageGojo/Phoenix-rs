@@ -47,7 +47,8 @@ $PHOENIX_DEPLOY_ROOT/
 ## 制品内容
 
 - `bin/<app>`、`bin/phoenix-manage`（迁移用，目标机可不装完整源码树）
-- `public/assets/`、`public/ssr/`
+- `public/assets/`、`public/ssr/`（Vite 产物；**不要**把 `assets/` 内容摊平进 `public/`）
+- 应用启动后由 `ServeProductionAssets` 按 `phoenix-manifest.json` 白名单对外提供 `/assets/*`；页面须 `Page::production_assets(..., "client")` 写入 hashed URL，勿硬编码 `/assets/phoenix.js`
 - `config/*.toml`（非密钥）
 - `database/migrations/`
 - `manifest.toml`（版本、checksum、contract_hash）

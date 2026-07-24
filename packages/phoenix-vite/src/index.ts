@@ -62,8 +62,28 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
     config() {
       // Vite reads `<meta property="csp-nonce" nonce="...">` at runtime.
       // Never set `html.cspNonce` here: Phoenix emits a fresh value per HTTP request.
+      //
+      // `file:` / workspace links to `@apizero/react` otherwise resolve a second
+      // physical `react` under the monorepo `node_modules`, while app islands use
+      // the app's copy — production then throws "Cannot read properties of null
+      // (reading 'useState')". Dev hides this via optimizeDeps prebundling.
+      const reactSingleton = {
+        resolve: {
+          dedupe: ["react", "react-dom"] as string[],
+        },
+        optimizeDeps: {
+          include: [
+            "react",
+            "react-dom",
+            "react/jsx-runtime",
+            "react/jsx-dev-runtime",
+            "react-dom/client",
+          ],
+        },
+      };
       if (options.renderer) {
         return {
+          ...reactSingleton,
           publicDir: false,
           build: {
             emptyOutDir: true,
@@ -78,6 +98,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
         };
       }
       return {
+        ...reactSingleton,
         publicDir: false,
         build: {
           emptyOutDir: true,

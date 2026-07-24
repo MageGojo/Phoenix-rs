@@ -480,3 +480,25 @@
 - packument `npm view` 仍 404，tarball 可装；脚手架 Registry 依赖改为 tarball URL；本地 `cargo install --path crates/phoenix-cli` 已替换 `px`
 - 验收：tarball `npm install` 可解析 `@apizero/vite` / `@apizero/react`；`px-cli` scaffold_commands 2 passed；本机 `px new`（Local 探测）成功
   状态：已完成@工作树（crates.io 上的旧 `px` 仍写 `@phoenix/react`，需另发 `px-cli` 才惠及 `cargo install px-cli` 用户）
+
+## 2026-07-24：release staging 空白页
+
+- 根因：① HTML 硬编码 `/assets/phoenix.js`（未 `production_assets`）；② pack 把 assets 摊平进 `public/`；③ 无静态资源中间件 → JS 404
+- 修复：`ServeProductionAssets` + 脚手架/manifest 接线；`write_staging` 落到 `public/assets` / `public/ssr`；`px_text` 已本地验证 hashed JS/CSS 200
+  验收：`cargo test -p phoenix-view -p phoenix-release --lib` 全绿；staging HTML 含 `/assets/phoenix-*.js` 且资源 200
+  产物：`crates/phoenix-view/src/static_files.rs`、`crates/phoenix-release/src/pack.rs`、`crates/phoenix-cli/src/scaffold.rs`
+  状态：已完成@工作树
+
+## 2026-07-24：生产 SPA `useState` null
+
+- 根因：`file:` 链接 `@apizero/react` 时 Vite 生产把 monorepo 与 app 各打一份 React；island hooks 读到 null dispatcher
+- 修复：`@apizero/vite` `resolve.dedupe` + `optimizeDeps.include`；重建 `px_text` assets；staging 已换新 `phoenix-BtQnio5N.js`，like-button 773B 且从入口 import React
+  验收：island chunk `import{r as R}from"../phoenix-*.js"`；`/` + entry + island 200
+  产物：`packages/phoenix-vite/src/index.ts`
+  状态：已完成@工作树
+
+## 2026-07-24：公开发布补丁（release 空白页 + React 双份）
+
+- 版本：`@apizero/vite@0.1.3`、`phoenix-view/phoenix-release/phoenixrs@0.1.1`、`px-cli@0.1.2`
+- 内容：生产静态资源中间件与 pack 布局、脚手架 `production_assets`、Vite `dedupe` React
+  状态：进行中（commit → GitHub/GitCode → npm → crates.io）

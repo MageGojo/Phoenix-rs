@@ -96,7 +96,8 @@ pub mod prelude {
         DocumentContext, DocumentSlots, DocumentTemplate, DocumentTemplateError, EncryptionError,
         Island, NodeRenderer, OpenGraph, Page, PageEnvelope, PageHead, PageResponseError,
         PayloadCodec, RenderContext, RenderFrame, RenderMode, RenderResult, RendererConfig,
-        RendererError, RendererHealth, RendererManifest, RendererStream, TrustedHtml,
+        RendererError, RendererHealth, RendererManifest, RendererStream, ServeProductionAssets,
+        TrustedHtml,
     };
 
     #[cfg(feature = "mail")]

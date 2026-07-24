@@ -19,6 +19,7 @@ use thiserror::Error;
 mod assets;
 mod document;
 mod renderer;
+mod static_files;
 
 pub use assets::{
     ASSET_MANIFEST_SCHEMA, AssetEntry, AssetManifest, AssetManifestError, RendererManifest,
@@ -30,6 +31,7 @@ pub use renderer::{
     NodeRenderer, RenderContext, RenderFrame, RenderResult, RendererConfig, RendererError,
     RendererHealth, RendererStream,
 };
+pub use static_files::ServeProductionAssets;
 
 const PAGE_MEDIA_TYPE: &str = "application/vnd.phoenix.page+json";
 const PAGE_REQUEST_HEADER: &str = "x-phoenix-page";

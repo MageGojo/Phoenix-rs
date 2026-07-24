@@ -286,6 +286,8 @@ public/ssr/
 
 `phoenix-manifest.json` 记录 schema、构建版本、contract hash、public path、client 入口、CSS 和 imports；renderer manifest 记录 renderer 版本、相同 contract hash 和入口文件。浏览器入口使用内容 hash，Rust 不应硬编码其文件名。
 
+`@apizero/vite` 默认 `resolve.dedupe: ["react", "react-dom"]`，避免 `file:` / workspace 链接时入口与 island chunk 打进两份 React（生产会出现 `Cannot read properties of null (reading 'useState')`，开发态因 `optimizeDeps` 预打包而掩盖）。
+
 ### 启动生产 renderer
 
 应用启动时先加载两个 manifest，并预热所有 worker：
