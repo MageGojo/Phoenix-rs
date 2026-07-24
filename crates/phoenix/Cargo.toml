@@ -63,7 +63,7 @@ phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-fe
 phoenix-storage = { version = "0.1.1", path = "../phoenix-storage", optional = true }
 phoenix-testing = { version = "0.1.1", path = "../phoenix-testing", optional = true }
 phoenix-validation = { version = "0.1.1", path = "../phoenix-validation" }
-phoenix-view = { version = "0.1.2", path = "../phoenix-view", default-features = false }
+phoenix-view = { version = "0.1.3", path = "../phoenix-view", default-features = false }
 
 [lints]
 workspace = true

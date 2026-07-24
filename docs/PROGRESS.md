@@ -520,3 +520,9 @@
 - 产物：各底层 crate features + `crates/phoenix/{Cargo.toml,src/lib.rs}` + scaffold + ADR-042 + 文档同步
 - 发布：`@c9ffe1b` 已 push GitHub + GitCode；GitHub Release [v0.1.3](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.3)；crates.io：`phoenixrs 0.1.3`、`px-cli 0.1.4`、相关 crate `0.1.1`/`phoenix-view 0.1.2`
 - 状态：已完成@c9ffe1b
+
+## 2026-07-24：脚手架渲染模式可切换 + px new 默认可配置
+
+- 内容：`Page::respond_with_renderer` SPA 短路；`px new` / scaffold 支持渲染模式切换与默认可配置项
+- 仅发布变更 crate：`phoenix-view 0.1.3`、`px-cli 0.1.5`
+- 状态：进行中@发布
