@@ -525,4 +525,5 @@
 
 - 内容：`Page::respond_with_renderer` SPA 短路；`px new` / scaffold 支持渲染模式切换与默认可配置项
 - 仅发布变更 crate：`phoenix-view 0.1.3`、`px-cli 0.1.5`
-- 状态：进行中@发布
+- 发布：`@b6adb6a` push GitHub + GitCode；Release [v0.1.5](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.5)；crates.io 已上架
+- 状态：已完成@b6adb6a
