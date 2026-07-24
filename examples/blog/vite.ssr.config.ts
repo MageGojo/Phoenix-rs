@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import { phoenix } from "@phoenix/vite";
+import { phoenix } from "@apizero/vite";
 
 export default defineConfig({
   plugins: [phoenix({ renderer: true })],

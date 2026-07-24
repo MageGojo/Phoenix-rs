@@ -145,9 +145,9 @@
 ## ADR-025：约定路由在编译期发现，开发进程按组回收
 
 - 状态：已接受
-- 决定：`mount_routes!()` 在编译期按文件名排序发现 `routes/*.rs`，每个文件统一导出 `routes()`；resource/alias/model binding 是普通 Rust builder 与 middleware，不引入运行时反射。`px dev` 在 Unix 上给 Rust/Vite 分配独立进程组并以 TERM/KILL 两阶段回收。
-- 原因：编译期文件发现让缺失目录和非法路由在启动前失败，同时保留 IDE 可导航的普通 Rust 文件；进程组可以清理 Cargo/npm 派生的实际 server，避免只杀父进程留下监听端口。
-- 边界：当前只扫描 route 目录第一层的 `.rs` 文件并要求固定 `routes()` 导出；CLI 默认命令面向含 `Cargo.toml` 与 `package.json` 的应用目录。
+- 决定：`mount_routes!()` 在编译期按文件名排序发现 `routes/*.rs`，每个文件统一导出 `routes()`；resource/alias/model binding 是普通 Rust builder 与 middleware，不引入运行时反射。`px dev` 在 Unix 上给 Rust/Vite 分配独立进程组并以 TERM/KILL 两阶段回收；默认用 `notify` 监听 Rust 业务目录，源码变更后重启 `cargo run -- serve`，Vite 侧继续 HMR。
+- 原因：编译期文件发现让缺失目录和非法路由在启动前失败，同时保留 IDE 可导航的普通 Rust 文件；进程组可以清理 Cargo/npm 派生的实际 server，避免只杀父进程留下监听端口；后端热重载避免改控制器后必须手停 `px dev`。
+- 边界：当前只扫描 route 目录第一层的 `.rs` 文件并要求固定 `routes()` 导出；CLI 默认命令面向含 `Cargo.toml` 与 `package.json` 的应用目录。Rust 热重载监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`Cargo.toml`，不监听 `views/`（交给 Vite）；编译失败时保持 Vite、等待下次变更。
 
 ## ADR-019：浏览器调用 Rust action 使用命名路由和生成函数
 

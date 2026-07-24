@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { renderPage } from "@phoenix/react-ssr";
-import type { PageEnvelope } from "@phoenix/react";
+import { renderPage } from "@apizero/react-ssr";
+import type { PageEnvelope } from "@apizero/react";
 
 import { routes } from "./generated/routes.js";
 import type { AuthMessageResource, AuthSessionResource, LoginInput, Member, PasswordResetInput, StoreMemberInput } from "./generated/contracts.js";

@@ -234,7 +234,12 @@ px make:command Update
 px dev
 ```
 
-该命令先从当前目录向上定位项目根并检查 JavaScript 依赖，再显示即将启动的后端、前端和工作目录，然后同时运行 `cargo run -- serve` 与 `npm run dev -- --strictPort`。两者位于独立进程组；Ctrl-C、Rust 提前退出或 Vite 提前退出都会终止并回收另一侧的整个子进程树，避免遗留开发服务器。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
+该命令先从当前目录向上定位项目根并检查 JavaScript 依赖，再显示即将启动的后端、前端和工作目录，然后同时运行：
+
+- **前端**：`npm run dev -- --strictPort`（Vite HMR）
+- **后端**：`cargo run -- serve`，并监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`Cargo.toml`；源码变更后自动杀掉旧进程并重新 `cargo run`（编译失败不会拖垮 Vite，会等下次改动再试）
+
+两者位于独立进程组；Ctrl-C 或 Vite 提前退出会终止并回收另一侧。Rust 在热重载模式下因编译失败退出时，监督器会保持 Vite 并等待下一次源码变更。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
 
 ## 3. 控制器与 React 页面
 

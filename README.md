@@ -1,13 +1,14 @@
 # Phoenix-rs
 
+[![Crates.io](https://img.shields.io/crates/v/phoenixrs.svg)](https://crates.io/crates/phoenixrs)
+[![CI](https://github.com/MageGojo/Phoenix-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/MageGojo/Phoenix-rs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-1.95%2B-orange.svg)](https://www.rust-lang.org/)
 [![GitHub](https://img.shields.io/badge/GitHub-MageGojo%2FPhoenix--rs-181717?logo=github)](https://github.com/MageGojo/Phoenix-rs)
 [![GitCode](https://img.shields.io/badge/GitCode-Roufsi%2FPhoenix--rs-C71D23)](https://gitcode.com/Roufsi/Phoenix-rs)
 
-**Phoenix-rs** 是由 [极数本源（ApiZero）](https://apizero.cn/) 打造的 Rust 全栈 Web 框架：以 [Hyper](https://hyper.rs/) 为 HTTP 核心，提供接近 Laravel 的开发体验，并默认集成 React + TypeScript（Islands / SPA / SSR）。
+**Phoenix-rs** 是由 [极数本源（ApiZero）](https://apizero.cn/) 打造的 Rust 全栈 Web 框架：以 [Hyper](https://hyper.rs/) 为 HTTP 核心，提供接近 Laravel 的开发体验，并默认集成 React + TypeScript（Islands / SPA / SSR）。一套约定，从路由、契约到前端 action 全链路类型安全。
 
-一个 Key 调用全网 API → 见 [ApiZero](https://apizero.cn/)；一套约定写出完整网站 → 用 Phoenix-rs。
 
 ## 源码镜像
 
@@ -32,12 +33,10 @@ git clone https://gitcode.com/Roufsi/Phoenix-rs.git
 | --- | --- |
 | [`.cursor/skills/phoenix/SKILL.md`](.cursor/skills/phoenix/SKILL.md) | **主 Skill**：新项目清单、`px` 工作流、铁律、反模式 |
 | [`.cursor/skills/phoenix/api-rust.md`](.cursor/skills/phoenix/api-rust.md) | Rust API 速查 |
-| [`.cursor/skills/phoenix/api-react.md`](.cursor/skills/phoenix/api-react.md) | `@phoenix/react` 速查 |
+| [`.cursor/skills/phoenix/api-react.md`](.cursor/skills/phoenix/api-react.md) | `@apizero/react` 速查 |
 | [`AGENTS.md`](AGENTS.md) | 仓库级 Agent 约定（指向上述 Skill） |
 
 Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按 [`AGENTS.md`](AGENTS.md) 用 Read 打开 `SKILL.md`。
-
-开发者也可直接读 Skill 代替翻完整 `docs/` 入门。
 
 ## 特性一览
 
@@ -70,17 +69,19 @@ cargo install --git https://gitcode.com/Roufsi/Phoenix-rs px-cli
 
 本仓库内开发时也可用 `cargo install --path crates/phoenix-cli`。
 
-然后创建并运行新项目：
+`px-cli` 是 crates.io **包名**（安装后命令为 `px`）；安装后 PATH 里就是二进制 `px`。`px new` 生成的应用依赖 crates.io 上的门面包 `phoenixrs`（代码里仍写 `use phoenix::…`）。
+
+### 创建并运行
 
 ```bash
 px new my-app
 cd my-app
-cp .env.example .env
+cp .env.example .env   # 默认使用 SQLite，无需额外配置即可启动
 px migrate
 px dev
 ```
 
-`px` 是 crates.io **包名**；安装后 PATH 里就是二进制 `px`。`px new` 生成的应用依赖 crates.io 上的门面包 `phoenixrs`（代码里仍写 `use phoenix::…`）。
+启动成功后访问 **http://127.0.0.1:3000**。切换到 PostgreSQL / MySQL 见 [docs/CONFIG.md](docs/CONFIG.md)。
 
 生成完整 CRUD 骨架：
 
@@ -88,7 +89,7 @@ px dev
 px make:model Post --all
 ```
 
-运行官方示例：
+### 运行官方示例
 
 ```bash
 cd examples/blog
@@ -142,7 +143,7 @@ const member = await members.store({ name });
 .cursor/skills/phoenix/  # AI 官方 Skill（入库，默认先读）
 AGENTS.md                # Agent 强制约定入口
 crates/                  # Rust 框架组件与统一入口 phoenixrs（lib = phoenix）
-packages/                # @phoenix/react、@phoenix/vite、SSR 包
+packages/                # @apizero/react、@apizero/vite、SSR 包
 schemas/                 # config/*.toml JSON Schema（Taplo）
 examples/blog            # 参考应用
 examples/multi-app

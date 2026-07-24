@@ -152,7 +152,7 @@ cd examples/blog
 ../../target/debug/px dev
 ```
 
-`px` 包位于 `crates/phoenix-cli`。`px dev` 同时启动 `cargo run` 与 `npm run dev -- --strictPort`。Ctrl-C 或任一进程提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
+`px` 包位于 `crates/phoenix-cli`。`px dev` 同时启动后端（`cargo run -- serve` + Rust 源码热重载）与前端（`npm run dev -- --strictPort` / Vite HMR）。Ctrl-C 或 Vite 提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
 
 也可以通过环境变量修改监听地址：
 
@@ -806,7 +806,7 @@ Vite 配置只启用 Phoenix 插件：
 
 ```ts
 import { defineConfig } from "vite";
-import { phoenix } from "@phoenix/vite";
+import { phoenix } from "@apizero/vite";
 
 export default defineConfig({ plugins: [phoenix()] });
 ```
@@ -875,7 +875,7 @@ export const members = routes.members;
 
 ### 服务端 React HTML
 
-`@phoenix/react-ssr` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式使用 React `renderToPipeableStream`。`respond_with_renderer` 返回完整缓冲响应；`respond_streaming_with_renderer` 会把 HTML chunk 直接交给 Hyper，并在完成帧后附加 hydration 信封。renderer 超时或退出时返回 503，不会静默切换渲染模式。业务代码不接触 `trusted_server_html`。
+`@apizero/react-ssr` 在 SPA 模式返回空 shell，在 SSR 和 Islands 模式使用 React `renderToPipeableStream`。`respond_with_renderer` 返回完整缓冲响应；`respond_streaming_with_renderer` 会把 HTML chunk 直接交给 Hyper，并在完成帧后附加 hydration 信封。renderer 超时或退出时返回 503，不会静默切换渲染模式。业务代码不接触 `trusted_server_html`。
 
 生产环境必须先执行 client build，再执行 SSR build；Rust 启动时加载两个 manifest、校验 contract hash、预热 worker，并在退出时调用 `renderer.shutdown().await`。完整配置、健康指标和静态资源解析见 [React 渲染模式](RENDERING.md#7-构建产物)。
 

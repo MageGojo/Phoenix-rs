@@ -10,7 +10,7 @@ import {
   type ComponentRegistry,
   type IslandDescriptor,
   type PageEnvelope,
-} from "@phoenix/react";
+} from "@apizero/react";
 
 export interface RenderResult {
   html: string;

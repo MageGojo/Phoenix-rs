@@ -117,7 +117,7 @@ Phoenix-rs 采用模块化单体框架结构。应用开发者通常只依赖顶
 
 ### `phoenix-dx` 与 `px` CLI
 
-`phoenix-dx` 提供标准 resource routes、中间件别名、异步模型绑定和编译期 `routes/*.rs` 自动挂载。CLI 源码在 `crates/phoenix-cli`，**crates.io 包名与二进制均为 `px`**，负责 `px new`、业务生成器、`px dev` 与 **`px release` / `release:install` / `release:rollback` / `release:status`**；生成器只改写带 `<phoenix:...>` 标记的托管区块。`px dev` 同时启动 Rust 与 Vite，并在 Ctrl-C 或任一子进程退出时回收两个进程组。框架门面 crates.io 名为 `phoenixrs`（lib 仍为 `phoenix`）。发版约定见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)；插件见 [FEATURES.md](FEATURES.md)。
+`phoenix-dx` 提供标准 resource routes、中间件别名、异步模型绑定和编译期 `routes/*.rs` 自动挂载。CLI 源码在 `crates/phoenix-cli`，**crates.io 包名与二进制均为 `px`**，负责 `px new`、业务生成器、`px dev` 与 **`px release` / `release:install` / `release:rollback` / `release:status`**；生成器只改写带 `<phoenix:...>` 标记的托管区块。`px dev` 同时启动 Rust（源码变更自动重启）与 Vite HMR，并在 Ctrl-C 或 Vite 退出时回收两个进程组。框架门面 crates.io 名为 `phoenixrs`（lib 仍为 `phoenix`）。发版约定见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)；插件见 [FEATURES.md](FEATURES.md)。
 
 ### `phoenix-testing`
 

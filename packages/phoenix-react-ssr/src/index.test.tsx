@@ -1,7 +1,7 @@
 import { Suspense, createElement, lazy, type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { Island, type PageEnvelope } from "@phoenix/react";
+import { Island, type PageEnvelope } from "@apizero/react";
 import { renderPage, streamPage } from "./index.js";
 
 const baseEnvelope: PageEnvelope = {

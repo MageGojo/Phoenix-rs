@@ -80,7 +80,7 @@ import {
   rememberKey,
   useRemember,
   Form,
-} from "@phoenix/react";
+} from "@apizero/react";
 
 useRemember(rememberKey("posts.create"), data, setData);
 // 或
@@ -99,7 +99,7 @@ useRemember(rememberKey("posts.create"), data, setData);
 ### 8. Dev overlay
 
 ```tsx
-import { PhoenixDevOverlay } from "@phoenix/react";
+import { PhoenixDevOverlay } from "@apizero/react";
 
 <PhoenixDevOverlay />                 // 默认 DEV 环境显示
 <PhoenixDevOverlay enabled />         // 强制开

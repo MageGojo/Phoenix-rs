@@ -1,15 +1,45 @@
 {
-  "name": "@phoenix/react",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@apizero/react",
+  "version": "0.1.2",
+  "description": "Phoenix-rs React client: navigation, forms, islands hydration, typed actions",
+  "license": "MIT",
+  "author": "ApiZero",
+  "homepage": "https://apizero.cn/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MageGojo/Phoenix-rs.git",
+    "directory": "packages/phoenix-react"
+  },
+  "bugs": {
+    "url": "https://github.com/MageGojo/Phoenix-rs/issues"
+  },
+  "keywords": [
+    "phoenix-rs",
+    "react",
+    "ssr",
+    "islands",
+    "inertia"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
   "peerDependencies": {

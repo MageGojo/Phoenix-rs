@@ -45,7 +45,7 @@ Hyper 请求 -> 控制器 -> PageEnvelope -> HTML shell + props
 Vite 生成的浏览器入口会调用 `startPhoenix({ pages, islands })`。启动器在 SPA/SSR 首屏挂载整页 React root，在 Islands 首屏只 hydrate 实际 island；第一次局部导航后，三种模式都由同一个客户端 root 替换页面组件和 props：
 
 ```tsx
-import { Link, navigate } from "@phoenix/react";
+import { Link, navigate } from "@apizero/react";
 
 export function ProjectLinks() {
   return (
@@ -83,7 +83,7 @@ import {
   useNavigator,
   usePage,
   useShared,
-} from "@phoenix/react";
+} from "@apizero/react";
 import type { MembersPageProps, PhoenixSharedProps } from "../generated/contracts.js";
 
 function Header() {
@@ -117,7 +117,7 @@ function Header() {
 生成的 Rust action 可以直接作为 `Form` 的 action。输入值、`setField` 字段和值类型以及成功结果都从 Rust 契约保持类型约束：
 
 ```tsx
-import { FieldError, Form } from "@phoenix/react";
+import { FieldError, Form } from "@apizero/react";
 import { members } from "../generated/routes.js";
 import type { Member, StoreMemberInput } from "../generated/contracts.js";
 
@@ -191,7 +191,7 @@ export default function DocsPage({ article }: DocsPageProps) {
 }
 ```
 
-`@phoenix/vite` 在编译期把指令转换为 island 边界，并按 `views/pages/`、`views/islands/` 生成虚拟注册表和入口。服务端 renderer 渲染页面时自动收集组件名、稳定 ID 与 props；Rust 将结果写入 `PageEnvelope.islands`。浏览器入口读取信封后，只动态 import 实际出现的 island。
+`@apizero/vite` 在编译期把指令转换为 island 边界，并按 `views/pages/`、`views/islands/` 生成虚拟注册表和入口。服务端 renderer 渲染页面时自动收集组件名、稳定 ID 与 props；Rust 将结果写入 `PageEnvelope.islands`。浏览器入口读取信封后，只动态 import 实际出现的 island。
 
 应用不需要维护 `entry.tsx`、island 注册表或 `renderer.tsx`。Vite 配置只启用插件：
 
@@ -243,7 +243,7 @@ export default defineConfig({ plugins: [phoenix()] });
 ```ts
 // vite.config.ts
 import { defineConfig } from "vite";
-import { phoenix } from "@phoenix/vite";
+import { phoenix } from "@apizero/vite";
 
 export default defineConfig({
   plugins: [phoenix()],
@@ -255,7 +255,7 @@ renderer 使用独立配置：
 ```ts
 // vite.ssr.config.ts
 import { defineConfig } from "vite";
-import { phoenix } from "@phoenix/vite";
+import { phoenix } from "@apizero/vite";
 
 export default defineConfig({
   plugins: [phoenix({ renderer: true })],

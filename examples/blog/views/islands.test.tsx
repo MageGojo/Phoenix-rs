@@ -2,8 +2,8 @@
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startPhoenix, type PageEnvelope } from "@phoenix/react";
-import { renderPage } from "@phoenix/react-ssr";
+import { startPhoenix, type PageEnvelope } from "@apizero/react";
+import { renderPage } from "@apizero/react-ssr";
 
 import MemberCreator from "./islands/member-creator.js";
 import MembersIndex from "./pages/members/index.js";

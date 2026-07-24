@@ -56,8 +56,8 @@
 
 - 新增 `phoenix-view`，实现统一 `PageEnvelope`、HTML 文档响应和 `X-Phoenix-Page` 局部导航协议。
 - React 渲染模式支持 Islands、SPA 与 SSR，默认值固定为 Islands；模式只改变渲染方式，不改变页面名与业务 props。
-- 新增 `@phoenix/react`，分别使用 `createRoot`、`hydrateRoot` 和逐岛 `hydrateRoot` 启动三种模式。
-- 新增 `@phoenix/react-ssr`，SPA 返回空 shell，SSR/Islands 使用 React `renderToString` 生成首屏 HTML。
+- 新增 `@apizero/react`，分别使用 `createRoot`、`hydrateRoot` 和逐岛 `hydrateRoot` 启动三种模式。
+- 新增 `@apizero/react-ssr`，SPA 返回空 shell，SSR/Islands 使用 React `renderToString` 生成首屏 HTML。
 - 新增可插拔 `PayloadCodec` 和 AES-256-GCM 实现，信封包含版本、算法、`key_id`、用途、签发/过期时间、随机 nonce、密文和独立 tag。
 - `examples/blog` 增加真实 TSX 页面、LikeButton island、三种 Rust 路由、页面协议测试和 React renderer 测试。
 - Rust 案例测试增加到 21 个；React 包与博客案例共 10 个测试通过。
@@ -95,7 +95,7 @@
 
 ## 2026-07-22：Astro 风格 Islands 自动发现
 
-- 新增 `@phoenix/vite`，自动发现 `views/pages` 与 `views/islands`，生成浏览器动态加载入口和服务端 renderer 入口。
+- 新增 `@apizero/vite`，自动发现 `views/pages` 与 `views/islands`，生成浏览器动态加载入口和服务端 renderer 入口。
 - 页面可直接写 `<MemberCreator client:load />`；Vite 编译指令，组件内部不需要 Phoenix HOC 或专用 props。
 - SSR renderer 自动收集实际 island 的组件名、稳定实例 ID 与 JSON props，Rust 通过 `Page::rendered` 合并结果；控制器不再手写 `.island(...)`。
 - SSR 模式移除局部 wrapper 并整页 hydration；Islands 模式只加载页面信封中实际出现的动态组件。
@@ -214,7 +214,7 @@
 - `cargo test --workspace --locked` 全部通过，覆盖原单应用博客、HTTP/1.1/HTTP/2、JWT/AES-GCM/Argon2id、多应用、声明宏、CLI、数据库、安全与 renderer。
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` 与 `cargo fmt --all -- --check` 通过。
 - React、React SSR、Vite 与博客共 33 个前端测试通过；示例 TypeScript 类型检查通过。
-- `@phoenix/react`、`@phoenix/react-ssr`、`@phoenix/vite`、博客 client 和 SSR production build 全部通过。
+- `@apizero/react`、`@apizero/react-ssr`、`@apizero/vite`、博客 client 和 SSR production build 全部通过。
 - 工作树中既有 CLI 脚手架、IDE 配置、临时配置和示例生成数据保持未提交；本轮四个功能提交没有纳入这些并发改动。
 
 ## 2026-07-22：应用状态、页面外围协议与安全响应
@@ -456,3 +456,27 @@
 - crates.io packaging 对账：24 个 crate 元数据齐全、内部 path 依赖已全部带 `version`；verify 失败属「上层 crate 未发布」的顺序问题而非清单问题，拓扑发布顺序写入 `docs/RELEASE.md`。
 - 设计文档入库：`docs/RC_CLOSURE_PLAN.md`、`docs/AUTH_ADMIN.md`（拆分提交）。
   状态：工程底盘已收口；剩余红线项为实际 `cargo publish` / `git push`（等用户确认），下一步进入 `px make:auth` 持久化链路（见 `docs/AUTH_ADMIN.md`）。
+
+## 2026-07-24：npm 前端包准备发布
+
+- 去掉 `private: true`，补齐元数据；tsconfig 排除测试；`LICENSE` 入包
+  状态：已完成准备
+
+## 2026-07-24：公开同步 + px-cli 0.1.1
+
+- 推送 GitHub `origin` + GitCode `gitcode`：`@apizero/*` 前端包名、`px dev` Rust 热重载、脚手架 tarball 依赖
+- crates.io 发布 `px-cli` **0.1.1**（含 notify 热重载与 `@apizero` 脚手架）
+  状态：进行中
+
+
+- `DevSupervisor` 默认 `watch_rust`：监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`Cargo.toml`，变更后重启 `cargo run -- serve`
+- 编译失败不拖垮 Vite，等待下次改动再重建；Vite 仍走 HMR
+- 依赖：`notify`；实现拆到 `crates/phoenix-cli/src/dev.rs`；ADR-025 / DX / BUSINESS_GUIDE 已同步
+- 验收：`cargo test -p px-cli` 全绿；本机 `cargo install --path crates/phoenix-cli --force`
+  状态：已完成@工作树
+
+
+- `@phoenix/*` 无权限；`@phoenixrs` Scope not found → 改发 `@apizero/react|vite|react-ssr@0.1.2`
+- packument `npm view` 仍 404，tarball 可装；脚手架 Registry 依赖改为 tarball URL；本地 `cargo install --path crates/phoenix-cli` 已替换 `px`
+- 验收：tarball `npm install` 可解析 `@apizero/vite` / `@apizero/react`；`px-cli` scaffold_commands 2 passed；本机 `px new`（Local 探测）成功
+  状态：已完成@工作树（crates.io 上的旧 `px` 仍写 `@phoenix/react`，需另发 `px-cli` 才惠及 `cargo install px-cli` 用户）

@@ -1,19 +1,48 @@
 {
-  "name": "@phoenix/react-ssr",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@apizero/react-ssr",
+  "version": "0.1.2",
+  "description": "Phoenix-rs React SSR renderer (SPA shell / SSR / Islands)",
+  "license": "MIT",
+  "author": "ApiZero",
+  "homepage": "https://apizero.cn/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MageGojo/Phoenix-rs.git",
+    "directory": "packages/phoenix-react-ssr"
+  },
+  "bugs": {
+    "url": "https://github.com/MageGojo/Phoenix-rs/issues"
+  },
+  "keywords": [
+    "phoenix-rs",
+    "react",
+    "ssr",
+    "islands"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
   "dependencies": {
-    "@phoenix/react": "0.1.0"
+    "@apizero/react": "0.1.2"
   },
   "peerDependencies": {
     "react": "^19.0.0",

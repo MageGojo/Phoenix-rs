@@ -137,8 +137,8 @@ async fn dev(arguments: Vec<String>) -> Result<(), String> {
 
     println!("Phoenix development environment");
     println!("  application: {}", generator.root().display());
-    println!("  backend:     cargo run -- serve");
-    println!("  frontend:    npm run dev -- --strictPort");
+    println!("  backend:     cargo run -- serve  (hot reload on Rust changes)");
+    println!("  frontend:    npm run dev -- --strictPort  (Vite HMR)");
     println!("Press Ctrl-C to stop both processes.\n");
 
     DevSupervisor::new(DevConfig::default().working_directory(generator.root()))

@@ -11,7 +11,7 @@
 然后按需再读同目录：
 
 - [`api-rust.md`](.cursor/skills/phoenix/api-rust.md) — Rust 路由 / 控制器 / 契约 / DB
-- [`api-react.md`](.cursor/skills/phoenix/api-react.md) — `@phoenix/react` 导航 / 表单 / hooks
+- [`api-react.md`](.cursor/skills/phoenix/api-react.md) — `@apizero/react` 导航 / 表单 / hooks
 
 不要凭通用 Laravel / Axum / Next 经验硬套；以 Skill + `docs/` 为准。产品品牌为 **Phoenix-rs**；CLI 为 `px`（`cargo install px-cli`）；门面包 crates.io 为 `phoenixrs`。
 
@@ -23,7 +23,7 @@
 4. 选库改 `config/database.toml`（sqlite / pgsql / mysql）；密钥放 `.env`。
 5. 第三方能力用 `FeatureSet::plugin`（见 `docs/FEATURES.md`），不要隐式全局注册。
 6. 上线用 `px release*`（见 `docs/RELEASE_PIPELINE.md`），不要直接覆盖服务器目录。
-7. 改完跑对应测试：`cargo test` / `npm test --workspace=@phoenix/react`。
+7. 改完跑对应测试：`cargo test` / `npm test --workspace=@apizero/react`。
 
 ## 3. 人类文档
 

@@ -16,7 +16,7 @@ import {
   useCsrfToken,
   useNavigator,
   useNavigating,
-} from "@phoenix/react";
+} from "@apizero/react";
 import type { MembersPageProps } from "../generated/contracts.js";
 import type { PhoenixSharedProps } from "../generated/contracts.js";
 
@@ -89,5 +89,5 @@ function Header() {
 ## 验收
 
 - 单元测试覆盖：Provider 内外、flash consume、navigating 事件、Active Link 匹配、Form redirectTo、CSRF hook。
-- `npm run test --workspace=@phoenix/react`（或包内 `npm test`）通过。
+- `npm run test --workspace=@apizero/react`（或包内 `npm test`）通过。
 - 更新 `docs/RENDERING.md` 客户端导航小节。

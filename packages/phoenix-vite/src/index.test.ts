@@ -209,7 +209,7 @@ describe("Phoenix Vite plugin", () => {
     const routes = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
     const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
 
-    expect(routes).toContain('import { createRustAction } from "@phoenix/react";');
+    expect(routes).toContain('import { createRustAction } from "@apizero/react";');
     expect(routes).toContain("createRustAction<StoreMemberInput, MemberResource>(\"members.store\")");
     expect(contracts).toContain('"displayName": string;');
     expect(contracts).toContain('"note"?: string | null;');

@@ -219,7 +219,7 @@ impl ProjectGenerator {
     ///
     /// Returns an error when the installed Phoenix Vite generator fails.
     pub fn refresh_types(&self) -> Result<bool, ScaffoldError> {
-        if !self.root.join("node_modules/@phoenix/vite").is_dir() {
+        if !self.root.join("node_modules/@apizero/vite").is_dir() {
             return Ok(false);
         }
         run_required("npm", &["run", "types", "--silent"], &self.root)?;
@@ -479,10 +479,13 @@ fn project_files(
         DependencySource::Registry => (
             // crates.io package is `phoenixrs` (phoenix / phoenix-rs taken);
             // lib crate remains `phoenix` so apps keep `use phoenix::…`.
+            // npm: `@phoenix` / `@phoenixrs` scopes are unavailable to the publisher
+            // account; packages ship as `@apizero/*`. Packument GET is currently
+            // broken on npm for these new names, so pin installable tarball URLs.
             "phoenix = { package = \"phoenixrs\", version = \"0.1.0\" }".to_owned(),
-            "0.1.0".to_owned(),
-            "0.1.0".to_owned(),
-            "0.1.0".to_owned(),
+            "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
+            "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-0.1.2.tgz".to_owned(),
+            "https://registry.npmjs.org/@apizero/vite/-/vite-0.1.2.tgz".to_owned(),
         ),
         DependencySource::Local(root) => {
             let root = absolute_path(root)?;
@@ -509,13 +512,13 @@ fn project_files(
     "build": "npm run build:client && npm run build:ssr",
     "build:client": "vite build",
     "build:ssr": "vite build --config vite.ssr.config.ts",
-    "types": "node -e \"import('@phoenix/vite').then(({{ generateRouteTypes }}) => generateRouteTypes('routes', 'views/generated/routes.ts', '.', 'views/generated/contracts.ts'))\"",
+    "types": "node -e \"import('@apizero/vite').then(({{ generateRouteTypes }}) => generateRouteTypes('routes', 'views/generated/routes.ts', '.', 'views/generated/contracts.ts'))\"",
     "typecheck": "npm run types && tsc --noEmit"
   }},
   "dependencies": {{
-    "@phoenix/react": {react},
-    "@phoenix/react-ssr": {react_ssr},
-    "@phoenix/vite": {vite},
+    "@apizero/react": {react},
+    "@apizero/react-ssr": {react_ssr},
+    "@apizero/vite": {vite},
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   }},
@@ -1131,7 +1134,7 @@ export const home = routes.home;
 
 fn vite_template(renderer: bool) -> String {
     format!(
-        "import {{ defineConfig }} from \"vite\";\nimport {{ phoenix }} from \"@phoenix/vite\";\n\nexport default defineConfig({{\n  plugins: [phoenix({renderer})],\n}});\n",
+        "import {{ defineConfig }} from \"vite\";\nimport {{ phoenix }} from \"@apizero/vite\";\n\nexport default defineConfig({{\n  plugins: [phoenix({renderer})],\n}});\n",
         renderer = if renderer { "{ renderer: true }" } else { "" },
     )
 }

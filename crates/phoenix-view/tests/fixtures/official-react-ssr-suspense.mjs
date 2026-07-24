@@ -1,5 +1,5 @@
 import { Suspense, createElement, lazy } from "react";
-import { startRenderer } from "@phoenix/react-ssr";
+import { startRenderer } from "@apizero/react-ssr";
 
 const Deferred = lazy(async () => {
   await new Promise((resolve) => setTimeout(resolve, 25));

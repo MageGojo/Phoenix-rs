@@ -12,7 +12,7 @@ Phoenix 的发布门禁分为常规回归、安全供应链、覆盖率、性能
 | `Benchmarks` | 每周、手动 | Criterion benchmark 构建或执行失败；估算结果保存 30 天 |
 | `Fuzz` | 每周、手动 | HTTP 边界或盲索引 envelope 在 60 秒 sanitizer 运行中崩溃 |
 
-覆盖率最低线是 Rust workspace 85%、`@phoenix/react` 85%、`@phoenix/react-ssr` 50%、`@phoenix/vite` 75%、博客示例 25%。这些值低于首次本地基线，后续提高时必须先补测试，不通过删除文件或排除业务模块制造虚假增长。
+覆盖率最低线是 Rust workspace 85%、`@apizero/react` 85%、`@apizero/react-ssr` 50%、`@apizero/vite` 75%、博客示例 25%。这些值低于首次本地基线，后续提高时必须先补测试，不通过删除文件或排除业务模块制造虚假增长。
 
 ## 本地复现
 

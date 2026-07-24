@@ -8,7 +8,7 @@
 现有 `Form` 只走 JSON `callRust` action。新增并行路径：
 
 ```tsx
-import { PageForm, usePageForm } from "@phoenix/react";
+import { PageForm, usePageForm } from "@apizero/react";
 
 <PageForm
   action="/posts"
