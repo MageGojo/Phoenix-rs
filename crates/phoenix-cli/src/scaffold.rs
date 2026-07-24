@@ -1714,8 +1714,8 @@ fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
 pub async fn application(
     config: AppConfig,
 ) -> Result<Application, Box<dyn std::error::Error + Send + Sync>> {
-    let production = config.environment().is_production();
-    let (assets, renderer) = if production {
+    let vite_dev_server = std::env::var_os("PHOENIX_VITE_DEV").is_some();
+    let (assets, renderer) = if !vite_dev_server {
         let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
         let renderer_manifest = RendererManifest::load("public/ssr/phoenix-renderer.json")?;
         let renderer = NodeRenderer::new(
@@ -1723,8 +1723,8 @@ pub async fn application(
         );
         (Some(assets), renderer)
     } else {
-        // Development uses Vite's browser entry so HMR/full reload remains live.
-        // px dev still builds the same renderer bundle before starting Rust.
+        // `px dev` sets PHOENIX_VITE_DEV so this process uses Vite's browser
+        // entry while HMR/full reload remains live.
         (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
     };
     renderer.warm_up().await?;
@@ -1770,6 +1770,7 @@ fn home_controller_template(render_mode: ProjectRenderMode) -> String {
     format!(
         r#"use phoenix::prelude::{{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode}};
 
+use crate::config::AppConfig;
 use crate::props::HomeProps;
 
 pub struct HomeController;
@@ -1781,6 +1782,10 @@ impl HomeController {{
             .extensions()
             .get::<Option<AssetManifest>>()
             .and_then(Option::as_ref);
+        let vite_dev_url = request
+            .extensions()
+            .get::<AppConfig>()
+            .and_then(AppConfig::vite_dev_url);
         let mut page = Page::new(
             "home",
             HomeProps {{
@@ -1797,6 +1802,11 @@ impl HomeController {{
                         .with_status(StatusCode::INTERNAL_SERVER_ERROR);
                 }}
             }};
+        }} else if let Some(vite_dev_url) = vite_dev_url {{
+            page = page.script_src(format!(
+                "{{}}/@id/__x00__virtual:phoenix/client",
+                vite_dev_url.trim_end_matches('/'),
+            ));
         }}
         match renderer {{
             Some(renderer) => page.respond_with_renderer(&request, &renderer).await,
@@ -3079,7 +3089,7 @@ mod tests {
         assert!(application.contains("StateMiddleware::new(renderer.clone())"));
         assert!(application.contains("RendererConfig::production"));
         assert!(application.contains("renderer.warm_up().await"));
-        assert!(application.contains("let production = config.environment().is_production()"));
+        assert!(application.contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()"));
         assert!(application.contains("RendererConfig::node(\"public/ssr/renderer.js\")"));
         let home_controller =
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
@@ -3340,7 +3350,7 @@ mod tests {
         );
 
         let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-        assert!(lib.contains("let production = config.environment().is_production()"));
+        assert!(lib.contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()"));
         assert!(!lib.contains("// stale core"));
         let route_after = fs::read_to_string(root.join("routes/web.rs")).unwrap();
         assert!(route_after.contains("// business marker"));

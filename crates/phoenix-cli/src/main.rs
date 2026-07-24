@@ -298,7 +298,7 @@ fn new_project(mut arguments: Vec<String>) -> Result<(), String> {
         let ask_frontend = !frontend_set;
         if ask_render || ask_database || ask_tailwind || ask_git || ask_frontend {
             println!();
-            println!("交互配置：输入序号后回车；直接回车 = 保留默认项（标了 ← 默认）。");
+            println!("Interactive setup — enter a number, or press Enter to accept the default.");
             println!();
         }
         if ask_render {
@@ -311,18 +311,18 @@ fn new_project(mut arguments: Vec<String>) -> Result<(), String> {
             options.tailwind = prompt_yes_no(
                 "Tailwind CSS",
                 &[
-                    ("0", "否", "不用 Tailwind，仅普通 CSS"),
-                    ("1", "是", "启用 Tailwind CSS v4（@tailwindcss/vite）"),
+                    ("0", "No", "Use standard CSS only"),
+                    ("1", "Yes", "Enable Tailwind CSS v4 via @tailwindcss/vite"),
                 ],
                 "0",
             )?;
         }
         if ask_git {
             options.initialize_git = prompt_yes_no(
-                "初始化 Git",
+                "Initialize a Git repository",
                 &[
-                    ("0", "否", "不执行 git init"),
-                    ("1", "是", "在新项目里执行 git init"),
+                    ("0", "No", "Skip git init"),
+                    ("1", "Yes", "Run git init in the new project"),
                 ],
                 "0",
             )?;
@@ -388,73 +388,73 @@ fn update_project(arguments: Vec<String>) -> Result<(), String> {
 }
 
 fn prompt_name() -> Result<String, String> {
-    println!("── 项目名称");
-    println!("  将作为目录名 / Cargo 包名（字母、数字、短横线）。");
+    println!("Project name");
+    println!("  Used for the directory and Cargo package name (letters, numbers, and hyphens).");
     println!();
-    print!("请输入项目名: ");
+    print!("Name: ");
     io::stdout().flush().map_err(|error| error.to_string())?;
     let name = prompt_input(None)?;
     if name.is_empty() {
-        return Err("必须填写项目名；也可直接：px new my-app".to_owned());
+        return Err("a project name is required; try: px new my-app".to_owned());
     }
     Ok(name)
 }
 
 fn prompt_render_mode() -> Result<ProjectRenderMode, String> {
     prompt_menu(
-        "渲染模式",
-        "决定 React 页面如何交付到浏览器。",
+        "Rendering mode",
+        "Choose how React pages are delivered to the browser.",
         &[
-            ("0", "Islands", "岛屿水合：默认推荐，按需激活组件"),
-            ("1", "SPA", "纯客户端壳：首屏由浏览器接管路由"),
-            ("2", "SSR", "全量服务端渲染：每次请求出完整 HTML"),
+            ("0", "Islands", "Recommended — hydrate only interactive components"),
+            ("1", "SPA", "Client-rendered application shell"),
+            ("2", "SSR", "Render the full HTML document on every request"),
         ],
         "0",
         |value| match value {
             "0" | "islands" | "island" => Ok(ProjectRenderMode::Islands),
             "1" | "spa" => Ok(ProjectRenderMode::Spa),
             "2" | "ssr" => Ok(ProjectRenderMode::Ssr),
-            _ => Err("请输入 0 / 1 / 2，或 islands / spa / ssr".to_owned()),
+            _ => Err("enter 0, 1, or 2 — or islands, spa, or ssr".to_owned()),
         },
     )
 }
 
 fn prompt_database() -> Result<Option<ProjectDatabase>, String> {
     prompt_menu(
-        "数据库",
-        "可选；选中后才会写入 Toasty 依赖、配置与迁移脚手架。",
+        "Database",
+        "Optional — adds Toasty dependencies, configuration, and migration scaffolding.",
         &[
-            ("0", "无", "不带数据库（体积最小，默认可发版）"),
-            ("1", "SQLite", "本地文件库，零配置上手"),
-            ("2", "PostgreSQL", "启用 pgsql 驱动 feature"),
-            ("3", "MySQL", "启用 mysql / MariaDB 驱动 feature"),
-            ("4", "全部", "同时编译 sqlite+pgsql+mysql（二进制更大）"),
+            ("0", "None", "No database dependency; smallest release binary"),
+            ("1", "SQLite", "Local file database with zero configuration"),
+            ("2", "PostgreSQL", "Enable the pgsql driver feature"),
+            ("3", "MySQL", "Enable the MySQL / MariaDB driver feature"),
+            ("4", "All", "Compile SQLite, PostgreSQL, and MySQL drivers"),
         ],
         "0",
         |value| match value {
-            "0" | "none" | "no" | "n" | "无" => Ok(None),
+            "0" | "none" | "no" | "n" => Ok(None),
             "1" | "sqlite" => Ok(Some(ProjectDatabase::Sqlite)),
             "2" | "pgsql" | "postgres" | "postgresql" => Ok(Some(ProjectDatabase::Pgsql)),
             "3" | "mysql" | "mariadb" => Ok(Some(ProjectDatabase::Mysql)),
-            "4" | "all" | "全部" => Ok(Some(ProjectDatabase::All)),
-            _ => Err("请输入 0–4，或 none / sqlite / pgsql / mysql / all".to_owned()),
+            "4" | "all" => Ok(Some(ProjectDatabase::All)),
+            _ => Err("enter 0–4, or none, sqlite, pgsql, mysql, or all".to_owned()),
         },
     )
 }
 
 fn prompt_frontend() -> Result<ProjectFrontend, String> {
     prompt_menu(
-        "React 源码格式",
-        "页面与 island 文件扩展名。",
+        "React source format",
+        "Select the file extension for pages and islands.",
         &[
-            ("0", "TSX", "TypeScript + JSX（推荐）"),
+            ("0", "TSX", "Recommended — TypeScript with JSX"),
             ("1", "JSX", "JavaScript + JSX"),
         ],
         "0",
         |value| match value {
             "0" | "tsx" | "ts" => Ok(ProjectFrontend::Tsx),
             "1" | "jsx" | "js" => Ok(ProjectFrontend::Jsx),
-            _ => Err("请输入 0 / 1，或 tsx / jsx".to_owned()),
+            _ => Err("enter 0 or 1 — or tsx or jsx".to_owned()),
         },
     )
 }
@@ -465,15 +465,15 @@ fn prompt_yes_no(
     default_key: &str,
 ) -> Result<bool, String> {
     prompt_menu(title, "", choices, default_key, |value| match value {
-        "0" | "n" | "no" | "否" => Ok(false),
-        "1" | "y" | "yes" | "是" => Ok(true),
-        _ => Err("请输入 0 / 1，或 y / n".to_owned()),
+        "0" | "n" | "no" => Ok(false),
+        "1" | "y" | "yes" => Ok(true),
+        _ => Err("enter 0 or 1 — or y or n".to_owned()),
     })
 }
 
 /// Print a numbered menu and read until the choice parses.
 ///
-/// Enter keeps `default_key`. The `← 默认` mark is derived only from that key.
+/// Enter keeps `default_key`. The default marker is derived only from that key.
 fn prompt_menu<T>(
     title: &str,
     blurb: &str,
@@ -481,15 +481,15 @@ fn prompt_menu<T>(
     default_key: &str,
     parse: impl Fn(&str) -> Result<T, String>,
 ) -> Result<T, String> {
-    println!("── {title}");
+    println!("{title}");
     if !blurb.is_empty() {
         println!("  {blurb}");
     }
-    println!("  默认项: {default_key}  （直接回车即选此项）");
+    println!("  Default: {default_key} (press Enter to accept)");
     println!();
     for (key, label, help) in choices {
         let mark = if *key == default_key {
-            "  ← 默认"
+            "  ← default"
         } else {
             ""
         };
@@ -498,10 +498,10 @@ fn prompt_menu<T>(
     }
     println!();
     loop {
-        print!("请选择 [默认 {default_key}]: ");
+        print!("Select [{default_key}]: ");
         io::stdout().flush().map_err(|error| error.to_string())?;
         let value = prompt_input(Some(default_key))?;
-        // Also accept the visible label text (e.g. Islands / 无 / 否).
+        // Also accept the visible label text (for example Islands, None, or No).
         let value = choices
             .iter()
             .find(|(_, label, _)| label.eq_ignore_ascii_case(&value) || *label == value)

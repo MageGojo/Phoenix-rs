@@ -536,3 +536,12 @@
 - 仅发布变更 crate：`phoenix-view 0.1.3`、`px-cli 0.1.5`
 - 发布：`@b6adb6a` push GitHub + GitCode；Release [v0.1.5](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.5)；crates.io 已上架
 - 状态：已完成@b6adb6a
+
+## 2026-07-24：release 资源模式与开发实时刷新修复
+
+- 根因：编译后的应用仍以 `APP_ENV=development` 判断资源模式，生成 `/assets/phoenix.js` 而非 manifest 的 hashed JS/CSS；发布目录未启动 Vite 时入口 404。
+- 修复：`px dev` 明确注入 `PHOENIX_VITE_DEV=1`；脚手架仅在该生命周期信号存在时使用 Vite dev client，其他启动方式都加载 production asset manifest。生成的 controller 同时按运行时 `AppConfig` 设置 Vite dev entry，避免 release-profile 的 debug-assertion 分支影响 URL。
+- 实时刷新：监听范围加入 `views/`、`package.json`、lockfile、TS/Vite 配置；变化后重建 client + renderer 并重启 backend。
+- CLI：`px new` 交互菜单改为开发者导向英文文案和一致的默认项提示。
+- 验收：`cargo test -p px-cli`；重建 `px_text` release staging，HTML 引用 `/assets/client-HaMzEeQc.css` 与 `/assets/phoenix-N3wLaEhm.js`，两者 HTTP 200。
+  状态：已完成@工作树

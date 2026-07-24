@@ -49,7 +49,7 @@ pub struct DevConfig {
     pub renderer_build: CommandSpec,
     /// Build browser and renderer bundles before each backend restart.
     pub build_frontend: bool,
-    /// When true (default), watch Rust sources and restart `cargo run` on change.
+    /// When true (default), watch backend and frontend sources and restart `cargo run` on change.
     pub watch_rust: bool,
 }
 
@@ -159,7 +159,7 @@ impl DevSupervisor {
                 let mut rust = spawn("Rust", &self.config.rust, &cwd)?;
                 if self.config.watch_rust {
                     eprintln!(
-                        "px dev: watching application and React sources for rebuilds"
+                        "px dev: watching backend and frontend sources for rebuilds"
                     );
                 }
 
@@ -186,7 +186,7 @@ impl DevSupervisor {
                         });
                     }
                     Event::RustChanged => {
-                        eprintln!("px dev: Rust source changed — rebuilding…");
+                        eprintln!("px dev: source change detected — rebuilding client, renderer, and backend…");
                         terminate(&mut rust).await?;
                         drain_changes(&mut changes, Duration::from_millis(400)).await;
                         continue;
@@ -275,11 +275,20 @@ fn start_rust_watcher(cwd: &Path) -> Result<RustWatcher, DevError> {
                 .map_err(DevError::Watch)?;
         }
     }
-    let cargo_toml = cwd.join("Cargo.toml");
-    if cargo_toml.is_file() {
-        watcher
-            .watch(&cargo_toml, RecursiveMode::NonRecursive)
-            .map_err(DevError::Watch)?;
+    for relative in [
+        "Cargo.toml",
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "vite.config.ts",
+        "vite.ssr.config.ts",
+    ] {
+        let path = cwd.join(relative);
+        if path.is_file() {
+            watcher
+                .watch(&path, RecursiveMode::NonRecursive)
+                .map_err(DevError::Watch)?;
+        }
     }
 
     let cwd = cwd.to_path_buf();
@@ -327,16 +336,36 @@ fn is_watched_rust_path(cwd: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(cwd) else {
         return false;
     };
+    if relative
+        .parent()
+        .is_none_or(|parent| parent.as_os_str().is_empty())
+    {
+        return relative.file_name().is_some_and(is_watched_root_file);
+    }
     let mut components = relative.components();
     let Some(std::path::Component::Normal(first)) = components.next() else {
-        return path.file_name().is_some_and(|name| name == "Cargo.toml");
+        return path.file_name().is_some_and(is_watched_root_file);
     };
     let first = first.to_string_lossy();
     matches!(
         first.as_ref(),
-        "app" | "src" | "routes" | "config" | "database" | "views" | "Cargo.toml"
+        "app" | "src" | "routes" | "config" | "database" | "views"
     ) && !relative.components().any(
         |component| matches!(component, std::path::Component::Normal(name) if name == "target"),
+    )
+}
+
+fn is_watched_root_file(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(
+            "Cargo.toml"
+                | "package.json"
+                | "package-lock.json"
+                | "tsconfig.json"
+                | "vite.config.ts"
+                | "vite.ssr.config.ts"
+        )
     )
 }
 
@@ -373,6 +402,12 @@ fn spawn(label: &'static str, spec: &CommandSpec, cwd: &Path) -> Result<Child, D
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
+    // The scaffold uses this explicit lifecycle signal rather than APP_ENV to
+    // choose Vite's dev client. A packaged binary may still be started with a
+    // development config while it must serve its hashed release assets.
+    if label == "Rust" {
+        command.env("PHOENIX_VITE_DEV", "1");
+    }
     #[cfg(unix)]
     command.process_group(0);
     command.spawn().map_err(|source| DevError::Spawn {
@@ -503,6 +538,8 @@ mod tests {
             &cwd,
             &cwd.join("views/pages/home.tsx")
         ));
+        assert!(is_watched_rust_path(&cwd, &cwd.join("vite.config.ts")));
+        assert!(is_watched_rust_path(&cwd, &cwd.join("package.json")));
         assert!(!is_watched_rust_path(
             &cwd,
             &cwd.join("target/debug/my-app")

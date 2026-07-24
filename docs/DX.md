@@ -179,7 +179,7 @@ px dev
 
 `px` 是 crates.io 包名与二进制名。`px new` 在无本地框架检出时依赖门面包 `phoenixrs`（应用仍 `use phoenix::`）。详见根 README「命名」一节。
 
-`px new` 可交互选择 Islands（默认）/ SPA / SSR、无数据库（默认）或 SQLite/PostgreSQL/MySQL/全部驱动、Tailwind CSS、是否初始化 Git（默认否）和 TSX（默认）/ JSX；交互菜单为多行清单，每项标明序号、含义与「← 默认」，直接回车即保留默认。相同选项也可用 `--render-mode`、`--database`、`--tailwind`、`--git` 与 `--frontend` 传入。未选择数据库时不会写入 Toasty 依赖、数据库配置或迁移目录。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。`px update` 只刷新框架核心文件（`src/lib.rs` / `src/main.rs`、Vite/TS 配置、config schemas、依赖钉扎与可选 `phoenix-manage`），不改业务代码（controllers / routes / pages）。`px dev` 自动构建 client 与 SSR renderer，并在 Rust/React 源码变化后先重建产物再重启后端；开发模式使用 Vite dev client，前端走 HMR，后端 Rust/路由变化触发浏览器 full reload，开发与 `npm run build` 使用相同 manifest 和渲染器输出。
+`px new` uses an English, developer-oriented interactive menu for Islands (default) / SPA / SSR, no database (default) or SQLite/PostgreSQL/MySQL/all drivers, Tailwind CSS, Git initialization (off by default), and TSX (default) / JSX. Each option includes a key, a practical consequence, and a `← default` marker; pressing Enter accepts the default. The same choices are available through `--render-mode`, `--database`, `--tailwind`, `--git`, and `--frontend`. When no database is selected, Phoenix omits Toasty dependencies, database configuration, and migration directories. The application entry point is `phoenix-console`: `cargo run -- serve` starts HTTP, and `px make:command Update` generates and registers a custom command. `px update` refreshes framework-owned core files only (`src/lib.rs` / `src/main.rs`, Vite/TS configuration, config schemas, dependency pins, and optional `phoenix-manage`) without touching business code (controllers / routes / pages). `px dev` sets an explicit Vite-dev lifecycle flag, builds the client and SSR renderer, then rebuilds them and restarts the backend after backend, React, or relevant Vite/package configuration changes; development uses the Vite client for HMR while a packaged binary serves the hashed manifest assets even when its config uses development defaults. Development and `npm run build` use the same manifest and renderer output.
 
 默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认执行 `npm install` 和刷新 `views/generated`，Git 初始化需在交互菜单中选择或传递 `--git`；可用 `--no-install`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
 
@@ -237,7 +237,7 @@ px dev
 该命令先从当前目录向上定位项目根并检查 JavaScript 依赖，再显示即将启动的后端、前端和工作目录，然后同时运行：
 
 - **前端**：`npm run dev -- --strictPort`（Vite HMR）
-- **后端**：`cargo run -- serve`，并监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`Cargo.toml`；源码变更后自动杀掉旧进程并重新 `cargo run`（编译失败不会拖垮 Vite，会等下次改动再试）
+- **后端**：`cargo run -- serve`，并监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`views/`、`Cargo.toml`，以及 `package.json`、`tsconfig.json` 和 Vite 配置；变更后自动停止旧进程、重建 client/renderer 并重新 `cargo run`（编译失败不会拖垮 Vite，会等下次改动再试）
 
 两者位于独立进程组；Ctrl-C 或 Vite 提前退出会终止并回收另一侧。Rust 在热重载模式下因编译失败退出时，监督器会保持 Vite 并等待下一次源码变更。Vite 使用 strict port，确保 Rust 输出的默认 `VITE_DEV_URL` 不会因自动换端口而指向错误服务。
 
