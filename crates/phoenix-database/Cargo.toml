@@ -4,10 +4,17 @@ description = "Toasty database integration, migrations, and test isolation for P
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version.workspace = true
+version = "0.1.1"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["toasty/sqlite"]
+pgsql = ["postgresql"]
+postgresql = ["toasty/postgresql"]
+mysql = ["toasty/mysql"]
 
 [dependencies]
 sha2.workspace = true

@@ -40,7 +40,7 @@ Phoenix-rs 采用模块化单体框架结构。应用开发者通常只依赖顶
       -> phoenix-validation（请求 DTO 与验证错误）
       -> phoenix-contracts（Rust schema、TS 导出、冲突检查）
       -> phoenix-view（页面协议、Vite 清单、React 响应）
-      -> phoenix-database（Toasty 门面、事务、分页、迁移；sqlite/pgsql/mysql）
+      -> phoenix-database（Toasty 门面、事务、分页、迁移；sqlite/pgsql/mysql Cargo feature 按需链接）
       -> phoenix-security（会话、CSRF、安全头、密文信封）
       -> phoenix-dx（resource routes、中间件别名、模型绑定）
       -> phoenix-plugin（Feature / Plugin 显式安装）

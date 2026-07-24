@@ -56,7 +56,8 @@ Task Progress:
 px new my-app
 cd my-app
 cp .env.example .env
-# edit config/database.toml default = "sqlite" | "pgsql" | "mysql"
+# edit config/database.toml and the matching Cargo default feature:
+# "sqlite" | "pgsql" | "mysql" (only one driver is linked)
 px make:model Post --all
 px make:controller Admin/PostController --resource
 px make:page posts/index

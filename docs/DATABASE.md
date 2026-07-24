@@ -64,7 +64,22 @@ postgresql://...
 mysql://...
 ```
 
-其他 scheme 会返回 `DatabaseError::UnsupportedBackend`。生产数据库 URL 必须来自环境或密钥服务，不要写进源码、日志或公开文档。应用侧推荐用 `config/database.toml` 的 `default = "sqlite" | "pgsql" | "mysql"`（见 [CONFIG.md](./CONFIG.md)）。
+其他 scheme 会返回 `DatabaseError::UnsupportedBackend`；URL 指向未编译的驱动时返回 `DatabaseError::BackendNotCompiled` 并给出应启用的 Cargo feature。生产数据库 URL 必须来自环境或密钥服务，不要写进源码、日志或公开文档。应用侧需同步选择 `config/database.toml` 的 `default = "sqlite" | "pgsql" | "mysql"` 与 `Cargo.toml` 同名 feature（见 [CONFIG.md](./CONFIG.md)）。
+
+## 按需编译数据库驱动
+
+`phoenix-database` 的 `sqlite`、`pgsql` / `postgresql`、`mysql` features 分别转发到 Toasty 驱动。门面 `phoenixrs` 默认只启用 `sqlite`；应用脚手架关闭 Phoenix 与 Toasty 的隐式默认 features，再以应用 feature 精确选择一个驱动。因此 HTTP 主程序和 `phoenix-manage` 使用同一驱动集合，不再固定携带 SQLite、PostgreSQL、MySQL 全家桶。
+
+```bash
+# 默认 SQLite
+cargo build --release
+
+# 单次 PostgreSQL 构建
+cargo build --release --no-default-features --features pgsql
+
+# 单次 MySQL 构建
+cargo build --release --no-default-features --features mysql
+```
 
 `initialize_schema()` 适用于空数据库、原型和隔离测试。已有生产数据库的版本演进应使用迁移，避免把 Toasty schema push 当作升级工具。
 
@@ -224,7 +239,7 @@ println!("rolled back {rolled_back} migration(s)");
 
 应用部署应在新版本接流量前执行迁移（`px release:install` 默认会在切换 `current` 前跑 `phoenix-manage migrate`），并确保同一数据库只有迁移 runner 负责 schema 变更。
 
-CI 契约测目前提供 `PHOENIX_TEST_POSTGRES_URL`（可选）；MySQL 驱动已接入，尚无对等的 `PHOENIX_TEST_MYSQL_URL` 集成测。
+CI 契约测分别通过 `PHOENIX_TEST_POSTGRES_URL` 与 `PHOENIX_TEST_MYSQL_URL` 连接一次性服务，并为每个 job 只启用对应数据库 feature。
 
 ## 8. 测试隔离
 
@@ -260,7 +275,8 @@ PostgreSQL 契约测试需要隔离测试库：
 
 ```bash
 PHOENIX_TEST_POSTGRES_URL='postgresql://…/phoenix_test' \
-  cargo test -p phoenix-database postgresql_crud_relations_and_pagination_when_configured
+  cargo test -p phoenix-database --no-default-features --features postgresql \
+  postgresql_crud_relations_and_pagination_when_configured
 ```
 
 该环境变量未设置时 PostgreSQL 测试会跳过；CI 要验证 PostgreSQL 时必须显式提供一次性测试数据库。

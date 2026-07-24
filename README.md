@@ -49,7 +49,7 @@ Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按
 
 ## 快速开始
 
-要求：Rust **1.95+**、Node.js（Vite / React）、可选 SQLite（默认）/ PostgreSQL / MySQL。
+要求：Rust **1.95+**、Node.js（Vite / React）、可选 SQLite（默认）/ PostgreSQL / MySQL。数据库驱动通过 Cargo feature 按需编译；新应用默认只链接 SQLite。
 
 ### 安装 `px`
 
@@ -80,6 +80,8 @@ cp .env.example .env   # 默认使用 SQLite，无需额外配置即可启动
 px migrate
 px dev
 ```
+
+切换 PostgreSQL 或 MySQL 时，同时把应用 `Cargo.toml` 的默认 feature 与 `config/database.toml` 对齐；例如一次性 PostgreSQL 构建使用 `cargo build --no-default-features --features pgsql`。
 
 启动成功后访问 **http://127.0.0.1:3000**。切换到 PostgreSQL / MySQL 见 [docs/CONFIG.md](docs/CONFIG.md)。
 

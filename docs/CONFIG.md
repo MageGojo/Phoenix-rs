@@ -53,12 +53,26 @@ default = "sqlite"
 # default = "mysql"
 ```
 
-也可以不改文件，只在 `.env` 写：
+数据库配置决定运行时连接，应用 `Cargo.toml` 的默认 feature 决定编译进二进制的驱动。两处应保持一致，新脚手架默认只编译 SQLite：
+
+```toml
+[features]
+default = ["sqlite"]
+sqlite = ["phoenix/sqlite", "toasty/sqlite"]
+pgsql = ["phoenix/pgsql", "toasty/postgresql"]
+mysql = ["phoenix/mysql", "toasty/mysql"]
+```
+
+切换到 PostgreSQL 时将 feature 的 `default` 改为 `["pgsql"]`，同时把 `config/database.toml` 改为 `default = "pgsql"`。临时构建也可用 `cargo build --no-default-features --features pgsql`。这种编译期选择避免 `phoenix-manage` 静态链接未使用的另外两个数据库驱动。
+
+如果对应驱动已经编译，也可以不改配置文件，只在 `.env` 覆盖运行时连接：
 
 ```env
 DB_CONNECTION=mysql
 DB_PASSWORD=secret
 ```
+
+新脚手架默认仅编译 SQLite，所以使用上述 MySQL 覆盖前还需启用 `mysql` Cargo feature。
 
 框架会按 `connections.mysql` 拼出：
 

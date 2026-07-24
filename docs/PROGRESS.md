@@ -504,3 +504,11 @@
 - 已推送：GitHub `origin/main` + GitCode `gitcode/main` @`f170999`
 - 已发布：npm `@apizero/vite@0.1.3`；crates.io `phoenix-view`/`phoenix-release`/`phoenixrs` 0.1.1、`px-cli` 0.1.2
   状态：已完成@f170999
+
+## 2026-07-24：release 二进制体积与数据库驱动按需编译
+
+- 根因确认：脚手架固定给 Toasty 启用 SQLite、PostgreSQL、MySQL，导致实际执行迁移的 `phoenix-manage` 把三套驱动全部静态链接；应用主程序未触发 DB 路径时则可能被链接器偶然裁掉。
+- 修复：`phoenix-database` / `phoenixrs` 暴露数据库 features；新应用以 `sqlite` / `pgsql` / `mysql` 只选择一个驱动，默认 SQLite；未编译驱动返回稳定错误。
+- 体积 profile：脚手架与框架 release 使用 `opt-level = "z"`、LTO、`codegen-units = 1`、strip，保留 `panic = "unwind"`。
+- 验收：`px_text` 的依赖图只含 `toasty-driver-sqlite`；`cargo check --bins`、`cargo test`、release 管理命令均通过；SQLite-only + size profile 实测 `px-text` **2,071,616 bytes**、`phoenix-manage` **2,658,624 bytes**（优化前约 6.8 MiB / 14 MiB）。配置切换到未编译 MySQL 时稳定返回 `BackendNotCompiled { feature: "mysql" }`。
+  状态：已完成@工作树

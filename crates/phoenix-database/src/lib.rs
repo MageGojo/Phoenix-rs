@@ -122,6 +122,9 @@ impl DatabaseBuilder {
 
     /// Connect using a `sqlite:`, `postgresql:`, or `mysql:` URL.
     ///
+    /// Only drivers enabled through this crate's `sqlite`, `pgsql` /
+    /// `postgresql`, or `mysql` Cargo feature are linked into the binary.
+    ///
     /// # Errors
     ///
     /// Returns an error for unsupported URLs or failed database connections.
@@ -156,11 +159,29 @@ impl DatabaseBuilder {
 
 fn backend_from_url(url: &str) -> Result<Backend, DatabaseError> {
     let scheme = url.split_once(':').map_or(url, |(scheme, _)| scheme);
-    match scheme {
-        "sqlite" => Ok(Backend::SQLite),
-        "postgres" | "postgresql" => Ok(Backend::PostgreSQL),
-        "mysql" => Ok(Backend::MySQL),
-        _ => Err(DatabaseError::UnsupportedBackend(scheme.to_owned())),
+    let backend = match scheme {
+        "sqlite" => Backend::SQLite,
+        "postgres" | "postgresql" => Backend::PostgreSQL,
+        "mysql" => Backend::MySQL,
+        _ => return Err(DatabaseError::UnsupportedBackend(scheme.to_owned())),
+    };
+    ensure_backend_compiled(backend)?;
+    Ok(backend)
+}
+
+fn ensure_backend_compiled(backend: Backend) -> Result<(), DatabaseError> {
+    let (compiled, name, feature) = match backend {
+        Backend::SQLite => (cfg!(feature = "sqlite"), "sqlite", "sqlite"),
+        Backend::PostgreSQL => (cfg!(feature = "postgresql"), "postgresql", "pgsql"),
+        Backend::MySQL => (cfg!(feature = "mysql"), "mysql", "mysql"),
+    };
+    if compiled {
+        Ok(())
+    } else {
+        Err(DatabaseError::BackendNotCompiled {
+            backend: name,
+            feature,
+        })
     }
 }
 
@@ -211,6 +232,11 @@ impl DerefMut for TestDatabase {
 pub enum DatabaseError {
     #[error("unsupported database URL scheme `{0}`; expected sqlite, postgresql, or mysql")]
     UnsupportedBackend(String),
+    #[error("database backend `{backend}` is not compiled; enable Cargo feature `{feature}`")]
+    BackendNotCompiled {
+        backend: &'static str,
+        feature: &'static str,
+    },
     #[error("database operation failed: {0}")]
     Toasty(#[from] toasty::Error),
 }
@@ -251,17 +277,36 @@ mod tests {
     #[test]
     fn accepts_only_supported_sql_url_schemes() {
         assert_eq!(
-            backend_from_url("sqlite::memory:").unwrap(),
-            Backend::SQLite
+            backend_from_url("sqlite::memory:").is_ok(),
+            cfg!(feature = "sqlite")
         );
         assert_eq!(
-            backend_from_url("postgresql://db.invalid/app").unwrap(),
-            Backend::PostgreSQL
+            backend_from_url("postgresql://db.invalid/app").is_ok(),
+            cfg!(feature = "postgresql")
         );
         assert_eq!(
-            backend_from_url("mysql://db.invalid/app").unwrap(),
-            Backend::MySQL
+            backend_from_url("mysql://db.invalid/app").is_ok(),
+            cfg!(feature = "mysql")
         );
         assert!(backend_from_url("redis://db.invalid/app").is_err());
+    }
+
+    #[test]
+    fn reports_the_feature_for_a_driver_that_is_not_compiled() {
+        let candidate = [
+            (Backend::SQLite, "sqlite"),
+            (Backend::PostgreSQL, "pgsql"),
+            (Backend::MySQL, "mysql"),
+        ]
+        .into_iter()
+        .find(|(backend, _)| ensure_backend_compiled(*backend).is_err());
+        if let Some((backend, expected_feature)) = candidate {
+            let DatabaseError::BackendNotCompiled { feature, .. } =
+                ensure_backend_compiled(backend).unwrap_err()
+            else {
+                panic!("expected an uncompiled-backend error");
+            };
+            assert_eq!(feature, expected_feature);
+        }
     }
 }

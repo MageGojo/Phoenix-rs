@@ -70,7 +70,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 zeroize = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-toasty = { version = "0.8", features = ["migration", "mysql", "postgresql", "serde", "sqlite"] }
+toasty = { version = "0.8", default-features = false, features = ["migration", "serde"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
 notify = "7"
 
@@ -82,4 +82,8 @@ all = "warn"
 pedantic = "warn"
 
 [profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
 panic = "unwind"
+strip = "symbols"

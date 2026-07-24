@@ -20,7 +20,7 @@
 1. 新项目 / 新业务：优先 `px new`、`px make:*`，禁止手搓目录树。
 2. 契约只写在 Rust（`#[phoenix::contract]`）；禁止手改 `views/generated/`。
 3. React 用生成的 named action / `routes.ts`；破坏性写操作走 typed action，不用 method-spoofing Link。
-4. 选库改 `config/database.toml`（sqlite / pgsql / mysql）；密钥放 `.env`。
+4. 选库时同步 `config/database.toml` 与应用 `Cargo.toml` 的默认数据库 feature（sqlite / pgsql / mysql），确保只链接一个驱动；密钥放 `.env`。
 5. 第三方能力用 `FeatureSet::plugin`（见 `docs/FEATURES.md`），不要隐式全局注册。
 6. 上线用 `px release*`（见 `docs/RELEASE_PIPELINE.md`），不要直接覆盖服务器目录。
 7. 改完跑对应测试：`cargo test` / `npm test --workspace=@apizero/react`。

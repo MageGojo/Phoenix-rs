@@ -482,7 +482,8 @@ fn project_files(
             // npm: `@phoenix` / `@phoenixrs` scopes are unavailable to the publisher
             // account; packages ship as `@apizero/*`. Packument GET is currently
             // broken on npm for these new names, so pin installable tarball URLs.
-            "phoenix = { package = \"phoenixrs\", version = \"0.1.0\" }".to_owned(),
+            "phoenix = { package = \"phoenixrs\", version = \"0.1.2\", default-features = false }"
+                .to_owned(),
             "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
             "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-0.1.2.tgz".to_owned(),
             "https://registry.npmjs.org/@apizero/vite/-/vite-0.1.3.tgz".to_owned(),
@@ -491,7 +492,7 @@ fn project_files(
             let root = absolute_path(root)?;
             (
                 format!(
-                    "phoenix = {{ package = \"phoenixrs\", path = {} }}",
+                    "phoenix = {{ package = \"phoenixrs\", path = {}, default-features = false }}",
                     json_string(&root.join("crates/phoenix").to_string_lossy())
                 ),
                 format!("file:{}", root.join("packages/phoenix-react").display()),
@@ -540,12 +541,12 @@ fn project_files(
         (
             "Cargo.toml".into(),
             format!(
-                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", features = [\"migration\", \"mysql\", \"postgresql\", \"serde\", \"sqlite\"] }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[workspace]\n",
+                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Compile exactly one database driver into production binaries. Keep this in sync\n# with `default` in config/database.toml.\ndefault = [\"sqlite\"]\nsqlite = [\"phoenix/sqlite\", \"toasty/sqlite\"]\npgsql = [\"phoenix/pgsql\", \"toasty/postgresql\"]\nmysql = [\"phoenix/mysql\", \"toasty/mysql\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", default-features = false, features = [\"migration\", \"serde\"] }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
                 package = json_string(package),
             ),
         ),
         ("package.json".into(), package_json),
-        (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n.env\n.DS_Store\n".to_owned()),
+        (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned()),
         (".env.example".into(), env_example_template()),
         ("README.md".into(), project_readme(package)),
         ("src/main.rs".into(), main_template(&crate_name)),
@@ -649,6 +650,7 @@ fn database_toml_template() -> String {
 #   default = "sqlite"   # local file, zero setup
 #   default = "pgsql"    # PostgreSQL
 #   default = "mysql"    # MySQL / MariaDB
+# Keep the Cargo.toml default feature aligned so only that driver is linked.
 #
 # Or set DB_CONNECTION=pgsql|mysql in `.env` without editing this file.
 # Put DB_PASSWORD in `.env` — do not commit production passwords here.
@@ -874,7 +876,7 @@ fn empty_migration_registry() -> String {
 
 fn project_readme(package: &str) -> String {
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nSee Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nDatabase drivers are compile-time Cargo features. Keep `[features].default` in `Cargo.toml` aligned with `config/database.toml`; the scaffold defaults to SQLite and links only SQLite. For a one-off build, use `cargo build --no-default-features --features pgsql` (or `mysql`).\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
     )
 }
 
@@ -2249,6 +2251,11 @@ mod tests {
         let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(manifest.contains("crates/phoenix"));
         assert!(manifest.contains("default-run = \"phoenix-cli-new-"));
+        assert!(manifest.contains("default = [\"sqlite\"]"));
+        assert!(manifest.contains("sqlite = [\"phoenix/sqlite\", \"toasty/sqlite\"]"));
+        assert!(manifest.contains("default-features = false"));
+        assert!(manifest.contains("opt-level = \"z\""));
+        assert!(manifest.contains("strip = \"symbols\""));
         assert!(
             fs::read_to_string(root.join("package.json"))
                 .unwrap()

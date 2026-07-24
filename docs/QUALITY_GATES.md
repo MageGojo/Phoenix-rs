@@ -35,7 +35,7 @@ PostgreSQL contract 必须连接一次性测试库：
 
 ```bash
 PHOENIX_TEST_POSTGRES_URL='postgresql://TEST_USER:TEST_PASSWORD@127.0.0.1:5432/phoenix_test' \
-  cargo test --locked -p phoenix-database --test toasty_integration \
+  cargo test --locked -p phoenix-database --test toasty_integration --no-default-features --features postgresql \
   postgresql_crud_relations_and_pagination_when_configured -- --exact
 ```
 

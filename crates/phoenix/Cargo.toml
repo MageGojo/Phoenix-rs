@@ -4,7 +4,7 @@ description = "Phoenix-rs: Laravel-inspired Rust + React web framework by ApiZer
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version = "0.1.1"
+version = "0.1.2"
 authors.workspace = true
 readme = "../../README.md"
 homepage = "https://apizero.cn/"
@@ -17,7 +17,11 @@ name = "phoenix"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["sqlite"]
+sqlite = ["phoenix-database/sqlite"]
+pgsql = ["phoenix-database/pgsql"]
+postgresql = ["pgsql"]
+mysql = ["phoenix-database/mysql"]
 redis = ["dep:phoenix-redis"]
 storage = ["dep:phoenix-storage"]
 testing = ["dep:phoenix-testing"]
@@ -30,7 +34,7 @@ phoenix-config = { version = "0.1.0", path = "../phoenix-config" }
 phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
 phoenix-runtime = { version = "0.1.0", path = "../phoenix-runtime" }
 phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
-phoenix-database = { version = "0.1.0", path = "../phoenix-database" }
+phoenix-database = { version = "0.1.0", path = "../phoenix-database", default-features = false }
 phoenix-dx = { version = "0.1.0", path = "../phoenix-dx" }
 phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 phoenix-logging = { version = "0.1.0", path = "../phoenix-logging" }

@@ -11,7 +11,7 @@ repository.workspace = true
 
 [dependencies]
 phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
-phoenix-database = { version = "0.1.0", path = "../phoenix-database" }
+phoenix-database = { version = "0.1.0", path = "../phoenix-database", default-features = false }
 phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
 phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
 thiserror.workspace = true

@@ -292,3 +292,11 @@
 - 原因：避免本机直接覆盖生产；统一约定降低每人一套脚本的成本，同时不把多机/K8s 运维塞进框架。
 - 边界：MVP 单机 Unix symlink；不做健康检查自动回滚、不做内置 S3/多主机。
 - 文档：`docs/RELEASE_PIPELINE.md`。
+
+## ADR-041：数据库驱动按应用 Cargo feature 编译
+
+- 状态：已接受
+- 决定：`phoenix-database` 与 `phoenixrs` 分别暴露 `sqlite`、`pgsql` / `postgresql`、`mysql` feature；应用脚手架默认仅启用 `sqlite`，Toasty 的迁移与 serde 基础能力常驻，具体驱动按应用 feature 转发。应用 `Cargo.toml` 默认 feature 与 `config/database.toml` 的运行时连接必须一致。
+- 原因：迁移二进制会真实使用数据库，链接器不会裁掉可达的 Toasty 驱动；固定启用三库会让每个 `phoenix-manage` 静态携带 SQLite C 实现、MySQL、PostgreSQL 及其传输依赖。
+- 发布体积：脚手架和框架 release profile 使用 `opt-level = "z"`、LTO、单 codegen unit 与符号剥离；继续使用 `panic = "unwind"` 以保留框架 panic 隔离边界。
+- 失败边界：配置选择未编译驱动时，在连接前返回 `DatabaseError::BackendNotCompiled`；需要运行真实 PostgreSQL/MySQL 契约测试时显式启用对应 feature。

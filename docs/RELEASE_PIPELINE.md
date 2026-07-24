@@ -12,6 +12,8 @@ Phoenix-rs 提供 **打版本包 →（上传）→ 校验 → 迁移 → 原子
 | `px release:rollback` | 切回上一版（默认不自动 DB rollback） |
 | `px release:status` | 查看 current / previous / releases |
 
+脚手架生成的 `[profile.release]` 面向体积：`opt-level = "z"`、LTO、单 codegen unit、strip symbols，同时保留框架 panic 隔离所需的 `panic = "unwind"`。数据库依赖也通过应用的 `sqlite` / `pgsql` / `mysql` 默认 feature 只链接一个驱动。发布前应确认 `Cargo.toml` 默认 feature 与 `config/database.toml` 的 `default` 一致。
+
 ## 端到端
 
 ```bash

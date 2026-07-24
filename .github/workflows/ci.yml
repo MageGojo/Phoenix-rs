@@ -103,6 +103,7 @@ jobs:
       - name: Run PostgreSQL contract test
         run: >-
           cargo test --locked -p phoenix-database --test toasty_integration
+          --no-default-features --features postgresql
           postgresql_crud_relations_and_pagination_when_configured -- --exact
 
   mysql:
@@ -135,6 +136,7 @@ jobs:
       - name: Run MySQL contract test
         run: >-
           cargo test --locked -p phoenix-database --test toasty_integration
+          --no-default-features --features mysql
           mysql_crud_relations_and_pagination_when_configured -- --exact
 
   redis:
