@@ -389,8 +389,14 @@ impl Page {
         request: &Request,
         renderer: &NodeRenderer,
     ) -> Response {
-        if Self::is_page_request(request.headers())
-            && self.envelope.render_mode != RenderMode::Islands
+        // SPA owns its first render in the browser, so the renderer is only
+        // needed for SSR and Islands documents. Keeping this shortcut here
+        // lets a controller always call `respond_with_renderer`: switching
+        // `.spa()` to `.ssr()`, `.islands()`, or the default only changes the
+        // selected page mode.
+        if self.envelope.render_mode == RenderMode::Spa
+            || (Self::is_page_request(request.headers())
+                && self.envelope.render_mode != RenderMode::Islands)
         {
             return self
                 .respond_to(request, None)
@@ -1002,6 +1008,24 @@ mod tests {
         assert!(!response.headers().contains_key(header::CACHE_CONTROL));
         let envelope: PageEnvelope = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(envelope.props["id"], 7);
+    }
+
+    #[tokio::test]
+    async fn spa_documents_bypass_the_renderer() {
+        let renderer = NodeRenderer::new(RendererConfig::command(
+            "/definitely/missing/phoenix-renderer",
+            std::iter::empty::<OsString>(),
+        ));
+        let request = Request::new(Method::GET, "/dashboard".parse().unwrap());
+
+        let response = Page::new("dashboard/show", json!({ "ready": true }))
+            .spa()
+            .respond_with_renderer(&request, &renderer)
+            .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-phoenix-render-mode"], "spa");
+        assert!(String::from_utf8_lossy(response.body()).contains("id=\"phoenix-root\""));
     }
 
     #[test]

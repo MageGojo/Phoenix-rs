@@ -889,7 +889,7 @@ fn empty_migration_registry() -> String {
 
 fn project_readme(package: &str) -> String {
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nOptional capabilities are Cargo features (`sqlite`/`pgsql`/`mysql`, `tls`, `websocket`, `sse`, `auth`, `jwt`, `password`, `metrics`, …). `default = []` keeps binaries lean—enable only what you use (for example `cargo build --features sqlite,password`). When using a database, keep the enabled driver feature aligned with `config/database.toml`.\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## React rendering modes\n\nThe generated home controller starts in SPA mode. Change the page chain's `.spa()` to `.ssr()` or `.islands()`, or remove it for the default Islands mode; the controller and route already share one renderer-aware response path. Before running SSR or Islands, build both bundles:\n\n```bash\nnpm run build:client\nnpm run build:ssr\n```\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nOptional capabilities are Cargo features (`sqlite`/`pgsql`/`mysql`, `tls`, `websocket`, `sse`, `auth`, `jwt`, `password`, `metrics`, …). `default = []` keeps binaries lean—enable only what you use (for example `cargo build --features sqlite,password`). When using a database, keep the enabled driver feature aligned with `config/database.toml`.\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
     )
 }
 
@@ -958,9 +958,10 @@ pub mod migrations;
 pub mod seeders;
 
 use phoenix::prelude::{
-    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NonceSecurityPolicy, RateLimit,
-    RateLimitConfig, RequestId, RouteBuildError, Routes, ServeProductionAssets, SessionConfig,
-    SessionMiddleware, SessionStore, StateMiddleware, TrustedProxies,
+    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NodeRenderer,
+    NonceSecurityPolicy, RateLimit, RateLimitConfig, RendererConfig, RequestId, RouteBuildError,
+    Routes, ServeProductionAssets, SessionConfig, SessionMiddleware, SessionStore,
+    StateMiddleware, TrustedProxies,
 };
 #[cfg(feature = "database")]
 use phoenix::prelude::{Database, DatabaseError};
@@ -969,7 +970,11 @@ use config::AppConfig;
 
 #[must_use]
 #[allow(clippy::duplicate_mod)]
-pub fn routes(config: &AppConfig, assets: Option<&AssetManifest>) -> Routes {
+pub fn routes(
+    config: &AppConfig,
+    assets: Option<&AssetManifest>,
+    renderer: &NodeRenderer,
+) -> Routes {
     let session_config = SessionConfig {
         secure: config.public_url().starts_with("https://"),
         ..SessionConfig::default()
@@ -995,6 +1000,7 @@ pub fn routes(config: &AppConfig, assets: Option<&AssetManifest>) -> Routes {
         .with_middleware(Csrf)
         .with_middleware(StateMiddleware::new(config.clone()))
         .with_middleware(StateMiddleware::new(assets.cloned()))
+        .with_middleware(StateMiddleware::new(renderer.clone()))
 }
 
 fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
@@ -1016,7 +1022,8 @@ fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
 /// Returns a route error when route names or patterns conflict.
 pub fn application(config: AppConfig) -> Result<Application, RouteBuildError> {
     let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
-    Application::new(routes(&config, assets.as_ref()))
+    let renderer = NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js"));
+    Application::new(routes(&config, assets.as_ref(), &renderer))
 }
 
 /// Connect the configured database with every registered Toasty model.
@@ -1055,7 +1062,7 @@ pub async fn {function_name}(_ctx: CommandContext<'_>) -> CommandResult {{
 }
 
 fn home_controller_template() -> String {
-    r#"use phoenix::prelude::{AssetManifest, IntoResponse, Page, Request, Response, StatusCode};
+    r#"use phoenix::prelude::{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode};
 
 use crate::props::HomeProps;
 
@@ -1063,6 +1070,7 @@ pub struct HomeController;
 
 impl HomeController {
     pub async fn index(request: Request) -> Response {
+        let renderer = request.extensions().get::<NodeRenderer>().cloned();
         let assets = request
             .extensions()
             .get::<Option<AssetManifest>>()
@@ -1084,8 +1092,11 @@ impl HomeController {
                 }
             };
         }
-        page.respond_to(&request, None)
-            .unwrap_or_else(IntoResponse::into_response)
+        match renderer {
+            Some(renderer) => page.respond_with_renderer(&request, &renderer).await,
+            None => Response::text("Phoenix renderer is unavailable")
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        }
     }
 }
 "#
@@ -2303,6 +2314,21 @@ mod tests {
         assert!(application.contains("HostAllowlist::new"));
         assert!(application.contains("RateLimit::new"));
         assert!(application.contains("StateMiddleware::new(config.clone())"));
+        assert!(application.contains("StateMiddleware::new(renderer.clone())"));
+        assert!(application.contains("NodeRenderer::new(RendererConfig::node"));
+        let home_controller =
+            fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
+        assert!(home_controller.contains("get::<NodeRenderer>().cloned()"));
+        assert!(home_controller.contains("respond_with_renderer(&request, &renderer).await"));
+        let home_route = fs::read_to_string(root.join("routes/web.rs")).unwrap();
+        assert!(home_route.contains(".get(\"/\", HomeController::index)"));
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["check", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
         let config = fs::read_to_string(root.join("config/mod.rs")).unwrap();
         assert!(config.contains("AppConfig::load()"));
         assert!(config.lines().count() < 20);

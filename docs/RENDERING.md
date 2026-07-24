@@ -14,6 +14,8 @@ Page::new("docs/show", props); // 默认 Islands
 
 当前实现由页面响应显式覆盖默认值。路由级和应用配置级覆盖留给后续配置层；生产环境不允许因为 renderer 故障静默改变语义。
 
+`px new` 生成的控制器统一通过 `respond_with_renderer` 响应，并已把 `NodeRenderer` 注入请求状态。因此切换首屏模式时，只需修改页面链上的 `.spa()`：改为 `.ssr()`、`.islands()`，或删除它以使用默认 Islands；无需改路由或控制器响应方法。SPA 会跳过 renderer，SSR/Islands 则使用它输出首屏 HTML 和 island 描述。首次使用 SSR/Islands 前仍需构建 renderer 产物，见「构建产物」。
+
 ## 2. 模式对比
 
 | 模式 | 首屏 HTML | 浏览器执行 | 适合场景 | 运行要求 |

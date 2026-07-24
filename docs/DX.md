@@ -377,6 +377,8 @@ Page::new("docs/show", props) // 默认 Islands
 
 三种模式共用控制器、Props 和页面协议。SSR/Islands 默认需要生产环境运行 renderer，不能被描述为纯单 Rust 二进制部署。完整规则见 [RENDERING.md](RENDERING.md)。
 
+新项目首页已注入 `NodeRenderer`，控制器统一调用 `respond_with_renderer`。所以将首页的 `.spa()` 改为 `.ssr()`、`.islands()`，或直接删掉 `.spa()`，即可切换页面模式；路由和响应调用保持不变。启用 SSR/Islands 前先构建 client 与 renderer bundle。
+
 Islands 页面仍是普通 TSX，组件本身不需要 Phoenix 包装：
 
 ```tsx
