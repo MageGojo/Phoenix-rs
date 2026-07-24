@@ -528,7 +528,7 @@
 - 新增：`px update` 只刷新框架核心（lib/main、Vite/TS、schemas、依赖钉扎、可选 manage），不改业务代码
 - 验收：`cargo test -p phoenix-release -p px-cli --lib`；无 DB 项目可 `px release --tarball`；`update_core` 单测通过
 - 版本：`phoenix-release 0.1.2`、`px-cli 0.1.6`
-- 状态：进行中@发布
+- 状态：已完成@a8a8cc5（GitHub/GitCode + Release v0.1.6 + crates.io `phoenix-release 0.1.2` / `px-cli 0.1.6`）
 
 ## 2026-07-24：脚手架渲染模式可切换 + px new 默认可配置
 
