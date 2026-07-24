@@ -291,36 +291,43 @@ fn new_project(mut arguments: Vec<String>) -> Result<(), String> {
         index += 1;
     }
     if interactive {
-        println!();
-        println!("交互配置：输入序号后回车；直接回车 = 保留默认项（标了 ← 默认）。");
-        println!();
-        if !render_mode_set {
+        let ask_render = !render_mode_set;
+        let ask_database = !database_set;
+        let ask_tailwind = !tailwind_set;
+        let ask_git = !git_set;
+        let ask_frontend = !frontend_set;
+        if ask_render || ask_database || ask_tailwind || ask_git || ask_frontend {
+            println!();
+            println!("交互配置：输入序号后回车；直接回车 = 保留默认项（标了 ← 默认）。");
+            println!();
+        }
+        if ask_render {
             options.render_mode = prompt_render_mode()?;
         }
-        if !database_set {
+        if ask_database {
             options.database = prompt_database()?;
         }
-        if !tailwind_set {
+        if ask_tailwind {
             options.tailwind = prompt_yes_no(
                 "Tailwind CSS",
                 &[
-                    ("0", "否", "不用 Tailwind，仅普通 CSS", true),
-                    ("1", "是", "启用 Tailwind CSS v4（@tailwindcss/vite）", false),
+                    ("0", "否", "不用 Tailwind，仅普通 CSS"),
+                    ("1", "是", "启用 Tailwind CSS v4（@tailwindcss/vite）"),
                 ],
-                false,
+                "0",
             )?;
         }
-        if !git_set {
+        if ask_git {
             options.initialize_git = prompt_yes_no(
                 "初始化 Git",
                 &[
-                    ("0", "否", "不执行 git init", true),
-                    ("1", "是", "在新项目里执行 git init", false),
+                    ("0", "否", "不执行 git init"),
+                    ("1", "是", "在新项目里执行 git init"),
                 ],
-                false,
+                "0",
             )?;
         }
-        if !frontend_set {
+        if ask_frontend {
             options.frontend = prompt_frontend()?;
         }
     }
@@ -384,6 +391,8 @@ fn prompt_name() -> Result<String, String> {
     println!("── 项目名称");
     println!("  将作为目录名 / Cargo 包名（字母、数字、短横线）。");
     println!();
+    print!("请输入项目名: ");
+    io::stdout().flush().map_err(|error| error.to_string())?;
     let name = prompt_input(None)?;
     if name.is_empty() {
         return Err("必须填写项目名；也可直接：px new my-app".to_owned());
@@ -392,109 +401,121 @@ fn prompt_name() -> Result<String, String> {
 }
 
 fn prompt_render_mode() -> Result<ProjectRenderMode, String> {
-    match prompt_menu(
+    prompt_menu(
         "渲染模式",
         "决定 React 页面如何交付到浏览器。",
         &[
-            (
-                "0",
-                "Islands",
-                "岛屿水合：默认推荐，按需激活组件",
-                true,
-            ),
-            ("1", "SPA", "纯客户端壳：首屏由浏览器接管路由", false),
-            ("2", "SSR", "全量服务端渲染：每次请求出完整 HTML", false),
+            ("0", "Islands", "岛屿水合：默认推荐，按需激活组件"),
+            ("1", "SPA", "纯客户端壳：首屏由浏览器接管路由"),
+            ("2", "SSR", "全量服务端渲染：每次请求出完整 HTML"),
         ],
         "0",
-    )?
-    .as_str()
-    {
-        "0" | "islands" | "island" => Ok(ProjectRenderMode::Islands),
-        "1" | "spa" => Ok(ProjectRenderMode::Spa),
-        "2" | "ssr" => Ok(ProjectRenderMode::Ssr),
-        _ => Err("请输入 0 / 1 / 2，或 islands / spa / ssr".to_owned()),
-    }
+        |value| match value {
+            "0" | "islands" | "island" => Ok(ProjectRenderMode::Islands),
+            "1" | "spa" => Ok(ProjectRenderMode::Spa),
+            "2" | "ssr" => Ok(ProjectRenderMode::Ssr),
+            _ => Err("请输入 0 / 1 / 2，或 islands / spa / ssr".to_owned()),
+        },
+    )
 }
 
 fn prompt_database() -> Result<Option<ProjectDatabase>, String> {
-    match prompt_menu(
+    prompt_menu(
         "数据库",
         "可选；选中后才会写入 Toasty 依赖、配置与迁移脚手架。",
         &[
-            ("0", "无", "不带数据库（体积最小，默认可发版）", true),
-            ("1", "SQLite", "本地文件库，零配置上手", false),
-            ("2", "PostgreSQL", "启用 pgsql 驱动 feature", false),
-            ("3", "MySQL", "启用 mysql / MariaDB 驱动 feature", false),
-            ("4", "全部", "同时编译 sqlite+pgsql+mysql（二进制更大）", false),
+            ("0", "无", "不带数据库（体积最小，默认可发版）"),
+            ("1", "SQLite", "本地文件库，零配置上手"),
+            ("2", "PostgreSQL", "启用 pgsql 驱动 feature"),
+            ("3", "MySQL", "启用 mysql / MariaDB 驱动 feature"),
+            ("4", "全部", "同时编译 sqlite+pgsql+mysql（二进制更大）"),
         ],
         "0",
-    )?
-    .as_str()
-    {
-        "0" | "none" | "no" | "n" | "无" => Ok(None),
-        "1" | "sqlite" => Ok(Some(ProjectDatabase::Sqlite)),
-        "2" | "pgsql" | "postgres" | "postgresql" => Ok(Some(ProjectDatabase::Pgsql)),
-        "3" | "mysql" | "mariadb" => Ok(Some(ProjectDatabase::Mysql)),
-        "4" | "all" | "全部" => Ok(Some(ProjectDatabase::All)),
-        _ => Err("请输入 0–4，或 none / sqlite / pgsql / mysql / all".to_owned()),
-    }
+        |value| match value {
+            "0" | "none" | "no" | "n" | "无" => Ok(None),
+            "1" | "sqlite" => Ok(Some(ProjectDatabase::Sqlite)),
+            "2" | "pgsql" | "postgres" | "postgresql" => Ok(Some(ProjectDatabase::Pgsql)),
+            "3" | "mysql" | "mariadb" => Ok(Some(ProjectDatabase::Mysql)),
+            "4" | "all" | "全部" => Ok(Some(ProjectDatabase::All)),
+            _ => Err("请输入 0–4，或 none / sqlite / pgsql / mysql / all".to_owned()),
+        },
+    )
 }
 
 fn prompt_frontend() -> Result<ProjectFrontend, String> {
-    match prompt_menu(
+    prompt_menu(
         "React 源码格式",
         "页面与 island 文件扩展名。",
         &[
-            ("0", "TSX", "TypeScript + JSX（推荐）", true),
-            ("1", "JSX", "JavaScript + JSX", false),
+            ("0", "TSX", "TypeScript + JSX（推荐）"),
+            ("1", "JSX", "JavaScript + JSX"),
         ],
         "0",
-    )?
-    .as_str()
-    {
-        "0" | "tsx" | "ts" => Ok(ProjectFrontend::Tsx),
-        "1" | "jsx" | "js" => Ok(ProjectFrontend::Jsx),
-        _ => Err("请输入 0 / 1，或 tsx / jsx".to_owned()),
-    }
+        |value| match value {
+            "0" | "tsx" | "ts" => Ok(ProjectFrontend::Tsx),
+            "1" | "jsx" | "js" => Ok(ProjectFrontend::Jsx),
+            _ => Err("请输入 0 / 1，或 tsx / jsx".to_owned()),
+        },
+    )
 }
 
 fn prompt_yes_no(
     title: &str,
-    choices: &[(&str, &str, &str, bool)],
-    default: bool,
+    choices: &[(&str, &str, &str)],
+    default_key: &str,
 ) -> Result<bool, String> {
-    let default_key = if default { "1" } else { "0" };
-    match prompt_menu(title, "", choices, default_key)?.as_str() {
+    prompt_menu(title, "", choices, default_key, |value| match value {
         "0" | "n" | "no" | "否" => Ok(false),
         "1" | "y" | "yes" | "是" => Ok(true),
         _ => Err("请输入 0 / 1，或 y / n".to_owned()),
-    }
+    })
 }
 
-/// Print a numbered menu, then read a choice (Enter keeps `default_key`).
-fn prompt_menu(
+/// Print a numbered menu and read until the choice parses.
+///
+/// Enter keeps `default_key`. The `← 默认` mark is derived only from that key.
+fn prompt_menu<T>(
     title: &str,
     blurb: &str,
-    choices: &[(&str, &str, &str, bool)],
+    choices: &[(&str, &str, &str)],
     default_key: &str,
-) -> Result<String, String> {
+    parse: impl Fn(&str) -> Result<T, String>,
+) -> Result<T, String> {
     println!("── {title}");
     if !blurb.is_empty() {
         println!("  {blurb}");
     }
     println!("  默认项: {default_key}  （直接回车即选此项）");
     println!();
-    for (key, label, help, is_default) in choices {
-        let mark = if *is_default { "  ← 默认" } else { "" };
-        println!("  {key}) {label:<12} — {help}{mark}");
+    for (key, label, help) in choices {
+        let mark = if *key == default_key {
+            "  ← 默认"
+        } else {
+            ""
+        };
+        // Avoid `{label:<N}`: CJK width ≠ Rust char width and misaligns the menu.
+        println!("  {key}) {label} — {help}{mark}");
     }
     println!();
-    prompt_input(Some(default_key))
+    loop {
+        print!("请选择 [默认 {default_key}]: ");
+        io::stdout().flush().map_err(|error| error.to_string())?;
+        let value = prompt_input(Some(default_key))?;
+        // Also accept the visible label text (e.g. Islands / 无 / 否).
+        let value = choices
+            .iter()
+            .find(|(_, label, _)| label.eq_ignore_ascii_case(&value) || *label == value)
+            .map_or(value, |(key, _, _)| (*key).to_owned());
+        match parse(&value) {
+            Ok(parsed) => return Ok(parsed),
+            Err(error) => {
+                eprintln!("  ! {error}");
+            }
+        }
+    }
 }
 
 fn prompt_input(default: Option<&str>) -> Result<String, String> {
-    print!("> ");
-    io::stdout().flush().map_err(|error| error.to_string())?;
     let mut line = String::new();
     io::stdin()
         .read_line(&mut line)
