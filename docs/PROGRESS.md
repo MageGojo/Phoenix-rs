@@ -545,4 +545,4 @@
 - CLI：`px new` 交互菜单改为开发者导向英文文案和一致的默认项提示。
 - 验收：`cargo test -p px-cli`；重建 `px_text` release staging，HTML 引用 `/assets/client-HaMzEeQc.css` 与 `/assets/phoenix-N3wLaEhm.js`，两者 HTTP 200。
 - 版本：`px-cli 0.1.9`
-- 状态：进行中@发布
+- 状态：已完成@4833fdb（GitHub/GitCode + Release [v0.1.9](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.9) + crates.io）
