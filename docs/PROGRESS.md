@@ -501,4 +501,6 @@
 
 - 版本：`@apizero/vite@0.1.3`、`phoenix-view/phoenix-release/phoenixrs@0.1.1`、`px-cli@0.1.2`
 - 内容：生产静态资源中间件与 pack 布局、脚手架 `production_assets`、Vite `dedupe` React
-  状态：进行中（commit → GitHub/GitCode → npm → crates.io）
+- 已推送：GitHub `origin/main` + GitCode `gitcode/main` @`f170999`
+- 已发布：npm `@apizero/vite@0.1.3`；crates.io `phoenix-view`/`phoenix-release`/`phoenixrs` 0.1.1、`px-cli` 0.1.2
+  状态：已完成@f170999
