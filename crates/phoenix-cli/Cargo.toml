@@ -4,7 +4,7 @@ description = "Phoenix-rs application CLI (px new / make / migrate / dev)"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version = "0.1.5"
+version = "0.1.6"
 authors.workspace = true
 readme = "../../README.md"
 homepage = "https://apizero.cn/"
@@ -21,7 +21,7 @@ name = "px"
 path = "src/main.rs"
 
 [dependencies]
-phoenix-release = { version = "0.1.1", path = "../phoenix-release" }
+phoenix-release = { version = "0.1.2", path = "../phoenix-release" }
 notify.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

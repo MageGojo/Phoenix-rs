@@ -521,6 +521,14 @@
 - 发布：`@c9ffe1b` 已 push GitHub + GitCode；GitHub Release [v0.1.3](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.3)；crates.io：`phoenixrs 0.1.3`、`px-cli 0.1.4`、相关 crate `0.1.1`/`phoenix-view 0.1.2`
 - 状态：已完成@c9ffe1b
 
+## 2026-07-24：无数据库应用 `px release` 不再强制 phoenix-manage
+
+- 根因：无 DB 的 `px new` 不生成 `src/bin/phoenix-manage.rs`，但 `px release` 仍 `--bin phoenix-manage`
+- 修复：`phoenix-release` 将 manage 视为可选；CLI 仅在源文件存在时编译/打包
+- 验收：`cargo test -p phoenix-release -p px-cli --lib`；无 DB 项目可 `px release --tarball`
+- 版本：`phoenix-release 0.1.2`、`px-cli 0.1.6`
+- 状态：已完成（本地 `cargo install --path crates/phoenix-cli` 验证 `px_123` release 成功）
+
 ## 2026-07-24：脚手架渲染模式可切换 + px new 默认可配置
 
 - 内容：`Page::respond_with_renderer` SPA 短路；`px new` / scaffold 支持渲染模式切换与默认可配置项

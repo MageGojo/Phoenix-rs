@@ -274,7 +274,7 @@ mod tests {
             },
             &StagingSources {
                 binary,
-                phoenix_manage: manage,
+                phoenix_manage: Some(manage),
                 public_assets: sources_root.join("public"),
                 public_ssr: sources_root.join("public_ssr"),
                 config: sources_root.join("config"),

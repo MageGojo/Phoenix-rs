@@ -1204,13 +1204,21 @@ fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
 pub async fn application(
     config: AppConfig,
 ) -> Result<Application, Box<dyn std::error::Error + Send + Sync>> {
-    let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
-    let renderer_manifest = RendererManifest::load("public/ssr/phoenix-renderer.json")?;
-    let renderer = NodeRenderer::new(
-        RendererConfig::production(&assets, &renderer_manifest, "public/ssr")?,
-    );
+    let production = config.environment().is_production();
+    let (assets, renderer) = if production {
+        let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
+        let renderer_manifest = RendererManifest::load("public/ssr/phoenix-renderer.json")?;
+        let renderer = NodeRenderer::new(
+            RendererConfig::production(&assets, &renderer_manifest, "public/ssr")?,
+        );
+        (Some(assets), renderer)
+    } else {
+        // Development uses Vite's browser entry so HMR/full reload remains live.
+        // px dev still builds the same renderer bundle before starting Rust.
+        (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
+    };
     renderer.warm_up().await?;
-    Ok(Application::new(routes(&config, Some(&assets), &renderer))?)
+    Ok(Application::new(routes(&config, assets.as_ref(), &renderer))?)
 }
 
 /// Connect the configured database with every registered Toasty model.
@@ -2561,6 +2569,8 @@ mod tests {
         assert!(application.contains("StateMiddleware::new(renderer.clone())"));
         assert!(application.contains("RendererConfig::production"));
         assert!(application.contains("renderer.warm_up().await"));
+        assert!(application.contains("let production = config.environment().is_production()"));
+        assert!(application.contains("RendererConfig::node(\"public/ssr/renderer.js\")"));
         let home_controller =
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
         assert!(home_controller.contains("get::<NodeRenderer>().cloned()"));

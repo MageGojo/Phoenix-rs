@@ -41,7 +41,9 @@ pub struct PackOptions {
 #[derive(Clone, Debug)]
 pub struct StagingSources {
     pub binary: PathBuf,
-    pub phoenix_manage: PathBuf,
+    /// Present when the app scaffolds a migrate binary (`src/bin/phoenix-manage.rs`).
+    /// Omitted for database-less apps.
+    pub phoenix_manage: Option<PathBuf>,
     pub public_assets: PathBuf,
     pub public_ssr: PathBuf,
     pub config: PathBuf,
@@ -74,10 +76,12 @@ pub fn write_staging(
     #[cfg(unix)]
     set_executable(&app_binary_dest)?;
 
-    let manage_dest = bin_dir.join("phoenix-manage");
-    copy_file(&sources.phoenix_manage, &manage_dest)?;
-    #[cfg(unix)]
-    set_executable(&manage_dest)?;
+    if let Some(manage) = &sources.phoenix_manage {
+        let manage_dest = bin_dir.join("phoenix-manage");
+        copy_file(manage, &manage_dest)?;
+        #[cfg(unix)]
+        set_executable(&manage_dest)?;
+    }
 
     copy_tree(&sources.public_assets, &staging.join("public/assets"))?;
     copy_tree(&sources.public_ssr, &staging.join("public/ssr"))?;
@@ -368,7 +372,7 @@ mod tests {
             },
             &StagingSources {
                 binary,
-                phoenix_manage: manage,
+                phoenix_manage: Some(manage),
                 public_assets,
                 public_ssr,
                 config: dir.path().join("config"),
@@ -378,6 +382,7 @@ mod tests {
         .unwrap();
 
         assert!(staging.join("bin/demo").is_file());
+        assert!(staging.join("bin/phoenix-manage").is_file());
         assert!(staging.join("public/assets/app.js").is_file());
         assert!(staging.join("public/ssr/renderer.js").is_file());
         assert!(manifest.checksums.contains_key("bin/demo"));
@@ -389,5 +394,49 @@ mod tests {
         extract_tarball(&tarball, &extracted).unwrap();
         assert!(extracted.join("manifest.toml").is_file());
         assert!(extracted.join("bin/demo").is_file());
+    }
+
+    #[test]
+    fn staging_without_phoenix_manage() {
+        let dir = tempdir().unwrap();
+        let binary = dir.path().join("app");
+        fs::write(&binary, b"bin").unwrap();
+
+        let public_assets = dir.path().join("public/assets");
+        let public_ssr = dir.path().join("public/ssr");
+        fs::create_dir_all(&public_assets).unwrap();
+        fs::create_dir_all(&public_ssr).unwrap();
+
+        let staging = dir.path().join("staging");
+        let manifest = write_staging(
+            &PackOptions {
+                version: "0.1.0".into(),
+                app_name: "demo".into(),
+                binary_name: "demo".into(),
+                target_triple: "aarch64-apple-darwin".into(),
+                staging_dir: staging.clone(),
+                git_revision: None,
+                client_manifest: None,
+                ssr_manifest: None,
+                contract_hash: None,
+                rustc_version: None,
+                profile: None,
+                npm_build: None,
+            },
+            &StagingSources {
+                binary,
+                phoenix_manage: None,
+                public_assets,
+                public_ssr,
+                config: dir.path().join("config"),
+                migrations: dir.path().join("migrations"),
+            },
+        )
+        .unwrap();
+
+        assert!(staging.join("bin/demo").is_file());
+        assert!(!staging.join("bin/phoenix-manage").exists());
+        assert!(!manifest.migrations.included);
+        assert_eq!(manifest.migrations.count, 0);
     }
 }

@@ -49,6 +49,9 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
         run_command("npm", &["run", "build"], root, "npm run build")?;
     }
 
+    // Database-less scaffolds omit `src/bin/phoenix-manage.rs`; only build it when present.
+    let has_manage = root.join("src/bin/phoenix-manage.rs").is_file();
+
     let mut cargo_args = vec!["build".to_owned(), "--release".to_owned()];
     if let Some(target) = &options.target {
         cargo_args.push("--target".to_owned());
@@ -56,8 +59,10 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
     }
     cargo_args.push("--bin".to_owned());
     cargo_args.push(binary_name.clone());
-    cargo_args.push("--bin".to_owned());
-    cargo_args.push("phoenix-manage".to_owned());
+    if has_manage {
+        cargo_args.push("--bin".to_owned());
+        cargo_args.push("phoenix-manage".to_owned());
+    }
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     run_command_strings(
@@ -75,13 +80,18 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
             binary_path.display()
         ));
     }
-    let manage_path = release_dir.join("phoenix-manage");
-    if !manage_path.is_file() {
-        return Err(format!(
-            "phoenix-manage binary missing at {}",
-            manage_path.display()
-        ));
-    }
+    let manage_path = if has_manage {
+        let path = release_dir.join("phoenix-manage");
+        if !path.is_file() {
+            return Err(format!(
+                "phoenix-manage binary missing at {}",
+                path.display()
+            ));
+        }
+        Some(path)
+    } else {
+        None
+    };
 
     let public_assets = ensure_dir(root.join("public/assets"))?;
     let public_ssr = ensure_dir(root.join("public/ssr"))?;
@@ -123,6 +133,7 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
             migrations,
         },
     )
+    // manage_path is already Option<PathBuf>
     .map_err(release_err)?;
 
     println!("STAGING {}", staging_dir.display());
