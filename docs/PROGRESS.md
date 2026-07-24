@@ -544,4 +544,5 @@
 - 实时刷新：监听范围加入 `views/`、`package.json`、lockfile、TS/Vite 配置；变化后重建 client + renderer 并重启 backend。
 - CLI：`px new` 交互菜单改为开发者导向英文文案和一致的默认项提示。
 - 验收：`cargo test -p px-cli`；重建 `px_text` release staging，HTML 引用 `/assets/client-HaMzEeQc.css` 与 `/assets/phoenix-N3wLaEhm.js`，两者 HTTP 200。
-  状态：已完成@工作树
+- 版本：`px-cli 0.1.9`
+- 状态：进行中@发布
