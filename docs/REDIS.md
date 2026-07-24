@@ -99,14 +99,18 @@ PHOENIX_TEST_REDIS_URL=redis://127.0.0.1/0 cargo test -p phoenix-redis --locked
 
 ## 集成建议（`phoenix` crate）
 
-可选 feature：
+门面可选 feature：
 
 ```toml
-[features]
-redis = ["dep:phoenix-redis"]
-
-[dependencies]
-phoenix-redis = { path = "../phoenix-redis", optional = true }
+phoenix = { package = "phoenixrs", features = ["redis"] }
+# RedisTokenStore 另需 jwt：
+phoenix = { package = "phoenixrs", features = ["redis", "jwt"] }
 ```
 
-并在 `phoenix` 中 `#[cfg(feature = "redis")] pub use phoenix_redis::{RedisStores, RedisSessionBackend, RedisRateLimitBackend, RedisTokenStore};`。
+启用后从 `phoenix::prelude::*` / `phoenix::redis` 使用 `RedisStores`、`RedisSessionBackend`、`RedisRateLimitBackend`；`RedisTokenStore` 在同时启用 `jwt` 时可用。
+
+契约测：
+
+```bash
+PHOENIX_TEST_REDIS_URL=redis://127.0.0.1/0 cargo test -p phoenix-redis --locked --features jwt
+```

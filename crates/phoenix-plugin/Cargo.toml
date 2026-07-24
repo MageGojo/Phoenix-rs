@@ -4,16 +4,20 @@ description = "Compile-time Feature / plugin installation for Phoenix-rs"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version.workspace = true
+version = "0.1.1"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+database = ["dep:phoenix-database"]
+
 [dependencies]
-phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
-phoenix-database = { version = "0.1.0", path = "../phoenix-database", default-features = false }
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-console = { version = "0.1.1", path = "../phoenix-console" }
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", default-features = false, optional = true }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 thiserror.workspace = true
 
 [dev-dependencies]

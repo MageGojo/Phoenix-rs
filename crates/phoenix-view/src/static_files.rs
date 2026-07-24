@@ -69,8 +69,7 @@ fn content_type_for(path: &Path) -> Option<&'static str> {
     match path.extension().and_then(|value| value.to_str())? {
         "js" | "mjs" => Some("text/javascript; charset=utf-8"),
         "css" => Some("text/css; charset=utf-8"),
-        "json" => Some("application/json; charset=utf-8"),
-        "map" => Some("application/json; charset=utf-8"),
+        "json" | "map" => Some("application/json; charset=utf-8"),
         "svg" => Some("image/svg+xml"),
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),

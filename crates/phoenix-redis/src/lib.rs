@@ -3,7 +3,7 @@
 //! Provides production implementations of:
 //! - [`phoenix_security::SessionBackend`]
 //! - [`phoenix_security::RateLimitBackend`]
-//! - [`phoenix_crypto::TokenStore`]
+//! - [`phoenix_crypto::TokenStore`] (requires the `jwt` feature)
 //!
 //! See `docs/REDIS.md` for key space and atomicity rules.
 
@@ -12,6 +12,7 @@
 mod keys;
 mod rate_limit;
 mod session;
+#[cfg(feature = "jwt")]
 mod token;
 
 pub use keys::{
@@ -20,6 +21,7 @@ pub use keys::{
 };
 pub use rate_limit::RedisRateLimitBackend;
 pub use session::RedisSessionBackend;
+#[cfg(feature = "jwt")]
 pub use token::RedisTokenStore;
 
 use redis::aio::ConnectionManager;
@@ -86,6 +88,7 @@ impl RedisStores {
     }
 
     /// Token store sharing this connection pool.
+    #[cfg(feature = "jwt")]
     #[must_use]
     pub fn token(&self) -> RedisTokenStore {
         RedisTokenStore::new(self.conn.clone())
@@ -132,6 +135,7 @@ mod tests {
         assert!(!error.to_string().contains("password"));
     }
 
+    #[cfg(feature = "jwt")]
     #[test]
     fn error_mapping_preserves_operator_detail() {
         let session = phoenix_security::SessionBackendError("timeout".to_owned());
@@ -140,5 +144,14 @@ mod tests {
         assert_eq!(rate.0, "down");
         let token = phoenix_crypto::TokenStoreError::Io(std::io::Error::other("redis boom"));
         assert!(matches!(token, phoenix_crypto::TokenStoreError::Io(_)));
+    }
+
+    #[cfg(not(feature = "jwt"))]
+    #[test]
+    fn error_mapping_preserves_operator_detail() {
+        let session = phoenix_security::SessionBackendError("timeout".to_owned());
+        assert_eq!(session.0, "timeout");
+        let rate = phoenix_security::RateLimitStoreError("down".to_owned());
+        assert_eq!(rate.0, "down");
     }
 }

@@ -9,14 +9,18 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+default = ["jwt"]
+jwt = ["phoenix-crypto/jwt"]
+
 [dependencies]
-phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 serde = { workspace = true, features = ["derive"] }
 tokio.workspace = true
 

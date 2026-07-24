@@ -9,6 +9,13 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+default = ["tls", "metrics", "websocket", "sse"]
+tls = ["dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
+metrics = ["dep:phoenix-metrics"]
+websocket = ["phoenix-http/websocket"]
+sse = ["phoenix-http/sse"]
+
 [dependencies]
 bytes.workspace = true
 futures-util.workspace = true
@@ -16,19 +23,23 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
-phoenix-metrics = { version = "0.1.0", path = "../phoenix-metrics" }
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
-rustls.workspace = true
-rustls-pemfile.workspace = true
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics", optional = true }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
+rustls = { workspace = true, optional = true }
+rustls-pemfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
-tokio-rustls.workspace = true
+tokio-rustls = { workspace = true, optional = true }
 tracing.workspace = true
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["client"] }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", features = ["websocket", "sse"] }
+phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics" }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 
 [lints]

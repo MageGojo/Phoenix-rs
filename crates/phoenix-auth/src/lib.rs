@@ -2,11 +2,13 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
     ops::Deref,
     sync::Arc,
 };
+#[cfg(feature = "jwt")]
+use std::marker::PhantomData;
 
+#[cfg(feature = "jwt")]
 use phoenix_crypto::{Jwt, JwtClaims};
 use phoenix_http::{
     BoxFuture, FromRequest, HeaderValue, IntoResponse, Middleware, Next, Request, Response,
@@ -496,11 +498,13 @@ impl IntoResponse for PrincipalRejection {
 }
 
 /// Convert verified typed JWT claims into an application principal.
+#[cfg(feature = "jwt")]
 pub struct PrincipalFromJwt<T, F> {
     mapper: Arc<F>,
     marker: PhantomData<fn() -> T>,
 }
 
+#[cfg(feature = "jwt")]
 impl<T, F> PrincipalFromJwt<T, F> {
     #[must_use]
     pub fn new(mapper: F) -> Self {
@@ -511,6 +515,7 @@ impl<T, F> PrincipalFromJwt<T, F> {
     }
 }
 
+#[cfg(feature = "jwt")]
 impl<T, F> Middleware for PrincipalFromJwt<T, F>
 where
     T: Send + Sync + 'static,
@@ -583,16 +588,22 @@ fn unauthorized() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Mutex, time::Duration};
+    use std::sync::Mutex;
 
+    use phoenix_http::{Method, typed};
+    use phoenix_routing::Routes;
+
+    use super::*;
+
+    #[cfg(feature = "jwt")]
+    use std::time::Duration;
+
+    #[cfg(feature = "jwt")]
     use phoenix_crypto::{
         JwtAuth, JwtConfig, JwtKey, JwtManager, MemoryTokenStore, StatefulJwtAuth, TokenService,
     };
-    use phoenix_http::{Method, typed};
-    use phoenix_routing::Routes;
+    #[cfg(feature = "jwt")]
     use serde::{Deserialize, Serialize};
-
-    use super::*;
 
     fn rbac() -> Rbac {
         Rbac::build([
@@ -711,11 +722,13 @@ mod tests {
         assert_eq!(events[0].reason, AuditReason::NoApplicableRule);
     }
 
+    #[cfg(feature = "jwt")]
     #[derive(Clone, Debug, Deserialize, Serialize)]
     struct AccessClaims {
         roles: Vec<String>,
     }
 
+    #[cfg(feature = "jwt")]
     #[tokio::test]
     async fn jwt_principal_and_permission_middleware_distinguish_401_and_403() {
         let jwt = Arc::new(
@@ -786,6 +799,7 @@ mod tests {
         assert_eq!(response.body(), "admin-1");
     }
 
+    #[cfg(feature = "jwt")]
     #[tokio::test]
     async fn stateful_jwt_revocation_precedes_principal_authorization() {
         let jwt = JwtManager::new(

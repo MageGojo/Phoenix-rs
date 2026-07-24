@@ -9,17 +9,22 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+default = ["metrics"]
+metrics = ["dep:phoenix-metrics"]
+
 [dependencies]
 futures-util.workspace = true
 http.workspace = true
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
-phoenix-metrics = { version = "0.1.0", path = "../phoenix-metrics" }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics", optional = true }
 rand.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics" }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 tokio.workspace = true
 
 [lints]

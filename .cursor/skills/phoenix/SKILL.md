@@ -14,7 +14,7 @@ Phoenix-rs = Hyper HTTP + Laravel-style DX + React (Islands/SPA/SSR) + Rust→TS
 Not a Laravel port; not Elixir Phoenix. Prefer `phoenix::prelude::*` and generated `views/generated/*`.
 Install CLI: `cargo install px-cli` (binary is `px`; or `cargo install --path crates/phoenix-cli` from this repo).
 
-**Framework repo docs (source of truth):** `docs/BUSINESS_GUIDE.md`, `docs/DX.md`, `docs/CONFIG.md`, `docs/FEATURES.md` (plugins), `docs/RELEASE_PIPELINE.md`, `docs/CONTRACTS.md`, `docs/RENDERING.md`, `docs/REACT_DX_*.md`, `docs/工具与约定.md`.
+**Framework repo docs (source of truth):** `docs/BUSINESS_GUIDE.md`, `docs/DX.md`, `docs/CONFIG.md`, `docs/FEATURES.md` (Cargo features + plugins), `docs/RELEASE_PIPELINE.md`, `docs/CONTRACTS.md`, `docs/RENDERING.md`, `docs/REACT_DX_*.md`, `docs/工具与约定.md`.
 
 ## When this skill applies
 
@@ -56,8 +56,9 @@ Task Progress:
 px new my-app
 cd my-app
 cp .env.example .env
-# edit config/database.toml and the matching Cargo default feature:
-# "sqlite" | "pgsql" | "mysql" (only one driver is linked)
+# Enable Cargo features as needed, e.g. --features sqlite,password
+# Align database.toml default with the enabled driver feature when using DB.
+# Optional: tls / websocket / sse / auth / jwt / metrics (see docs/FEATURES.md)
 px make:model Post --all
 px make:controller Admin/PostController --resource
 px make:page posts/index

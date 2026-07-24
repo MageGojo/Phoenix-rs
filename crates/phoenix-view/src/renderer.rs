@@ -10,6 +10,7 @@ use std::{
 };
 
 use phoenix_http::CspNonce;
+#[cfg(feature = "metrics")]
 use phoenix_metrics::{Metrics, RendererMetricsSnapshot};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -142,6 +143,7 @@ pub struct RendererHealth {
 
 impl RendererHealth {
     /// Copy this point-in-time health snapshot into the shared metrics registry.
+    #[cfg(feature = "metrics")]
     pub fn record_metrics(&self, metrics: &Metrics) {
         metrics.set_renderer(RendererMetricsSnapshot {
             ready_workers: u64::try_from(self.ready_workers).unwrap_or(u64::MAX),

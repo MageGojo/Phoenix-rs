@@ -1,7 +1,4 @@
-use std::{
-    convert::Infallible, future::Future, io::Cursor, net::SocketAddr, path::Path, sync::Arc,
-    time::Duration,
-};
+use std::{convert::Infallible, future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -22,9 +19,9 @@ use phoenix_http::{
     RequestBodyStream, Response, ResponseBody, ResponseBodyError, ResponseCancellationToken,
     StateMiddleware, TransportScheme,
 };
+#[cfg(feature = "metrics")]
 use phoenix_metrics::Metrics;
 use phoenix_routing::{MultiRouterError, RouteBuildError, RouteGroup, Router, RouterMount, Routes};
-use rustls::ServerConfig;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -32,17 +29,21 @@ use tokio::{
     sync::{oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
+#[cfg(feature = "tls")]
 use tokio_rustls::TlsAcceptor;
 
 const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "tls")]
+pub(crate) const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MIN_REJECTED_BODY_DRAIN_SIZE: usize = 64 * 1024;
 const MAX_REJECTED_BODY_DRAIN_SIZE: usize = 8 * 1024 * 1024;
-const ALPN_HTTP_2: &[u8] = b"h2";
-const ALPN_HTTP_1_1: &[u8] = b"http/1.1";
+#[cfg(feature = "tls")]
+pub(crate) const ALPN_HTTP_2: &[u8] = b"h2";
+#[cfg(feature = "tls")]
+pub(crate) const ALPN_HTTP_1_1: &[u8] = b"http/1.1";
 
 /// HTTP protocol versions accepted by the built-in TCP server.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -56,117 +57,10 @@ pub enum HttpProtocol {
     Http2Only,
 }
 
-/// Rustls server configuration with Phoenix ALPN and handshake policy.
-#[derive(Clone)]
-pub struct TlsConfig {
-    server_config: Arc<ServerConfig>,
-    handshake_timeout: Duration,
-}
-
-impl TlsConfig {
-    /// Load a certificate chain and private key from PEM bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for unreadable PEM, missing material, or an invalid key/certificate pair.
-    pub fn from_pem(
-        certificate_pem: &[u8],
-        private_key_pem: &[u8],
-    ) -> Result<Self, TlsConfigError> {
-        let certificates = rustls_pemfile::certs(&mut Cursor::new(certificate_pem))
-            .collect::<Result<Vec<_>, _>>()?;
-        if certificates.is_empty() {
-            return Err(TlsConfigError::MissingCertificate);
-        }
-        let private_key = rustls_pemfile::private_key(&mut Cursor::new(private_key_pem))?
-            .ok_or(TlsConfigError::MissingPrivateKey)?;
-        let server_config = ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certificates, private_key)?;
-        Ok(Self::from_server_config(server_config))
-    }
-
-    /// Load PEM material from local files during application startup.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when either file cannot be read or parsed.
-    pub fn from_files(
-        certificate_path: impl AsRef<Path>,
-        private_key_path: impl AsRef<Path>,
-    ) -> Result<Self, TlsConfigError> {
-        let certificate_pem = std::fs::read(certificate_path)?;
-        let private_key_pem = std::fs::read(private_key_path)?;
-        Self::from_pem(&certificate_pem, &private_key_pem)
-    }
-
-    /// Wrap an advanced rustls configuration. Phoenix supplies HTTP ALPN defaults when absent.
-    #[must_use]
-    pub fn from_server_config(mut server_config: ServerConfig) -> Self {
-        if server_config.alpn_protocols.is_empty() {
-            server_config.alpn_protocols = vec![ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()];
-        }
-        Self {
-            server_config: Arc::new(server_config),
-            handshake_timeout: DEFAULT_TLS_HANDSHAKE_TIMEOUT,
-        }
-    }
-
-    /// Set a hard deadline for completing the TLS handshake.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the timeout is zero.
-    pub fn handshake_timeout(mut self, timeout: Duration) -> Result<Self, TlsConfigError> {
-        if timeout.is_zero() {
-            return Err(TlsConfigError::InvalidHandshakeTimeout);
-        }
-        self.handshake_timeout = timeout;
-        Ok(self)
-    }
-
-    #[must_use]
-    pub fn alpn_protocols(&self) -> &[Vec<u8>] {
-        &self.server_config.alpn_protocols
-    }
-
-    fn for_http_protocol(&self, protocol: HttpProtocol) -> Self {
-        let mut server_config = (*self.server_config).clone();
-        server_config.alpn_protocols = match protocol {
-            HttpProtocol::Auto => vec![ALPN_HTTP_2.to_vec(), ALPN_HTTP_1_1.to_vec()],
-            HttpProtocol::Http1Only => vec![ALPN_HTTP_1_1.to_vec()],
-            HttpProtocol::Http2Only => vec![ALPN_HTTP_2.to_vec()],
-        };
-        Self {
-            server_config: Arc::new(server_config),
-            handshake_timeout: self.handshake_timeout,
-        }
-    }
-}
-
-impl std::fmt::Debug for TlsConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("TlsConfig")
-            .field("alpn_protocols", &self.server_config.alpn_protocols)
-            .field("handshake_timeout", &self.handshake_timeout)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum TlsConfigError {
-    #[error("TLS PEM I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("TLS certificate PEM does not contain a certificate")]
-    MissingCertificate,
-    #[error("TLS private-key PEM does not contain a supported private key")]
-    MissingPrivateKey,
-    #[error("TLS certificate or private key is invalid: {0}")]
-    Rustls(#[from] rustls::Error),
-    #[error("TLS handshake timeout must be greater than zero")]
-    InvalidHandshakeTimeout,
-}
+#[cfg(feature = "tls")]
+mod tls;
+#[cfg(feature = "tls")]
+pub use tls::{TlsConfig, TlsConfigError};
 
 #[derive(Clone)]
 pub struct Application {
@@ -176,6 +70,7 @@ pub struct Application {
     body_read_timeout: Duration,
     graceful_shutdown_timeout: Duration,
     http_protocol: HttpProtocol,
+    #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
 }
 
@@ -197,6 +92,7 @@ impl Application {
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
             http_protocol: HttpProtocol::Auto,
+            #[cfg(feature = "metrics")]
             metrics: None,
         }
     }
@@ -239,6 +135,7 @@ impl Application {
     }
 
     /// Attach the process metrics registry used for connection and TLS telemetry.
+    #[cfg(feature = "metrics")]
     #[must_use]
     pub fn metrics(mut self, metrics: Metrics) -> Self {
         self.metrics = Some(metrics);
@@ -276,6 +173,7 @@ impl Application {
     /// # Errors
     ///
     /// Returns an I/O error when the address cannot be resolved or bound.
+    #[cfg(feature = "tls")]
     pub async fn bind_tls<A>(self, address: A, tls: TlsConfig) -> Result<Server, ServerError>
     where
         A: ToSocketAddrs,
@@ -321,6 +219,7 @@ impl Application {
     /// # Errors
     ///
     /// Returns an I/O error when the listener cannot be created.
+    #[cfg(feature = "tls")]
     pub async fn spawn_tls<A>(self, address: A, tls: TlsConfig) -> Result<ServerHandle, ServerError>
     where
         A: ToSocketAddrs,
@@ -482,6 +381,7 @@ pub struct Server {
 #[derive(Clone)]
 enum ServerTransport {
     Plain,
+    #[cfg(feature = "tls")]
     Tls(TlsConfig),
 }
 
@@ -565,6 +465,7 @@ async fn serve_transport(
     response_cancellation: ResponseCancellationToken,
     transport: ServerTransport,
 ) {
+    #[cfg(feature = "metrics")]
     let _connection_guard = application.metrics.as_ref().map(Metrics::connection_opened);
     let peer_addr = stream.peer_addr().ok();
     match transport {
@@ -579,10 +480,12 @@ async fn serve_transport(
             )
             .await;
         }
+        #[cfg(feature = "tls")]
         ServerTransport::Tls(config) => {
             let acceptor = TlsAcceptor::from(Arc::clone(&config.server_config));
             match tokio::time::timeout(config.handshake_timeout, acceptor.accept(stream)).await {
                 Ok(Ok(tls_stream)) => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = &application.metrics {
                         metrics.record_tls_handshake(true);
                     }
@@ -603,12 +506,14 @@ async fn serve_transport(
                     .await;
                 }
                 Ok(Err(error)) => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = &application.metrics {
                         metrics.record_tls_handshake(false);
                     }
                     tracing::warn!(peer = ?peer_addr, error = %error, "TLS handshake failed");
                 }
                 Err(_) => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = &application.metrics {
                         metrics.record_tls_handshake(false);
                     }

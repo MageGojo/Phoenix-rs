@@ -1,6 +1,12 @@
 # 实时协议与流式请求
 
-Phoenix 的实时能力分为流式请求、SSE 和 WebSocket。流式请求与 SSE 首版已交付；WebSocket 首版仅承诺 HTTP/1.1 Upgrade 与 TLS 下的 WSS。
+Phoenix 的实时能力分为流式请求、SSE 和 WebSocket。流式请求始终可用；SSE 与 WebSocket 分别由 Cargo feature **`sse`** / **`websocket`** 启用（二者不合并，见 [ADR-042](./DECISIONS.md)）。WebSocket 首版仅承诺 HTTP/1.1 Upgrade 与 TLS 下的 WSS。
+
+```toml
+phoenix = { package = "phoenixrs", features = ["sse"] }         # 仅 SSE
+phoenix = { package = "phoenixrs", features = ["websocket"] }   # 仅 WS
+phoenix = { package = "phoenixrs", features = ["sse", "websocket"] }
+```
 
 ## 流式上传
 

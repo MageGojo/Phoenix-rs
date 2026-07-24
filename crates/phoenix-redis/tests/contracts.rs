@@ -1,9 +1,11 @@
 //! Integration contracts gated by `PHOENIX_TEST_REDIS_URL`.
 
 use std::collections::HashMap;
+#[cfg(feature = "jwt")]
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "jwt")]
 use phoenix_crypto::{RefreshRecord, RotateRefresh, TokenStore};
 use phoenix_security::{RateLimitBackend, RateLimitDecision, SessionBackend, SessionWrite};
 use serde_json::json;
@@ -140,6 +142,7 @@ async fn dual_clients_rate_limit_accumulates() {
     assert_eq!(third.remaining, 0);
 }
 
+#[cfg(feature = "jwt")]
 #[tokio::test]
 async fn dual_clients_refresh_reuse_revokes_family() {
     let Some(stores) = stores().await else {

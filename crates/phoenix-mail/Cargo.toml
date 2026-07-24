@@ -10,7 +10,7 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "sync"] }
 

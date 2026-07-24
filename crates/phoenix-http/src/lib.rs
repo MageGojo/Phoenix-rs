@@ -23,15 +23,21 @@ use thiserror::Error;
 #[doc(hidden)]
 pub use tokio_util::sync::CancellationToken as ResponseCancellationToken;
 
+mod upgrade;
+#[cfg(feature = "sse")]
 mod sse;
+#[cfg(feature = "websocket")]
 mod ws;
 
+pub use upgrade::ConnectionUpgrade;
+#[cfg(feature = "sse")]
 pub use sse::{
     InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError, SseEvent,
 };
+#[cfg(feature = "websocket")]
 pub use ws::{
-    CloseCode, CloseFrame, ConnectionUpgrade, Message, WebSocket, WebSocketConfigError,
-    WebSocketError, WebSocketUpgrade, WebSocketUpgradeRejection,
+    CloseCode, CloseFrame, Message, WebSocket, WebSocketConfigError, WebSocketError,
+    WebSocketUpgrade, WebSocketUpgradeRejection,
 };
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;

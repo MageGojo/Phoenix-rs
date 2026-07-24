@@ -177,7 +177,7 @@ npm run ci:node
 | --- | --- |
 | [`.cursor/skills/phoenix/SKILL.md`](.cursor/skills/phoenix/SKILL.md) | **AI 默认入口** |
 | [AGENTS.md](AGENTS.md) | Agent 强制约定 |
-| [FEATURES.md](docs/FEATURES.md) | Feature / 插件扩展（第三方 crate） |
+| [FEATURES.md](docs/FEATURES.md) | Cargo features（体积）与 Plugin 扩展 |
 | [RELEASE_PIPELINE.md](docs/RELEASE_PIPELINE.md) | 打版本包 / 安装 / 回滚 |
 | [CONFIG.md](docs/CONFIG.md) | Laravel 风格 `config/*.toml` 与选库 |
 | [PRODUCT.md](docs/PRODUCT.md) | 产品定位与范围 |
@@ -204,7 +204,7 @@ npm run ci:node
 
 ## 当前状态
 
-早期开发阶段（`0.1.0`）。**全部 24 个 crate 已发布至 crates.io**（2026-07-24，含门面 [`phoenixrs`](https://crates.io/crates/phoenixrs) 与 CLI [`px-cli`](https://crates.io/crates/px-cli)），GitHub / GitCode 双镜像已公开。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。仍在演进：邮件真实 SMTP、队列生产驱动、`px make:auth` 生成器、服务端 partial props 求值。
+早期开发阶段。**crates.io** 门面 [`phoenixrs`](https://crates.io/crates/phoenixrs) 与 CLI [`px-cli`](https://crates.io/crates/px-cli) 持续发版；GitHub / GitCode 双镜像同步。能力按 Cargo feature 按需编译（`sqlite`/`tls`/`websocket`/`sse`/`auth`/`jwt`/`password`/`metrics` 等，见 [docs/FEATURES.md](docs/FEATURES.md)）。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。仍在演进：邮件真实 SMTP、队列生产驱动、`px make:auth` 生成器、服务端 partial props 求值。
 
 ## 公司与许可
 

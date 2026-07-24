@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use phoenix_console::CommandEntry;
+#[cfg(feature = "database")]
 use phoenix_database::Migration;
 use phoenix_http::Middleware;
 use phoenix_routing::{RouteGroup, Routes};
@@ -22,6 +23,7 @@ pub enum Capability {
     /// Application console commands via [`Plugin::commands`].
     Commands,
     /// Database migrations via [`Plugin::migrations`].
+    #[cfg(feature = "database")]
     Migrations,
 }
 
@@ -31,6 +33,7 @@ impl Capability {
         match self {
             Self::Routes => "routes",
             Self::Commands => "commands",
+            #[cfg(feature = "database")]
             Self::Migrations => "migrations",
         }
     }
@@ -61,6 +64,7 @@ pub trait Plugin: Send + Sync {
     }
 
     /// Migrations contributed by this plugin.
+    #[cfg(feature = "database")]
     fn migrations(&self) -> Vec<Migration> {
         Vec::new()
     }
@@ -72,9 +76,11 @@ pub struct FeatureSet {
     namespace_route_names: bool,
     plugin_names: BTreeSet<&'static str>,
     command_names: BTreeSet<&'static str>,
+    #[cfg(feature = "database")]
     migration_ids: BTreeSet<String>,
     routes: Routes,
     commands: Vec<CommandEntry>,
+    #[cfg(feature = "database")]
     migrations: Vec<Migration>,
 }
 
@@ -94,9 +100,11 @@ impl FeatureSet {
             namespace_route_names: true,
             plugin_names: BTreeSet::new(),
             command_names: BTreeSet::new(),
+            #[cfg(feature = "database")]
             migration_ids: BTreeSet::new(),
             routes: Routes::new(),
             commands: Vec::new(),
+            #[cfg(feature = "database")]
             migrations: Vec::new(),
         }
     }
@@ -145,10 +153,12 @@ impl FeatureSet {
 
         let routes = plugin.routes();
         let commands = plugin.commands();
+        #[cfg(feature = "database")]
         let migrations = plugin.migrations();
 
         ensure_capability(name, &declared, Capability::Routes, !routes.is_empty())?;
         ensure_capability(name, &declared, Capability::Commands, !commands.is_empty())?;
+        #[cfg(feature = "database")]
         ensure_capability(
             name,
             &declared,
@@ -164,10 +174,13 @@ impl FeatureSet {
                 });
             }
         }
-        for migration in &migrations {
-            let id = migration.id().to_owned();
-            if !self.migration_ids.insert(id.clone()) {
-                return Err(FeatureError::DuplicateMigration { plugin: name, id });
+        #[cfg(feature = "database")]
+        {
+            for migration in &migrations {
+                let id = migration.id().to_owned();
+                if !self.migration_ids.insert(id.clone()) {
+                    return Err(FeatureError::DuplicateMigration { plugin: name, id });
+                }
             }
         }
 
@@ -178,6 +191,7 @@ impl FeatureSet {
         };
         self.routes = self.routes.merge(routes);
         self.commands.extend(commands);
+        #[cfg(feature = "database")]
         self.migrations.extend(migrations);
         let _ = plugin.version();
         Ok(self)
@@ -217,12 +231,14 @@ impl FeatureSet {
         FeatureParts {
             routes: self.routes,
             commands: self.commands,
+            #[cfg(feature = "database")]
             migrations: self.migrations,
         }
     }
 
     /// Take migrations for the application [`phoenix_database::MigrationRunner`].
     #[must_use]
+    #[cfg(feature = "database")]
     pub fn into_migrations(self) -> Vec<Migration> {
         self.migrations
     }
@@ -238,6 +254,7 @@ impl FeatureSet {
 pub struct FeatureParts {
     pub routes: Routes,
     pub commands: Vec<CommandEntry>,
+    #[cfg(feature = "database")]
     pub migrations: Vec<Migration>,
 }
 
@@ -282,6 +299,7 @@ pub enum FeatureError {
         command: &'static str,
     },
     #[error("plugin `{plugin}` registers duplicate migration `{id}`")]
+    #[cfg(feature = "database")]
     DuplicateMigration { plugin: &'static str, id: String },
 }
 

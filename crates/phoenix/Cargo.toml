@@ -4,7 +4,7 @@ description = "Phoenix-rs: Laravel-inspired Rust + React web framework by ApiZer
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version = "0.1.2"
+version = "0.1.3"
 authors.workspace = true
 readme = "../../README.md"
 homepage = "https://apizero.cn/"
@@ -17,11 +17,25 @@ name = "phoenix"
 path = "src/lib.rs"
 
 [features]
-default = ["sqlite"]
-sqlite = ["phoenix-database/sqlite"]
-pgsql = ["phoenix-database/pgsql"]
+default = []
+database = ["dep:phoenix-database", "phoenix-plugin/database"]
+sqlite = ["database", "phoenix-database/sqlite"]
+pgsql = ["database", "phoenix-database/pgsql"]
 postgresql = ["pgsql"]
-mysql = ["phoenix-database/mysql"]
+mysql = ["database", "phoenix-database/mysql"]
+tls = ["phoenix-runtime/tls"]
+websocket = ["phoenix-http/websocket", "phoenix-runtime/websocket"]
+sse = ["phoenix-http/sse", "phoenix-runtime/sse"]
+auth = ["dep:phoenix-auth"]
+jwt = ["phoenix-crypto/jwt", "phoenix-auth?/jwt", "phoenix-redis?/jwt"]
+password = ["phoenix-crypto/password"]
+metrics = [
+    "dep:phoenix-metrics",
+    "phoenix-runtime/metrics",
+    "phoenix-security/metrics",
+    "phoenix-view/metrics",
+    "phoenix-queue?/metrics",
+]
 redis = ["dep:phoenix-redis"]
 storage = ["dep:phoenix-storage"]
 testing = ["dep:phoenix-testing"]
@@ -29,27 +43,27 @@ queue = ["dep:phoenix-queue"]
 mail = ["dep:phoenix-mail"]
 
 [dependencies]
-phoenix-auth = { version = "0.1.0", path = "../phoenix-auth" }
-phoenix-config = { version = "0.1.0", path = "../phoenix-config" }
-phoenix-console = { version = "0.1.0", path = "../phoenix-console" }
-phoenix-runtime = { version = "0.1.0", path = "../phoenix-runtime" }
-phoenix-crypto = { version = "0.1.0", path = "../phoenix-crypto" }
-phoenix-database = { version = "0.1.0", path = "../phoenix-database", default-features = false }
-phoenix-dx = { version = "0.1.0", path = "../phoenix-dx" }
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
-phoenix-logging = { version = "0.1.0", path = "../phoenix-logging" }
-phoenix-macros = { version = "0.1.0", path = "../phoenix-macros" }
-phoenix-mail = { version = "0.1.0", path = "../phoenix-mail", optional = true }
-phoenix-metrics = { version = "0.1.0", path = "../phoenix-metrics" }
-phoenix-plugin = { version = "0.1.0", path = "../phoenix-plugin" }
-phoenix-queue = { version = "0.1.0", path = "../phoenix-queue", optional = true }
-phoenix-redis = { version = "0.1.0", path = "../phoenix-redis", optional = true }
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
-phoenix-security = { version = "0.1.0", path = "../phoenix-security" }
-phoenix-storage = { version = "0.1.0", path = "../phoenix-storage", optional = true }
-phoenix-testing = { version = "0.1.0", path = "../phoenix-testing", optional = true }
-phoenix-validation = { version = "0.1.0", path = "../phoenix-validation" }
-phoenix-view = { version = "0.1.1", path = "../phoenix-view" }
+phoenix-auth = { version = "0.1.1", path = "../phoenix-auth", default-features = false, optional = true }
+phoenix-config = { version = "0.1.1", path = "../phoenix-config" }
+phoenix-console = { version = "0.1.1", path = "../phoenix-console" }
+phoenix-runtime = { version = "0.1.1", path = "../phoenix-runtime", default-features = false }
+phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", default-features = false, optional = true }
+phoenix-dx = { version = "0.1.1", path = "../phoenix-dx" }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-logging = { version = "0.1.1", path = "../phoenix-logging" }
+phoenix-macros = { version = "0.1.1", path = "../phoenix-macros" }
+phoenix-mail = { version = "0.1.1", path = "../phoenix-mail", optional = true }
+phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics", optional = true }
+phoenix-plugin = { version = "0.1.1", path = "../phoenix-plugin" }
+phoenix-queue = { version = "0.1.1", path = "../phoenix-queue", default-features = false, optional = true }
+phoenix-redis = { version = "0.1.1", path = "../phoenix-redis", default-features = false, optional = true }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
+phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-features = false }
+phoenix-storage = { version = "0.1.1", path = "../phoenix-storage", optional = true }
+phoenix-testing = { version = "0.1.1", path = "../phoenix-testing", optional = true }
+phoenix-validation = { version = "0.1.1", path = "../phoenix-validation" }
+phoenix-view = { version = "0.1.2", path = "../phoenix-view", default-features = false }
 
 [lints]
 workspace = true

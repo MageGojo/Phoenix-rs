@@ -21,6 +21,7 @@ use phoenix_http::{
     Middleware, Next, Request, Response, ResponseBodyOutcome, ResponseBodySummary, StatusCode,
     TransportScheme, Uri, header,
 };
+#[cfg(feature = "metrics")]
 use phoenix_metrics::Metrics;
 use serde_json::Value;
 
@@ -539,6 +540,7 @@ pub struct RateLimit {
     backend: Arc<dyn RateLimitBackend>,
     key: Arc<dyn RateLimitKey>,
     failure_mode: RateLimitFailureMode,
+    #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
 }
 
@@ -565,6 +567,7 @@ impl RateLimit {
             backend,
             key: Arc::new(ClientIpRateLimitKey),
             failure_mode: RateLimitFailureMode::Closed,
+            #[cfg(feature = "metrics")]
             metrics: None,
         }
     }
@@ -582,6 +585,7 @@ impl RateLimit {
     }
 
     #[must_use]
+    #[cfg(feature = "metrics")]
     pub fn metrics(mut self, metrics: Metrics) -> Self {
         self.metrics = Some(metrics);
         self
@@ -594,11 +598,13 @@ impl Middleware for RateLimit {
         let backend = Arc::clone(&self.backend);
         let key = self.key.key(&request);
         let failure_mode = self.failure_mode;
+        #[cfg(feature = "metrics")]
         let metrics = self.metrics.clone();
         Box::pin(async move {
             let now = unix_timestamp();
             match backend.hit(key, config.requests, config.window, now).await {
                 Ok(decision) if !decision.allowed => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = metrics {
                         metrics.record_rate_limit_rejection();
                     }
@@ -606,12 +612,14 @@ impl Middleware for RateLimit {
                 }
                 Ok(_) => next.run(request).await,
                 Err(_) if failure_mode == RateLimitFailureMode::Open => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = metrics {
                         metrics.record_rate_limit_store_error();
                     }
                     next.run(request).await
                 }
                 Err(_) => {
+                    #[cfg(feature = "metrics")]
                     if let Some(metrics) = metrics {
                         metrics.record_rate_limit_store_error();
                     }
@@ -1081,6 +1089,7 @@ impl std::fmt::Debug for SessionStorage {
 pub struct SessionMiddleware {
     storage: SessionStorage,
     config: Arc<SessionConfig>,
+    #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
 }
 
@@ -1090,6 +1099,7 @@ impl SessionMiddleware {
         Self {
             storage: SessionStorage::Local(store),
             config: Arc::new(config),
+            #[cfg(feature = "metrics")]
             metrics: None,
         }
     }
@@ -1100,6 +1110,7 @@ impl SessionMiddleware {
         Self {
             storage: SessionStorage::Distributed(backend),
             config: Arc::new(config),
+            #[cfg(feature = "metrics")]
             metrics: None,
         }
     }
@@ -1112,6 +1123,7 @@ impl SessionMiddleware {
 
     /// Record backend conflicts and failures without session IDs or other high-cardinality labels.
     #[must_use]
+    #[cfg(feature = "metrics")]
     pub fn metrics(mut self, metrics: Metrics) -> Self {
         self.metrics = Some(metrics);
         self
@@ -1122,6 +1134,7 @@ impl Middleware for SessionMiddleware {
     fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
         let storage = self.storage.clone();
         let config = Arc::clone(&self.config);
+        #[cfg(feature = "metrics")]
         let metrics = self.metrics.clone();
         Box::pin(async move {
             match storage {
@@ -1133,7 +1146,15 @@ impl Middleware for SessionMiddleware {
                     append_session_cookie(response, &session, &config)
                 }
                 SessionStorage::Distributed(backend) => {
-                    handle_distributed_session(request, next, backend, config, metrics).await
+                    handle_distributed_session(
+                        request,
+                        next,
+                        backend,
+                        config,
+                        #[cfg(feature = "metrics")]
+                        metrics,
+                    )
+                    .await
                 }
             }
         })
@@ -1148,6 +1169,7 @@ async fn handle_distributed_session(
     next: Next,
     backend: Arc<dyn SessionBackend>,
     config: Arc<SessionConfig>,
+    #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
 ) -> Response {
     let supplied_id =
@@ -1156,6 +1178,7 @@ async fn handle_distributed_session(
     let expires_at = now.saturating_add(config.max_age.as_secs());
     let (id, snapshot) = if let Some(id) = supplied_id {
         let Ok(snapshot) = backend.load(id.clone(), now, expires_at).await else {
+            #[cfg(feature = "metrics")]
             record_session_store_error(metrics.as_ref());
             return session_unavailable_response();
         };
@@ -1173,12 +1196,14 @@ async fn handle_distributed_session(
     match commit_distributed_session(&backend, &session, config.max_age).await {
         SessionCommitResult::Persisted => append_session_cookie(response, &session, &config),
         SessionCommitResult::Conflict => {
+            #[cfg(feature = "metrics")]
             if let Some(metrics) = metrics {
                 metrics.record_session_conflict();
             }
             Response::text("Session conflict").with_status(StatusCode::CONFLICT)
         }
         SessionCommitResult::StoreError => {
+            #[cfg(feature = "metrics")]
             record_session_store_error(metrics.as_ref());
             session_unavailable_response()
         }
@@ -1315,6 +1340,7 @@ fn classify_session_write(
     }
 }
 
+#[cfg(feature = "metrics")]
 fn record_session_store_error(metrics: Option<&Metrics>) {
     if let Some(metrics) = metrics {
         metrics.record_session_store_error();

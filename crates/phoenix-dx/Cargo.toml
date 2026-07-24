@@ -10,9 +10,9 @@ homepage.workspace = true
 repository.workspace = true
 
 [dependencies]
-phoenix-dx-macros = { version = "0.1.0", path = "../phoenix-dx-macros" }
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-dx-macros = { version = "0.1.1", path = "../phoenix-dx-macros" }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 thiserror.workspace = true
 
 [dev-dependencies]

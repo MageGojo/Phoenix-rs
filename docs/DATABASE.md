@@ -68,17 +68,17 @@ mysql://...
 
 ## 按需编译数据库驱动
 
-`phoenix-database` 的 `sqlite`、`pgsql` / `postgresql`、`mysql` features 分别转发到 Toasty 驱动。门面 `phoenixrs` 默认只启用 `sqlite`；应用脚手架关闭 Phoenix 与 Toasty 的隐式默认 features，再以应用 feature 精确选择一个驱动。因此 HTTP 主程序和 `phoenix-manage` 使用同一驱动集合，不再固定携带 SQLite、PostgreSQL、MySQL 全家桶。
+`phoenix-database` 的 `sqlite`、`pgsql` / `postgresql`、`mysql` features 分别转发到 Toasty 驱动。门面 `phoenixrs` 默认 **不** 启用任何数据库 feature（`default = []`）；应用脚手架关闭 Phoenix 与 Toasty 的隐式默认 features，再以应用 feature 精确选择一个驱动（并开启 `database`）。因此 HTTP 主程序和 `phoenix-manage` 使用同一驱动集合，不再固定携带 SQLite、PostgreSQL、MySQL 全家桶。
 
 ```bash
-# 默认 SQLite
-cargo build --release
+# 启用 SQLite
+cargo build --release --features sqlite
 
 # 单次 PostgreSQL 构建
-cargo build --release --no-default-features --features pgsql
+cargo build --release --features pgsql
 
 # 单次 MySQL 构建
-cargo build --release --no-default-features --features mysql
+cargo build --release --features mysql
 ```
 
 `initialize_schema()` 适用于空数据库、原型和隔离测试。已有生产数据库的版本演进应使用迁移，避免把 Toasty schema push 当作升级工具。

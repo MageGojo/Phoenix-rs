@@ -2,6 +2,16 @@
 
 Phoenix 可以直接使用 rustls 终止 TLS，也可以部署在可信反向代理之后。两种模式都会生成统一的有效请求 scheme，供 HTTPS 重定向、HSTS、Cookie 和业务策略使用。
 
+## Cargo feature
+
+进程内 TLS 需要启用门面 feature **`tls`**：
+
+```toml
+phoenix = { package = "phoenixrs", features = ["tls"] }
+```
+
+未启用时仍可走反向代理终止 TLS（见下文「可信反向代理」）；`TlsConfig` / `bind_tls` / `spawn_tls` 不会编进二进制。
+
 ## 内置 TLS listener
 
 ```rust

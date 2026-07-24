@@ -295,8 +295,21 @@
 
 ## ADR-041：数据库驱动按应用 Cargo feature 编译
 
-- 状态：已接受
-- 决定：`phoenix-database` 与 `phoenixrs` 分别暴露 `sqlite`、`pgsql` / `postgresql`、`mysql` feature；应用脚手架默认仅启用 `sqlite`，Toasty 的迁移与 serde 基础能力常驻，具体驱动按应用 feature 转发。应用 `Cargo.toml` 默认 feature 与 `config/database.toml` 的运行时连接必须一致。
+- 状态：已接受（并由 ADR-042 扩展为整库可选）
+- 决定：`phoenix-database` 与 `phoenixrs` 分别暴露 `database` + `sqlite`、`pgsql` / `postgresql`、`mysql` feature；脚手架 `default = []`，应用按需启用恰好一个驱动。Toasty 的迁移与 serde 基础能力随 `database`/`toasty` 可选依赖进入。应用 feature 与 `config/database.toml` 的运行时连接必须一致。
 - 原因：迁移二进制会真实使用数据库，链接器不会裁掉可达的 Toasty 驱动；固定启用三库会让每个 `phoenix-manage` 静态携带 SQLite C 实现、MySQL、PostgreSQL 及其传输依赖。
 - 发布体积：脚手架和框架 release profile 使用 `opt-level = "z"`、LTO、单 codegen unit 与符号剥离；继续使用 `panic = "unwind"` 以保留框架 panic 隔离边界。
 - 失败边界：配置选择未编译驱动时，在连接前返回 `DatabaseError::BackendNotCompiled`；需要运行真实 PostgreSQL/MySQL 契约测试时显式启用对应 feature。
+
+## ADR-042：可选能力按 Cargo feature 编译（TLS / WS / SSE / auth / JWT / password / metrics）
+
+- 状态：已接受
+- 决定：`phoenixrs` 门面 `default = []`，以下能力按需开启，互不合并（`websocket` 与 `sse` 分开）：
+  - `tls` → `phoenix-runtime` rustls 直连 HTTPS
+  - `websocket` / `sse` → `phoenix-http` 协议门面（`ConnectionUpgrade` 常驻）
+  - `auth` → 可选依赖 `phoenix-auth`（RBAC/ABAC）；`PrincipalFromJwt` 另需 `jwt`
+  - `jwt` → `phoenix-crypto` 的 JWT/token 栈（并弱依赖转发到 `phoenix-auth` / `phoenix-redis`）
+  - `password` → Argon2 密码哈希
+  - `metrics` → 可选 `phoenix-metrics`，并转发到 runtime / security / view / queue
+- 原因：极简岛页 / 反代 TLS / 无登录站点不应为未使用能力付出静态链接成本（尤其 aws-lc、tungstenite、jsonwebtoken、argon2）。
+- 边界：Session/CSRF/HostAllowlist、PageEnvelope、validation、routing 等网站默认承诺保持常驻；叶子 crate 可为自测保留 default features，门面依赖一律 `default-features = false`。

@@ -482,7 +482,7 @@ fn project_files(
             // npm: `@phoenix` / `@phoenixrs` scopes are unavailable to the publisher
             // account; packages ship as `@apizero/*`. Packument GET is currently
             // broken on npm for these new names, so pin installable tarball URLs.
-            "phoenix = { package = \"phoenixrs\", version = \"0.1.2\", default-features = false }"
+            "phoenix = { package = \"phoenixrs\", version = \"0.1.3\", default-features = false }"
                 .to_owned(),
             "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
             "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-0.1.2.tgz".to_owned(),
@@ -541,7 +541,7 @@ fn project_files(
         (
             "Cargo.toml".into(),
             format!(
-                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Compile exactly one database driver into production binaries. Keep this in sync\n# with `default` in config/database.toml.\ndefault = [\"sqlite\"]\nsqlite = [\"phoenix/sqlite\", \"toasty/sqlite\"]\npgsql = [\"phoenix/pgsql\", \"toasty/postgresql\"]\nmysql = [\"phoenix/mysql\", \"toasty/mysql\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", default-features = false, features = [\"migration\", \"serde\"] }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
+                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Keep default empty for a lean binary. Enable only what the app needs.\ndefault = []\n# Database: enable exactly one driver when the app uses DB.\ndatabase = [\"phoenix/database\", \"dep:toasty\"]\nsqlite = [\"database\", \"phoenix/sqlite\", \"toasty/sqlite\"]\npgsql = [\"database\", \"phoenix/pgsql\", \"toasty/postgresql\"]\nmysql = [\"database\", \"phoenix/mysql\", \"toasty/mysql\"]\n# Optional capabilities (forwarded to phoenixrs).\ntls = [\"phoenix/tls\"]\nwebsocket = [\"phoenix/websocket\"]\nsse = [\"phoenix/sse\"]\nauth = [\"phoenix/auth\"]\njwt = [\"phoenix/jwt\"]\npassword = [\"phoenix/password\"]\nmetrics = [\"phoenix/metrics\"]\nredis = [\"phoenix/redis\"]\nstorage = [\"phoenix/storage\"]\nqueue = [\"phoenix/queue\"]\nmail = [\"phoenix/mail\"]\ntesting = [\"phoenix/testing\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", default-features = false, features = [\"migration\", \"serde\"], optional = true }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
                 package = json_string(package),
             ),
         ),
@@ -650,7 +650,7 @@ fn database_toml_template() -> String {
 #   default = "sqlite"   # local file, zero setup
 #   default = "pgsql"    # PostgreSQL
 #   default = "mysql"    # MySQL / MariaDB
-# Keep the Cargo.toml default feature aligned so only that driver is linked.
+# Enable the matching Cargo feature only when this application uses a database.
 #
 # Or set DB_CONNECTION=pgsql|mysql in `.env` without editing this file.
 # Put DB_PASSWORD in `.env` — do not commit production passwords here.
@@ -731,12 +731,21 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
 #[allow(clippy::too_many_lines)]
 fn management_template(crate_name: &str) -> String {
-    r#"use std::{env, error::Error, io};
+    r#"#[cfg(feature = "database")]
+use std::{env, error::Error, io};
 
+#[cfg(feature = "database")]
 use phoenix::database::MigrationRunner;
 
+#[cfg(feature = "database")]
 type CommandResult<T = ()> = Result<T, Box<dyn Error>>;
 
+#[cfg(not(feature = "database"))]
+fn main() {
+    println!("Database support is disabled; enable the sqlite, pgsql, or mysql feature.");
+}
+
+#[cfg(feature = "database")]
 #[tokio::main]
 async fn main() -> CommandResult {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -809,6 +818,7 @@ async fn main() -> CommandResult {
     Ok(())
 }
 
+#[cfg(feature = "database")]
 fn require_no_options(options: &[String]) -> CommandResult {
     if options.is_empty() {
         Ok(())
@@ -817,6 +827,7 @@ fn require_no_options(options: &[String]) -> CommandResult {
     }
 }
 
+#[cfg(feature = "database")]
 fn parse_rollback_steps(options: &[String]) -> CommandResult<usize> {
     let [steps] = options else {
         return Err(input_error("rollback expects one positive step count").into());
@@ -828,6 +839,7 @@ fn parse_rollback_steps(options: &[String]) -> CommandResult<usize> {
         .ok_or_else(|| input_error("rollback step count must be a positive integer").into())
 }
 
+#[cfg(feature = "database")]
 fn parse_fresh_options(options: &[String]) -> CommandResult<bool> {
     match options {
         [] => Ok(false),
@@ -836,6 +848,7 @@ fn parse_fresh_options(options: &[String]) -> CommandResult<bool> {
     }
 }
 
+#[cfg(feature = "database")]
 fn input_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
@@ -876,7 +889,7 @@ fn empty_migration_registry() -> String {
 
 fn project_readme(package: &str) -> String {
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nDatabase drivers are compile-time Cargo features. Keep `[features].default` in `Cargo.toml` aligned with `config/database.toml`; the scaffold defaults to SQLite and links only SQLite. For a one-off build, use `cargo build --no-default-features --features pgsql` (or `mysql`).\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nOptional capabilities are Cargo features (`sqlite`/`pgsql`/`mysql`, `tls`, `websocket`, `sse`, `auth`, `jwt`, `password`, `metrics`, …). `default = []` keeps binaries lean—enable only what you use (for example `cargo build --features sqlite,password`). When using a database, keep the enabled driver feature aligned with `config/database.toml`.\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
     )
 }
 
@@ -928,6 +941,7 @@ pub mod commands;
 pub mod controllers;
 #[path = "../app/middleware/mod.rs"]
 pub mod middleware;
+#[cfg(feature = "database")]
 #[path = "../app/models/mod.rs"]
 pub mod models;
 #[path = "../app/props/mod.rs"]
@@ -936,17 +950,20 @@ pub mod props;
 pub mod requests;
 #[path = "../app/resources/mod.rs"]
 pub mod resources;
+#[cfg(feature = "database")]
 #[path = "../database/migrations/mod.rs"]
 pub mod migrations;
+#[cfg(feature = "database")]
 #[path = "../database/seeders/mod.rs"]
 pub mod seeders;
 
 use phoenix::prelude::{
-    AccessLog, Application, AssetManifest, Csrf, Database, DatabaseError, HostAllowlist,
-    NonceSecurityPolicy, RateLimit, RateLimitConfig, RequestId, RouteBuildError, Routes,
-    ServeProductionAssets, SessionConfig, SessionMiddleware, SessionStore, StateMiddleware,
-    TrustedProxies,
+    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NonceSecurityPolicy, RateLimit,
+    RateLimitConfig, RequestId, RouteBuildError, Routes, ServeProductionAssets, SessionConfig,
+    SessionMiddleware, SessionStore, StateMiddleware, TrustedProxies,
 };
+#[cfg(feature = "database")]
+use phoenix::prelude::{Database, DatabaseError};
 
 use config::AppConfig;
 
@@ -1007,6 +1024,7 @@ pub fn application(config: AppConfig) -> Result<Application, RouteBuildError> {
 /// # Errors
 ///
 /// Returns a database error when the URL or connection is invalid.
+#[cfg(feature = "database")]
 pub async fn database(config: &AppConfig) -> Result<Database, DatabaseError> {
     Database::builder(models::all())
         .connect(config.database_url())
@@ -2251,8 +2269,13 @@ mod tests {
         let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(manifest.contains("crates/phoenix"));
         assert!(manifest.contains("default-run = \"phoenix-cli-new-"));
-        assert!(manifest.contains("default = [\"sqlite\"]"));
-        assert!(manifest.contains("sqlite = [\"phoenix/sqlite\", \"toasty/sqlite\"]"));
+        assert!(manifest.contains("default = []"));
+        assert!(manifest.contains(
+            "sqlite = [\"database\", \"phoenix/sqlite\", \"toasty/sqlite\"]"
+        ));
+        assert!(manifest.contains("tls = [\"phoenix/tls\"]"));
+        assert!(manifest.contains("websocket = [\"phoenix/websocket\"]"));
+        assert!(manifest.contains("sse = [\"phoenix/sse\"]"));
         assert!(manifest.contains("default-features = false"));
         assert!(manifest.contains("opt-level = \"z\""));
         assert!(manifest.contains("strip = \"symbols\""));

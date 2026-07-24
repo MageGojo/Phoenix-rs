@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-auth"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-crypto",
  "phoenix-http",
@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-blog-example"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-testing",
  "phoenixrs",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dotenvy",
  "http",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-console"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror",
  "tokio",
@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-dx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-dx-macros",
  "phoenix-http",
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-dx-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-logging"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -1857,11 +1857,11 @@ dependencies = [
 
 [[package]]
 name = "phoenix-macros"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "phoenix-mail"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-http",
  "thiserror",
@@ -1870,7 +1870,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-metrics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "phoenix-http",
@@ -1880,7 +1880,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-multi-app-example"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenixrs",
  "tokio",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-console",
  "phoenix-database",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-plugin-greeter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenixrs",
  "serde_json",
@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-queue"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-metrics",
  "serde",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-redis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-crypto",
  "phoenix-http",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-routing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-security"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "http",
@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "rand 0.10.2",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-testing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "http",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-validation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "phoenix-http",
  "serde",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "phoenix-view"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "phoenixrs"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "phoenix-auth",
  "phoenix-config",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "px-cli"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "nix",
  "notify",

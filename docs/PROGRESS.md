@@ -512,3 +512,11 @@
 - 体积 profile：脚手架与框架 release 使用 `opt-level = "z"`、LTO、`codegen-units = 1`、strip，保留 `panic = "unwind"`。
 - 验收：`px_text` 的依赖图只含 `toasty-driver-sqlite`；`cargo check --bins`、`cargo test`、release 管理命令均通过；SQLite-only + size profile 实测 `px-text` **2,071,616 bytes**、`phoenix-manage` **2,658,624 bytes**（优化前约 6.8 MiB / 14 MiB）。配置切换到未编译 MySQL 时稳定返回 `BackendNotCompiled { feature: "mysql" }`。
   状态：已完成@工作树
+
+## 2026-07-24：可选能力 Cargo feature（ADR-042）
+
+- 已完成：`tls` / `websocket` / `sse` / `auth` / `jwt` / `password` / `metrics` 做成门面 feature（WS 与 SSE 不合并）；数据库 optional WIP 一并收口。
+- 验收：`cargo check -p phoenixrs --no-default-features`；分别 `--features tls|websocket|sse|auth|jwt|password|metrics` 及组合；无 feature 时 dep tree 不含 rustls/tungstenite/jsonwebtoken/argon2；`cargo test --workspace --locked` 全绿；blog 启用 `sqlite,password`。
+- 产物：各底层 crate features + `crates/phoenix/{Cargo.toml,src/lib.rs}` + scaffold + ADR-042 + `docs/FEATURES.md` 等文档同步
+- 发布：`phoenixrs 0.1.3` / `px-cli 0.1.4` / 相关 crate `0.1.1`–`0.1.2`；GitHub + GitCode push + GitHub Release
+- 状态：进行中@发布

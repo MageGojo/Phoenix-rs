@@ -1,5 +1,30 @@
 # Feature / 插件扩展（首版）
 
+Phoenix-rs 支持两类「Feature」概念，勿混淆：
+
+1. **Cargo features（编译期裁剪）**：控制是否链接 TLS / DB / JWT 等（见 [ADR-042](./DECISIONS.md)）。门面 `phoenixrs` 默认 `default = []`。
+2. **Plugin / FeatureSet（本页）**：第三方 crate 显式安装路由、命令、迁移。
+
+## Cargo features（体积相关）
+
+| Feature | 作用 |
+| --- | --- |
+| `sqlite` / `pgsql` / `mysql` | 数据库（隐含 `database`） |
+| `tls` | 进程内 rustls HTTPS |
+| `websocket` | WebSocket 门面 |
+| `sse` | Server-Sent Events（与 websocket **分开**） |
+| `auth` | RBAC/ABAC（`PrincipalFromJwt` 另需 `jwt`） |
+| `jwt` | JWT + refresh token 栈 |
+| `password` | Argon2 密码哈希 |
+| `metrics` | Prometheus 指标 |
+| `redis` / `queue` / `mail` / `storage` / `testing` | 既有可选能力 |
+
+```toml
+phoenix = { package = "phoenixrs", version = "0.1", default-features = false, features = ["sqlite", "password"] }
+```
+
+---
+
 Phoenix-rs 支持第三方以 **Cargo crate** 形式发布 Feature（插件），应用在编译期**显式安装**后使用其路由、控制台命令与迁移。
 
 这不是运行时 `.so` 热加载，也不是 Laravel Package 自动发现——符合 ADR-008（显式组装、无反射 DI）。

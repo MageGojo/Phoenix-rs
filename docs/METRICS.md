@@ -2,6 +2,16 @@
 
 `phoenix-metrics` 提供进程内、无第三方 collector 依赖的低基数 registry，并输出 Prometheus 0.0.4 文本格式。应用使用同一个 `Metrics` 实例连接 HTTP middleware、内置 TCP/TLS server、React renderer、数据库适配层和后续 queue worker。
 
+## Cargo feature
+
+指标能力需要启用门面 feature **`metrics`**：
+
+```toml
+phoenix = { package = "phoenixrs", features = ["metrics"] }
+```
+
+未启用时 `Metrics` / `MetricsMiddleware` / `Application::metrics` 不会编进依赖图。
+
 ## 接入 HTTP 与服务端指标
 
 ```rust

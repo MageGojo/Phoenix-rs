@@ -2,10 +2,7 @@
 //!
 //! HTTP/2 extended CONNECT (RFC 8441) is intentionally unsupported.
 
-use std::{
-    future::Future,
-    sync::{Arc, Mutex},
-};
+use std::future::Future;
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -22,33 +19,11 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::{FromRequest, IntoResponse, Request, Response, rejection_response};
+use crate::{ConnectionUpgrade, FromRequest, IntoResponse, Request, Response, rejection_response};
 
 const DEFAULT_MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const DEFAULT_MAX_FRAME_SIZE: usize = 16 * 1024;
 const MAX_CONFIGURED_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
-
-/// Takeable Hyper upgrade handle installed by the HTTP/1 connection layer.
-#[derive(Clone, Debug)]
-pub struct ConnectionUpgrade {
-    on_upgrade: Arc<Mutex<Option<OnUpgrade>>>,
-}
-
-impl ConnectionUpgrade {
-    /// Wrap a Hyper [`OnUpgrade`] so handlers can take it through `&Request`.
-    #[must_use]
-    pub fn new(on_upgrade: OnUpgrade) -> Self {
-        Self {
-            on_upgrade: Arc::new(Mutex::new(Some(on_upgrade))),
-        }
-    }
-
-    /// Take the pending upgrade exactly once.
-    #[must_use]
-    pub fn take(&self) -> Option<OnUpgrade> {
-        self.on_upgrade.lock().ok()?.take()
-    }
-}
 
 /// RFC 6455 close status codes used by the Phoenix WebSocket facade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

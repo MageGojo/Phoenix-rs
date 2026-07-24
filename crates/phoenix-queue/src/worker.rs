@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(feature = "metrics")]
 use phoenix_metrics::{JobOutcome, Metrics};
 use tokio::sync::watch;
 
@@ -112,6 +113,7 @@ pub struct Worker<B, H> {
     backend: Arc<B>,
     handler: H,
     config: WorkerConfig,
+    #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
     shutdown: ShutdownToken,
 }
@@ -128,6 +130,7 @@ where
             backend,
             handler,
             config: WorkerConfig::default(),
+            #[cfg(feature = "metrics")]
             metrics: None,
             shutdown,
         }
@@ -141,6 +144,7 @@ where
     }
 
     /// Attach a shared [`Metrics`] registry for Completed / Failed / Retried.
+    #[cfg(feature = "metrics")]
     #[must_use]
     pub fn with_metrics(mut self, metrics: Metrics) -> Self {
         self.metrics = Some(metrics);
@@ -168,17 +172,17 @@ where
                     match result {
                         Ok(()) => {
                             self.backend.ack(&id).await?;
-                            self.record(JobOutcome::Completed);
+                            self.record_completed();
                         }
                         Err(error) if should_dead_letter(&error, attempts, max_attempts) => {
                             self.backend.dead_letter(&id).await?;
-                            self.record(JobOutcome::Failed);
+                            self.record_failed();
                         }
                         Err(_) => {
                             let delay = backoff_delay(self.config.base_backoff, attempts);
                             let available_at = SystemTime::now() + delay;
                             self.backend.fail(&id, available_at).await?;
-                            self.record(JobOutcome::Retried);
+                            self.record_retried();
                         }
                     }
                 }
@@ -192,6 +196,31 @@ where
         }
     }
 
+    #[cfg(feature = "metrics")]
+    fn record_completed(&self) {
+        self.record(JobOutcome::Completed);
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_completed(&self) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_failed(&self) {
+        self.record(JobOutcome::Failed);
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_failed(&self) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_retried(&self) {
+        self.record(JobOutcome::Retried);
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_retried(&self) {}
+
+    #[cfg(feature = "metrics")]
     fn record(&self, outcome: JobOutcome) {
         if let Some(metrics) = &self.metrics {
             metrics.record_job(outcome);

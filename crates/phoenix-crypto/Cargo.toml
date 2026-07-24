@@ -9,14 +9,19 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 
+[features]
+default = ["jwt", "password"]
+jwt = ["dep:jsonwebtoken"]
+password = ["dep:argon2"]
+
 [dependencies]
 aes-gcm.workspace = true
-argon2.workspace = true
+argon2 = { workspace = true, optional = true }
 base64.workspace = true
 http.workspace = true
 hmac.workspace = true
-jsonwebtoken.workspace = true
-phoenix-http = { version = "0.1.0", path = "../phoenix-http" }
+jsonwebtoken = { workspace = true, optional = true }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,7 +30,7 @@ thiserror.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-phoenix-routing = { version = "0.1.0", path = "../phoenix-routing" }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 tokio.workspace = true
 
 [lints]
