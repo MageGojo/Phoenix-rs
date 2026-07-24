@@ -4,6 +4,7 @@ use std::{
     io::ErrorKind,
     path::{Component, Path, PathBuf},
     process::Command,
+    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,11 +18,120 @@ const MIGRATIONS_START: &str = "// <phoenix:migration-registry>";
 const MIGRATIONS_END: &str = "// </phoenix:migration-registry>";
 const COMMANDS_START: &str = "// <phoenix:commands>";
 const COMMANDS_END: &str = "// </phoenix:commands>";
+const PROJECT_OPTIONS_FILE: &str = ".phoenix";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DependencySource {
     Registry,
     Local(PathBuf),
+}
+
+/// Initial React rendering mode selected by `px new`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProjectRenderMode {
+    Spa,
+    Ssr,
+    #[default]
+    Islands,
+}
+
+impl ProjectRenderMode {
+    #[must_use]
+    pub const fn page_builder(self) -> &'static str {
+        match self {
+            Self::Spa => ".spa()",
+            Self::Ssr => ".ssr()",
+            Self::Islands => ".islands()",
+        }
+    }
+}
+
+impl FromStr for ProjectRenderMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "spa" => Ok(Self::Spa),
+            "ssr" => Ok(Self::Ssr),
+            "islands" | "island" => Ok(Self::Islands),
+            _ => Err("render mode must be spa, ssr, or islands".to_owned()),
+        }
+    }
+}
+
+/// One optional database driver selected when a project is created.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectDatabase {
+    Sqlite,
+    Pgsql,
+    Mysql,
+    All,
+}
+
+/// Source format used for generated React components.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProjectFrontend {
+    Jsx,
+    #[default]
+    Tsx,
+}
+
+impl ProjectFrontend {
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Jsx => "jsx",
+            Self::Tsx => "tsx",
+        }
+    }
+}
+
+impl FromStr for ProjectFrontend {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "jsx" | "js" => Ok(Self::Jsx),
+            "tsx" | "ts" => Ok(Self::Tsx),
+            _ => Err("frontend must be jsx or tsx".to_owned()),
+        }
+    }
+}
+
+impl ProjectDatabase {
+    #[must_use]
+    pub const fn cargo_feature(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::Pgsql => "pgsql",
+            Self::Mysql => "mysql",
+            Self::All => "all-databases",
+        }
+    }
+
+    #[must_use]
+    pub const fn toasty_features(self) -> &'static str {
+        match self {
+            Self::Sqlite => "serde\", \"sqlite",
+            Self::Pgsql => "postgresql\", \"serde",
+            Self::Mysql => "mysql\", \"serde",
+            Self::All => "mysql\", \"postgresql\", \"serde\", \"sqlite",
+        }
+    }
+}
+
+impl FromStr for ProjectDatabase {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "sqlite" => Ok(Self::Sqlite),
+            "pgsql" | "postgres" | "postgresql" => Ok(Self::Pgsql),
+            "mysql" | "mariadb" => Ok(Self::Mysql),
+            "all" => Ok(Self::All),
+            _ => Err("database must be sqlite, pgsql, mysql, or all".to_owned()),
+        }
+    }
 }
 
 impl DependencySource {
@@ -64,6 +174,10 @@ pub struct NewProjectOptions {
     pub dependencies: DependencySource,
     pub initialize_git: bool,
     pub install_dependencies: bool,
+    pub render_mode: ProjectRenderMode,
+    pub database: Option<ProjectDatabase>,
+    pub frontend: ProjectFrontend,
+    pub tailwind: bool,
 }
 
 impl NewProjectOptions {
@@ -72,8 +186,12 @@ impl NewProjectOptions {
         Self {
             target: target.into(),
             dependencies: DependencySource::discover(),
-            initialize_git: true,
+            initialize_git: false,
             install_dependencies: true,
+            render_mode: ProjectRenderMode::default(),
+            database: None,
+            frontend: ProjectFrontend::default(),
+            tailwind: false,
         }
     }
 
@@ -92,6 +210,30 @@ impl NewProjectOptions {
     #[must_use]
     pub const fn install_dependencies(mut self, install: bool) -> Self {
         self.install_dependencies = install;
+        self
+    }
+
+    #[must_use]
+    pub const fn render_mode(mut self, render_mode: ProjectRenderMode) -> Self {
+        self.render_mode = render_mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn database(mut self, database: Option<ProjectDatabase>) -> Self {
+        self.database = database;
+        self
+    }
+
+    #[must_use]
+    pub const fn frontend(mut self, frontend: ProjectFrontend) -> Self {
+        self.frontend = frontend;
+        self
+    }
+
+    #[must_use]
+    pub const fn tailwind(mut self, tailwind: bool) -> Self {
+        self.tailwind = tailwind;
         self
     }
 }
@@ -167,7 +309,7 @@ pub fn create_project(options: &NewProjectOptions) -> Result<(), ScaffoldError> 
     }
 
     let mut editor = ProjectEditor::new(&target, false);
-    for (path, content) in project_files(&package, &options.dependencies)? {
+    for (path, content) in project_files(&package, options)? {
         editor.create(path, content)?;
     }
     editor.commit()?;
@@ -319,7 +461,7 @@ impl ProjectGenerator {
             )?;
         }
         if options.page {
-            add_page(&mut editor, &page)?;
+            add_page(&mut editor, &page, self.frontend())?;
         }
         editor.commit()
     }
@@ -409,7 +551,7 @@ impl ProjectGenerator {
     ) -> Result<Vec<PathBuf>, ScaffoldError> {
         let page = PageName::parse(name)?;
         let mut editor = ProjectEditor::new(&self.root, options.force);
-        add_page(&mut editor, &page)?;
+        add_page(&mut editor, &page, self.frontend())?;
         editor.commit()
     }
 
@@ -427,8 +569,13 @@ impl ProjectGenerator {
         let mut editor = ProjectEditor::new(&self.root, options.force);
         let mut path = PathBuf::from("views/islands");
         path.extend(name.modules.iter().map(|module| kebab_case(module)));
-        path.push(format!("{}.tsx", kebab_case(&name.class)));
-        editor.create(path, island_template(&name.class))?;
+        let frontend = self.frontend();
+        path.push(format!(
+            "{}.{}",
+            kebab_case(&name.class),
+            frontend.extension()
+        ));
+        editor.create(path, island_template(&name.class, frontend))?;
         editor.commit()
     }
 
@@ -461,6 +608,18 @@ impl ProjectGenerator {
         add_rust_item(&mut editor, directory, &name, &template(&name.class))?;
         editor.commit()
     }
+
+    fn frontend(&self) -> ProjectFrontend {
+        fs::read_to_string(self.root.join(PROJECT_OPTIONS_FILE))
+            .ok()
+            .and_then(|source| {
+                source
+                    .lines()
+                    .find_map(|line| line.strip_prefix("frontend=").map(str::to_owned))
+            })
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default()
+    }
 }
 
 fn is_project_root(path: &Path) -> bool {
@@ -473,15 +632,10 @@ fn is_project_root(path: &Path) -> bool {
 
 fn project_files(
     package: &str,
-    dependencies: &DependencySource,
+    options: &NewProjectOptions,
 ) -> Result<Vec<(PathBuf, String)>, ScaffoldError> {
-    let (rust_dependency, react, react_ssr, vite) = match dependencies {
+    let (rust_dependency, react, react_ssr, vite) = match &options.dependencies {
         DependencySource::Registry => (
-            // crates.io package is `phoenixrs` (phoenix / phoenix-rs taken);
-            // lib crate remains `phoenix` so apps keep `use phoenix::…`.
-            // npm: `@phoenix` / `@phoenixrs` scopes are unavailable to the publisher
-            // account; packages ship as `@apizero/*`. Packument GET is currently
-            // broken on npm for these new names, so pin installable tarball URLs.
             "phoenix = { package = \"phoenixrs\", version = \"0.1.3\", default-features = false }"
                 .to_owned(),
             "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
@@ -502,6 +656,11 @@ fn project_files(
         }
     };
     let crate_name = package.replace('-', "_");
+    let tailwind = if options.tailwind {
+        ",\n    \"@tailwindcss/vite\": \"^4.3.0\",\n    \"tailwindcss\": \"^4.3.0\""
+    } else {
+        ""
+    };
     let package_json = format!(
         r#"{{
   "name": {package},
@@ -527,7 +686,7 @@ fn project_files(
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.8.0",
-    "vite": "^7.3.6"
+    "vite": "^7.3.6"{tailwind}
   }}
 }}
 "#,
@@ -535,60 +694,70 @@ fn project_files(
         react = json_string(&react),
         react_ssr = json_string(&react_ssr),
         vite = json_string(&vite),
+        tailwind = tailwind,
+    );
+    let (database_features, toasty_dependency) = options.database.map_or_else(
+        || ("default = []\ndatabase = []\n".to_owned(), String::new()),
+        |database| {
+            let app_feature = database.cargo_feature();
+            let phoenix_features = match database {
+                ProjectDatabase::All => "\"database\", \"phoenix/sqlite\", \"phoenix/pgsql\", \"phoenix/mysql\"".to_owned(),
+                _ => format!("\"database\", \"phoenix/{app_feature}\""),
+            };
+            let toasty_features = database.toasty_features();
+            (
+                format!(
+                    "default = [\"{app_feature}\"]\ndatabase = [\"phoenix/database\"]\n{app_feature} = [{phoenix_features}]\n"
+                ),
+                format!(
+                    "toasty = {{ version = \"0.8\", default-features = false, features = [\"migration\", \"{toasty_features}\"] }}\n"
+                ),
+            )
+        },
+    );
+    let cargo_toml = format!(
+        "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Database support is omitted unless selected during `px new`.\n{database_features}tls = [\"phoenix/tls\"]\nwebsocket = [\"phoenix/websocket\"]\nsse = [\"phoenix/sse\"]\nauth = [\"phoenix/auth\"]\njwt = [\"phoenix/jwt\"]\npassword = [\"phoenix/password\"]\nmetrics = [\"phoenix/metrics\"]\nredis = [\"phoenix/redis\"]\nstorage = [\"phoenix/storage\"]\nqueue = [\"phoenix/queue\"]\nmail = [\"phoenix/mail\"]\ntesting = [\"phoenix/testing\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n{toasty_dependency}tokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
+        package = json_string(package),
+        database_features = database_features,
+        rust_dependency = rust_dependency,
+        toasty_dependency = toasty_dependency,
     );
 
-    Ok(vec![
+    let mut files = vec![
+        ("Cargo.toml".into(), cargo_toml),
         (
-            "Cargo.toml".into(),
-            format!(
-                "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Keep default empty for a lean binary. Enable only what the app needs.\ndefault = []\n# Database: enable exactly one driver when the app uses DB.\ndatabase = [\"phoenix/database\", \"dep:toasty\"]\nsqlite = [\"database\", \"phoenix/sqlite\", \"toasty/sqlite\"]\npgsql = [\"database\", \"phoenix/pgsql\", \"toasty/postgresql\"]\nmysql = [\"database\", \"phoenix/mysql\", \"toasty/mysql\"]\n# Optional capabilities (forwarded to phoenixrs).\ntls = [\"phoenix/tls\"]\nwebsocket = [\"phoenix/websocket\"]\nsse = [\"phoenix/sse\"]\nauth = [\"phoenix/auth\"]\njwt = [\"phoenix/jwt\"]\npassword = [\"phoenix/password\"]\nmetrics = [\"phoenix/metrics\"]\nredis = [\"phoenix/redis\"]\nstorage = [\"phoenix/storage\"]\nqueue = [\"phoenix/queue\"]\nmail = [\"phoenix/mail\"]\ntesting = [\"phoenix/testing\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\ntoasty = {{ version = \"0.8\", default-features = false, features = [\"migration\", \"serde\"], optional = true }}\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
-                package = json_string(package),
-            ),
+            PROJECT_OPTIONS_FILE.into(),
+            format!("frontend={}\n", options.frontend.extension()),
         ),
         ("package.json".into(), package_json),
         (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned()),
-        (".env.example".into(), env_example_template()),
-        ("README.md".into(), project_readme(package)),
+        (".env.example".into(), env_example_template(options.database.is_some())),
+        ("README.md".into(), project_readme(package, options)),
         ("src/main.rs".into(), main_template(&crate_name)),
-        (
-            "src/bin/phoenix-manage.rs".into(),
-            management_template(&crate_name),
-        ),
-        ("src/lib.rs".into(), lib_template()),
-        ("config/mod.rs".into(), config_template()),
+        ("src/lib.rs".into(), lib_template(options.database.is_some())),
+        ("config/mod.rs".into(), config_template(options.database.is_some())),
         ("config/app.toml".into(), app_toml_template(package)),
-        ("config/database.toml".into(), database_toml_template()),
-        (
-            "config/schemas/phoenix-config-app.schema.json".into(),
-            include_str!("../schemas/phoenix-config-app.schema.json").to_owned(),
-        ),
-        (
-            "config/schemas/phoenix-config-database.schema.json".into(),
-            include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
-        ),
-        ("taplo.toml".into(), app_taplo_template()),
+        ("config/schemas/phoenix-config-app.schema.json".into(), include_str!("../schemas/phoenix-config-app.schema.json").to_owned()),
+        ("taplo.toml".into(), app_taplo_template(options.database.is_some())),
         ("deploy/restart.sh.example".into(), deploy_restart_example()),
         ("app/controllers/mod.rs".into(), managed_modules(&["pub mod home_controller;", "pub use home_controller::HomeController;"])),
-        ("app/controllers/home_controller.rs".into(), home_controller_template()),
+        ("app/controllers/home_controller.rs".into(), home_controller_template(options.render_mode)),
         ("app/props/mod.rs".into(), managed_modules(&["pub mod home_props;", "pub use home_props::HomeProps;"])),
         ("app/props/home_props.rs".into(), home_props_template()),
-        ("app/models/mod.rs".into(), empty_model_registry()),
         ("app/requests/mod.rs".into(), managed_modules(&[])),
         ("app/resources/mod.rs".into(), managed_modules(&[])),
         ("app/middleware/mod.rs".into(), managed_modules(&[])),
         ("app/commands/mod.rs".into(), commands_mod_template()),
-        (
-            "database/migrations/mod.rs".into(),
-            empty_migration_registry(),
-        ),
-        ("database/seeders/mod.rs".into(), seeder_template()),
         ("routes/web.rs".into(), home_route_template()),
-        ("views/pages/home.tsx".into(), home_page_template()),
-        ("views/styles.css".into(), styles_template()),
+        (
+            format!("views/pages/home.{}", options.frontend.extension()).into(),
+            home_page_template(options.frontend),
+        ),
+        ("views/styles.css".into(), styles_template(options.tailwind)),
         ("views/generated/contracts.ts".into(), generated_contracts_template()),
         ("views/generated/routes.ts".into(), generated_routes_template()),
-        ("vite.config.ts".into(), vite_template(false)),
-        ("vite.ssr.config.ts".into(), vite_template(true)),
+        ("vite.config.ts".into(), vite_template(false, options.tailwind)),
+        ("vite.ssr.config.ts".into(), vite_template(true, options.tailwind)),
         ("tsconfig.json".into(), tsconfig_template()),
         ("public/.gitkeep".into(), String::new()),
         ("storage/cache/.gitkeep".into(), String::new()),
@@ -596,34 +765,41 @@ fn project_files(
         ("views/components/.gitkeep".into(), String::new()),
         ("views/islands/.gitkeep".into(), String::new()),
         ("views/layouts/.gitkeep".into(), String::new()),
-    ])
+    ];
+    if options.database.is_some() {
+        files.extend([
+            (
+                "config/database.toml".into(),
+                database_toml_template(options.database.expect("database selected")),
+            ),
+            (
+                "config/schemas/phoenix-config-database.schema.json".into(),
+                include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
+            ),
+            ("app/models/mod.rs".into(), empty_model_registry()),
+            (
+                "database/migrations/mod.rs".into(),
+                empty_migration_registry(),
+            ),
+            ("database/seeders/mod.rs".into(), seeder_template()),
+            (
+                "src/bin/phoenix-manage.rs".into(),
+                management_template(&crate_name),
+            ),
+        ]);
+    }
+    Ok(files)
 }
 
-fn env_example_template() -> String {
-    r#"# Copy to `.env` for local secrets and overrides.
-# Structured defaults live in config/app.toml and config/database.toml.
-# Precedence: config/*.toml < .env < process environment.
-
-APP_ENV=development
-APP_ADDR=127.0.0.1:3000
-APP_URL=http://127.0.0.1:3000
-
-# Database: prefer editing config/database.toml default = "sqlite" | "pgsql" | "mysql".
-# Optional overrides:
-# DB_CONNECTION=pgsql
-# DB_CONNECTION=mysql
-# DB_PASSWORD=secret
-# DATABASE_URL=postgresql://phoenix:secret@127.0.0.1:5432/phoenix
-# DATABASE_URL=mysql://phoenix:secret@127.0.0.1:3306/phoenix
-
-TRUSTED_PROXIES=none
-ALLOWED_HOSTS=127.0.0.1,localhost,[::1]
-RATE_LIMIT_REQUESTS=60
-RATE_LIMIT_WINDOW_SECONDS=60
-VITE_DEV_URL=http://127.0.0.1:5173
-PHOENIX_LOG=info,hyper=warn
-"#
-    .to_owned()
+fn env_example_template(database: bool) -> String {
+    let database = if database {
+        "\n# Database overrides for the driver selected during `px new`.\n# DB_PASSWORD=secret\n# DATABASE_URL=...\n"
+    } else {
+        ""
+    };
+    format!(
+        "# Copy to `.env` for local secrets and overrides.\n# Precedence: config/*.toml < .env < process environment.\n\nAPP_ENV=development\nAPP_ADDR=127.0.0.1:3000\nAPP_URL=http://127.0.0.1:3000\n{database}\nTRUSTED_PROXIES=none\nALLOWED_HOSTS=127.0.0.1,localhost,[::1]\nRATE_LIMIT_REQUESTS=60\nRATE_LIMIT_WINDOW_SECONDS=60\nVITE_DEV_URL=http://127.0.0.1:5173\nPHOENIX_LOG=info,hyper=warn\n"
+    )
 }
 
 fn app_toml_template(package: &str) -> String {
@@ -643,8 +819,9 @@ url = "http://127.0.0.1:3000"
     )
 }
 
-fn database_toml_template() -> String {
-    r#"# Database connections (Laravel-style config/database).
+fn database_toml_template(database: ProjectDatabase) -> String {
+    format!(
+        r#"# Database connections (Laravel-style config/database).
 #
 # Switch engines by changing `default`:
 #   default = "sqlite"   # local file, zero setup
@@ -658,7 +835,7 @@ fn database_toml_template() -> String {
 
 #:schema ./schemas/phoenix-config-database.schema.json
 
-default = "sqlite"
+default = "{default}"
 
 [connections.sqlite]
 driver = "sqlite"
@@ -680,24 +857,24 @@ port = 3306
 database = "phoenix"
 username = "phoenix"
 password = ""
-"#
-    .to_owned()
+"#,
+        default = if database == ProjectDatabase::All {
+            "sqlite"
+        } else {
+            database.cargo_feature()
+        },
+    )
 }
 
-fn app_taplo_template() -> String {
-    r#"# Taplo / Even Better TOML schema associations for config/*.toml autocomplete.
-
-[[rule]]
-include = ["config/app.toml"]
-[rule.schema]
-path = "./config/schemas/phoenix-config-app.schema.json"
-
-[[rule]]
-include = ["config/database.toml"]
-[rule.schema]
-path = "./config/schemas/phoenix-config-database.schema.json"
-"#
-    .to_owned()
+fn app_taplo_template(database: bool) -> String {
+    let database_rule = if database {
+        "\n[[rule]]\ninclude = [\"config/database.toml\"]\n[rule.schema]\npath = \"./config/schemas/phoenix-config-database.schema.json\"\n"
+    } else {
+        ""
+    };
+    format!(
+        "# Taplo / Even Better TOML schema associations for config/*.toml autocomplete.\n\n[[rule]]\ninclude = [\"config/app.toml\"]\n[rule.schema]\npath = \"./config/schemas/phoenix-config-app.schema.json\"\n{database_rule}"
+    )
 }
 
 fn deploy_restart_example() -> String {
@@ -710,26 +887,17 @@ systemctl restart my-app
     .to_owned()
 }
 
-fn config_template() -> String {
-    r#"pub use phoenix::config::{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue};
-
-/// Load this application's configuration.
-///
-/// Reads `config/app.toml` + `config/database.toml`, then `.env`, then process
-/// environment. To require JWT/encryption secrets in production:
-/// `AppConfig::builder().required_secret("JWT_SECRET", 32).load()`.
-///
-/// # Errors
-///
-/// Returns a source, validation, or production-requirement error.
-pub fn load() -> Result<AppConfig, ConfigError> {
-    AppConfig::load()
-}
-"#
-    .to_owned()
+fn config_template(database: bool) -> String {
+    let database = if database {
+        " + `config/database.toml`"
+    } else {
+        ""
+    };
+    format!(
+        "pub use phoenix::config::{{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue}};\n\n/// Load this application's configuration.\n///\n/// Reads `config/app.toml`{database}, then `.env`, then process environment.\n///\n/// # Errors\n///\n/// Returns a source, validation, or production-requirement error.\npub fn load() -> Result<AppConfig, ConfigError> {{\n    AppConfig::load()\n}}\n"
+    )
 }
 
-#[allow(clippy::too_many_lines)]
 fn management_template(crate_name: &str) -> String {
     r#"#[cfg(feature = "database")]
 use std::{env, error::Error, io};
@@ -887,9 +1055,23 @@ fn empty_migration_registry() -> String {
     )
 }
 
-fn project_readme(package: &str) -> String {
+fn project_readme(package: &str, options: &NewProjectOptions) -> String {
+    let mode = match options.render_mode {
+        ProjectRenderMode::Spa => "SPA",
+        ProjectRenderMode::Ssr => "SSR",
+        ProjectRenderMode::Islands => "Islands",
+    };
+    let database = options.database.map_or_else(
+        || "This project has no database dependency. Create one with `px new --database sqlite|pgsql|mysql`.".to_owned(),
+        |database| format!("Selected driver: `{}`. Use `px migrate` and `px status` for migrations.", database.cargo_feature()),
+    );
+    let tailwind = if options.tailwind {
+        "Tailwind CSS v4 is enabled through `@tailwindcss/vite`."
+    } else {
+        "Tailwind CSS is not enabled; add it at creation time with `px new --tailwind`."
+    };
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\nnpm install\npx migrate\npx dev\n```\n\nOpen <http://127.0.0.1:3000>.\n\n## React rendering modes\n\nThe generated home controller starts in SPA mode. Change the page chain's `.spa()` to `.ssr()` or `.islands()`, or remove it for the default Islands mode; the controller and route already share one renderer-aware response path. Before running SSR or Islands, build both bundles:\n\n```bash\nnpm run build:client\nnpm run build:ssr\n```\n\n## Configuration\n\nLaravel-style TOML lives in `config/`:\n\n- `config/app.toml` — app name, env, listen address, public URL\n- `config/database.toml` — **choose the database** with `default = \"sqlite\"`, `\"pgsql\"`, or `\"mysql\"`\n\nOptional capabilities are Cargo features (`sqlite`/`pgsql`/`mysql`, `tls`, `websocket`, `sse`, `auth`, `jwt`, `password`, `metrics`, …). `default = []` keeps binaries lean—enable only what you use (for example `cargo build --features sqlite,password`). When using a database, keep the enabled driver feature aligned with `config/database.toml`.\n\nPut secrets in `.env` (for example `DB_PASSWORD`). Precedence: `config/*.toml` < `.env` < process environment.\n\nEditor autocomplete for `config/*.toml` uses JSON Schema (`config/schemas/`) via Taplo / Even Better TOML (`taplo.toml`).\n\nThird-party Features (plugins): implement `Plugin`, then `FeatureSet::new().plugin(...)` and `.merge(features.into_routes())`. See Phoenix-rs `docs/FEATURES.md`.\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n# upload dist/releases/.../*.tar.gz, then on the server:\n# export PHOENIX_DEPLOY_ROOT=/var/www/my-app\n# px release:install --tarball /path/to/app-0.1.0.tar.gz --version 0.1.0\n# px release:rollback --steps 1\n```\n\nRelease builds use size-oriented settings (`opt-level = \"z\"`, LTO, one codegen unit, stripped symbols) from `Cargo.toml`. See Phoenix-rs `docs/RELEASE_PIPELINE.md`.\n\n## Console\n\n```bash\ncargo run -- serve\ncargo run -- update\ncargo run -- help\n```\n\n## Database\n\n```bash\npx status\npx migrate\npx rollback --step 1\npx fresh --seed\npx seed\n```\n\nMigrations are registered in `database/migrations/mod.rs`. Add repeatable development data in `database/seeders/mod.rs`.\n\nProduction startup requires explicit `APP_URL`, database settings, `TRUSTED_PROXIES`, and `ALLOWED_HOSTS` values. Use `TRUSTED_PROXIES=none` when the service has no trusted reverse proxy. Declare purpose-specific JWT or encryption keys with `AppConfigBuilder::required_secret` only when the corresponding service consumes them.\n\n## Generate business code\n\n```bash\npx make:model Post --all\npx make:controller AdminController\npx make:request StorePostRequest\npx make:resource PostResource\npx make:middleware RequireLoginMiddleware\npx make:page posts/index\npx make:island LikeButton\npx make:command Update\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\npx dev\n```\n\n`px dev` builds the browser and renderer bundles before it starts the app, then rebuilds them whenever Rust or React source changes. The development document therefore uses the same Vite assets and renderer contract as `npm run build`.\n\n## Rendering mode\n\nThis application starts in **{mode}** mode. Change only the page chain in `app/controllers/home_controller.rs`:\n\n```rust\n.spa()       // SPA\n.ssr()       // SSR\n.islands()   // Islands\n```\n\nThe controller, routes, renderer and build pipeline stay unchanged.\n\n## Optional integrations\n\n- {database}\n- {tailwind}\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n```\n"
     )
 }
 
@@ -912,7 +1094,7 @@ async fn main() -> CommandResult {{
                 .format(if production {{ LogFormat::Json }} else {{ LogFormat::Compact }})
                 .ansi(!production)
                 .init()?;
-            let server = {crate_name}::application(config)?.bind(&address).await?;
+            let server = {crate_name}::application(config).await?.bind(&address).await?;
             println!(
                 "Phoenix application ready at {{public_url}} (listening on {{}})",
                 server.local_addr()
@@ -932,7 +1114,7 @@ async fn main() -> CommandResult {{
     )
 }
 
-fn lib_template() -> String {
+fn lib_template(_database: bool) -> String {
     r#"#[path = "../config/mod.rs"]
 pub mod config;
 #[path = "../app/commands/mod.rs"]
@@ -959,9 +1141,8 @@ pub mod seeders;
 
 use phoenix::prelude::{
     AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NodeRenderer,
-    NonceSecurityPolicy, RateLimit, RateLimitConfig, RendererConfig, RequestId, RouteBuildError,
-    Routes, ServeProductionAssets, SessionConfig, SessionMiddleware, SessionStore,
-    StateMiddleware, TrustedProxies,
+    NonceSecurityPolicy, RateLimit, RateLimitConfig, RendererConfig, RendererManifest, RequestId, Routes, ServeProductionAssets, SessionConfig, SessionMiddleware,
+    SessionStore, StateMiddleware, TrustedProxies,
 };
 #[cfg(feature = "database")]
 use phoenix::prelude::{Database, DatabaseError};
@@ -1020,10 +1201,16 @@ fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
 /// # Errors
 ///
 /// Returns a route error when route names or patterns conflict.
-pub fn application(config: AppConfig) -> Result<Application, RouteBuildError> {
-    let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
-    let renderer = NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js"));
-    Application::new(routes(&config, assets.as_ref(), &renderer))
+pub async fn application(
+    config: AppConfig,
+) -> Result<Application, Box<dyn std::error::Error + Send + Sync>> {
+    let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
+    let renderer_manifest = RendererManifest::load("public/ssr/phoenix-renderer.json")?;
+    let renderer = NodeRenderer::new(
+        RendererConfig::production(&assets, &renderer_manifest, "public/ssr")?,
+    );
+    renderer.warm_up().await?;
+    Ok(Application::new(routes(&config, Some(&assets), &renderer))?)
 }
 
 /// Connect the configured database with every registered Toasty model.
@@ -1061,15 +1248,16 @@ pub async fn {function_name}(_ctx: CommandContext<'_>) -> CommandResult {{
     )
 }
 
-fn home_controller_template() -> String {
-    r#"use phoenix::prelude::{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode};
+fn home_controller_template(render_mode: ProjectRenderMode) -> String {
+    format!(
+        r#"use phoenix::prelude::{{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode}};
 
 use crate::props::HomeProps;
 
 pub struct HomeController;
 
-impl HomeController {
-    pub async fn index(request: Request) -> Response {
+impl HomeController {{
+    pub async fn index(request: Request) -> Response {{
         let renderer = request.extensions().get::<NodeRenderer>().cloned();
         let assets = request
             .extensions()
@@ -1077,30 +1265,31 @@ impl HomeController {
             .and_then(Option::as_ref);
         let mut page = Page::new(
             "home",
-            HomeProps {
+            HomeProps {{
                 title: "Phoenix is ready".to_owned(),
                 description: "Rust owns the application contract; React renders the page.".to_owned(),
-            },
+            }},
         )
-        .spa();
-        if let Some(assets) = assets {
-            page = match page.production_assets(assets, "client") {
+        {render_mode};
+        if let Some(assets) = assets {{
+            page = match page.production_assets(assets, "client") {{
                 Ok(page) => page,
-                Err(error) => {
-                    return Response::text(format!("asset manifest error: {error}"))
+                Err(error) => {{
+                    return Response::text(format!("asset manifest error: {{error}}"))
                         .with_status(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            };
-        }
-        match renderer {
+                }}
+            }};
+        }}
+        match renderer {{
             Some(renderer) => page.respond_with_renderer(&request, &renderer).await,
             None => Response::text("Phoenix renderer is unavailable")
                 .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        }
-    }
-}
-"#
-    .to_owned()
+        }}
+    }}
+}}
+"#,
+        render_mode = render_mode.page_builder(),
+    )
 }
 
 fn home_props_template() -> String {
@@ -1131,8 +1320,9 @@ pub fn routes() -> Routes {
     .to_owned()
 }
 
-fn home_page_template() -> String {
-    r#"import type { HomeProps } from "../generated/contracts.js";
+fn home_page_template(frontend: ProjectFrontend) -> String {
+    match frontend {
+        ProjectFrontend::Tsx => r#"import type { HomeProps } from "../generated/contracts.js";
 
 export default function Home({ title, description }: HomeProps) {
   return (
@@ -1145,23 +1335,43 @@ export default function Home({ title, description }: HomeProps) {
   );
 }
 "#
-    .to_owned()
+        .to_owned(),
+        ProjectFrontend::Jsx => r#"export default function Home({ title, description }) {
+  return (
+    <main className="welcome">
+      <p className="eyebrow">PHOENIX / RUST + REACT</p>
+      <h1>{title}</h1>
+      <p>{description}</p>
+      <code>px make:model Post --all</code>
+    </main>
+  );
+}
+"#
+        .to_owned(),
+    }
 }
 
-fn styles_template() -> String {
-    r":root {
+fn styles_template(tailwind: bool) -> String {
+    let tailwind = if tailwind {
+        "@import \"tailwindcss\";\n\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"{tailwind}:root {{
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #172033;
   background: #f5f7fb;
-}
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
-.welcome { width: min(760px, calc(100% - 40px)); margin: 16vh auto 0; }
-.eyebrow { color: #315bd6; font-size: 12px; font-weight: 800; letter-spacing: 0.14em; }
-h1 { margin: 12px 0; font-size: clamp(42px, 8vw, 76px); line-height: 0.98; }
-.welcome > p:not(.eyebrow) { max-width: 640px; color: #5d6879; font-size: 18px; line-height: 1.7; }
-code { display: inline-block; margin-top: 18px; padding: 12px 14px; border: 1px solid #d7dce5; background: white; }
-".to_owned()
+}}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; min-width: 320px; min-height: 100vh; }}
+.welcome {{ width: min(760px, calc(100% - 40px)); margin: 16vh auto 0; }}
+.eyebrow {{ color: #315bd6; font-size: 12px; font-weight: 800; letter-spacing: 0.14em; }}
+h1 {{ margin: 12px 0; font-size: clamp(42px, 8vw, 76px); line-height: 0.98; }}
+.welcome > p:not(.eyebrow) {{ max-width: 640px; color: #5d6879; font-size: 18px; line-height: 1.7; }}
+code {{ display: inline-block; margin-top: 18px; padding: 12px 14px; border: 1px solid #d7dce5; background: white; }}
+"#
+    )
 }
 
 fn generated_contracts_template() -> String {
@@ -1186,9 +1396,15 @@ export const home = routes.home;
     .to_owned()
 }
 
-fn vite_template(renderer: bool) -> String {
+fn vite_template(renderer: bool, tailwind: bool) -> String {
+    let tailwind_import = if tailwind {
+        "import tailwindcss from \"@tailwindcss/vite\";\n"
+    } else {
+        ""
+    };
+    let tailwind_plugin = if tailwind { ", tailwindcss()" } else { "" };
     format!(
-        "import {{ defineConfig }} from \"vite\";\nimport {{ phoenix }} from \"@apizero/vite\";\n\nexport default defineConfig({{\n  plugins: [phoenix({renderer})],\n}});\n",
+        "import {{ defineConfig }} from \"vite\";\nimport {{ phoenix }} from \"@apizero/vite\";\n{tailwind_import}\nexport default defineConfig({{\n  plugins: [phoenix({renderer}){tailwind_plugin}],\n}});\n",
         renderer = if renderer { "{ renderer: true }" } else { "" },
     )
 }
@@ -1207,7 +1423,7 @@ fn tsconfig_template() -> String {
     "skipLibCheck": true,
     "types": ["vite/client"]
   },
-  "include": ["views/**/*.ts", "views/**/*.tsx", "vite.config.ts", "vite.ssr.config.ts"]
+  "include": ["views/**/*.js", "views/**/*.jsx", "views/**/*.ts", "views/**/*.tsx", "vite.config.ts", "vite.ssr.config.ts"]
 }
 "#
     .to_owned()
@@ -1426,7 +1642,11 @@ fn add_controller_route(
     )
 }
 
-fn add_page(editor: &mut ProjectEditor, page: &PageName) -> Result<(), ScaffoldError> {
+fn add_page(
+    editor: &mut ProjectEditor,
+    page: &PageName,
+    frontend: ProjectFrontend,
+) -> Result<(), ScaffoldError> {
     let props = page_props_name(page);
     add_rust_item(
         editor,
@@ -1439,12 +1659,13 @@ fn add_page(editor: &mut ProjectEditor, page: &PageName) -> Result<(), ScaffoldE
         path.push(kebab_case(part));
     }
     path.push(format!(
-        "{}.tsx",
-        kebab_case(page.parts.last().expect("page has one part"))
+        "{}.{}",
+        kebab_case(page.parts.last().expect("page has one part")),
+        frontend.extension()
     ));
     editor.create(
         path,
-        page_template(&page.class, &props.class, page.parts.len()),
+        page_template(&page.class, &props.class, page.parts.len(), frontend),
     )
 }
 
@@ -1753,8 +1974,20 @@ pub struct {name} {{
     )
 }
 
-fn page_template(component: &str, props: &str, depth: usize) -> String {
+fn page_template(component: &str, props: &str, depth: usize, frontend: ProjectFrontend) -> String {
     let contracts = format!("{}generated/contracts.js", "../".repeat(depth));
+    if frontend == ProjectFrontend::Jsx {
+        return format!(
+            r#"export default function {component}({{ title }}) {{
+  return (
+    <main>
+      <h1>{{title}}</h1>
+    </main>
+  );
+}}
+"#
+        );
+    }
     format!(
         r#"import type {{ {props} }} from "{contracts}";
 
@@ -1769,7 +2002,18 @@ export default function {component}({{ title }}: {props}) {{
     )
 }
 
-fn island_template(component: &str) -> String {
+fn island_template(component: &str, frontend: ProjectFrontend) -> String {
+    if frontend == ProjectFrontend::Jsx {
+        return format!(
+            r#"import {{ useState }} from "react";
+
+export default function {component}({{ initialCount = 0 }}) {{
+  const [count, setCount] = useState(initialCount);
+  return <button type="button" onClick={{() => setCount((value) => value + 1)}}>{{count}}</button>;
+}}
+"#
+        );
+    }
     format!(
         r#"import {{ useState }} from "react";
 
@@ -2253,6 +2497,7 @@ mod tests {
         create_project(
             &NewProjectOptions::new(&root)
                 .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
                 .initialize_git(false)
                 .install_dependencies(false),
         )
@@ -2280,10 +2525,9 @@ mod tests {
         let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(manifest.contains("crates/phoenix"));
         assert!(manifest.contains("default-run = \"phoenix-cli-new-"));
-        assert!(manifest.contains("default = []"));
-        assert!(manifest.contains(
-            "sqlite = [\"database\", \"phoenix/sqlite\", \"toasty/sqlite\"]"
-        ));
+        assert!(manifest.contains("default = [\"sqlite\"]"));
+        assert!(manifest.contains("sqlite = [\"database\", \"phoenix/sqlite\"]"));
+        assert!(manifest.contains("features = [\"migration\", \"serde\", \"sqlite\"]"));
         assert!(manifest.contains("tls = [\"phoenix/tls\"]"));
         assert!(manifest.contains("websocket = [\"phoenix/websocket\"]"));
         assert!(manifest.contains("sse = [\"phoenix/sse\"]"));
@@ -2315,7 +2559,8 @@ mod tests {
         assert!(application.contains("RateLimit::new"));
         assert!(application.contains("StateMiddleware::new(config.clone())"));
         assert!(application.contains("StateMiddleware::new(renderer.clone())"));
-        assert!(application.contains("NodeRenderer::new(RendererConfig::node"));
+        assert!(application.contains("RendererConfig::production"));
+        assert!(application.contains("renderer.warm_up().await"));
         let home_controller =
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
         assert!(home_controller.contains("get::<NodeRenderer>().cloned()"));
@@ -2344,11 +2589,127 @@ mod tests {
     }
 
     #[test]
+    fn default_project_is_islands_without_database_or_git() {
+        let root = temporary_directory("default-options");
+        let options = NewProjectOptions::new(&root)
+            .dependencies(DependencySource::Local(framework_root()))
+            .install_dependencies(false);
+        assert!(!options.initialize_git);
+        assert_eq!(options.render_mode, ProjectRenderMode::Islands);
+        assert_eq!(options.database, None);
+        assert_eq!(options.frontend, ProjectFrontend::Tsx);
+        create_project(&options).unwrap();
+
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("default = []"));
+        assert!(!cargo.contains("toasty ="));
+        assert!(!root.join("config/database.toml").exists());
+        assert!(!root.join("src/bin/phoenix-manage.rs").exists());
+        assert!(
+            fs::read_to_string(root.join("app/controllers/home_controller.rs"))
+                .unwrap()
+                .contains(".islands()")
+        );
+        assert!(!root.join(".git").exists());
+
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["check", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_options_select_jsx_tailwind_and_database() {
+        let root = temporary_directory("options");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Pgsql))
+                .render_mode(ProjectRenderMode::Ssr)
+                .frontend(ProjectFrontend::Jsx)
+                .tailwind(true)
+                .install_dependencies(false),
+        )
+        .unwrap();
+
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("default = [\"pgsql\"]"));
+        assert!(cargo.contains("\"postgresql\""));
+        assert!(root.join("views/pages/home.jsx").is_file());
+        assert!(!root.join("views/pages/home.tsx").exists());
+        assert!(
+            fs::read_to_string(root.join("app/controllers/home_controller.rs"))
+                .unwrap()
+                .contains(".ssr()")
+        );
+        assert!(
+            fs::read_to_string(root.join("package.json"))
+                .unwrap()
+                .contains("@tailwindcss/vite")
+        );
+        assert!(
+            fs::read_to_string(root.join("views/styles.css"))
+                .unwrap()
+                .starts_with("@import \"tailwindcss\";")
+        );
+        assert!(
+            fs::read_to_string(root.join("vite.config.ts"))
+                .unwrap()
+                .contains("tailwindcss()")
+        );
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        generator
+            .page("reports/index", GenerateOptions::default())
+            .unwrap();
+        generator
+            .island("Counter", GenerateOptions::default())
+            .unwrap();
+        assert!(root.join("views/pages/reports/index.jsx").is_file());
+        assert!(root.join("views/islands/counter.jsx").is_file());
+        assert!(
+            !fs::read_to_string(root.join("views/pages/reports/index.jsx"))
+                .unwrap()
+                .contains("import type")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn all_database_option_writes_all_toasty_drivers() {
+        let root = temporary_directory("all-databases");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::All))
+                .install_dependencies(false),
+        )
+        .unwrap();
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains(
+            "toasty = { version = \"0.8\", default-features = false, features = [\"migration\", \"mysql\", \"postgresql\", \"serde\", \"sqlite\"] }"
+        ));
+        assert!(cargo.contains("all-databases = [\"database\", \"phoenix/sqlite\", \"phoenix/pgsql\", \"phoenix/mysql\"]"));
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["check", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn make_command_registers_async_handler() {
         let root = temporary_directory("command");
         create_project(
             &NewProjectOptions::new(&root)
                 .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
                 .initialize_git(false)
                 .install_dependencies(false),
         )
@@ -2375,6 +2736,7 @@ mod tests {
         create_project(
             &NewProjectOptions::new(&root)
                 .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
                 .initialize_git(false)
                 .install_dependencies(false),
         )
@@ -2428,6 +2790,7 @@ mod tests {
         create_project(
             &NewProjectOptions::new(&root)
                 .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
                 .initialize_git(false)
                 .install_dependencies(false),
         )

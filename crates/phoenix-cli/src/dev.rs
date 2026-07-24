@@ -45,6 +45,10 @@ pub struct DevConfig {
     pub working_directory: PathBuf,
     pub rust: CommandSpec,
     pub vite: CommandSpec,
+    pub client_build: CommandSpec,
+    pub renderer_build: CommandSpec,
+    /// Build browser and renderer bundles before each backend restart.
+    pub build_frontend: bool,
     /// When true (default), watch Rust sources and restart `cargo run` on change.
     pub watch_rust: bool,
 }
@@ -55,6 +59,9 @@ impl Default for DevConfig {
             working_directory: PathBuf::from("."),
             rust: CommandSpec::new("cargo").args(["run", "--", "serve"]),
             vite: CommandSpec::new("npm").args(["run", "dev", "--", "--strictPort"]),
+            client_build: CommandSpec::new("npm").args(["run", "build:client"]),
+            renderer_build: CommandSpec::new("npm").args(["run", "build:ssr"]),
+            build_frontend: true,
             watch_rust: true,
         }
     }
@@ -76,6 +83,24 @@ impl DevConfig {
     #[must_use]
     pub fn vite(mut self, command: CommandSpec) -> Self {
         self.vite = command;
+        self
+    }
+
+    #[must_use]
+    pub fn client_build(mut self, command: CommandSpec) -> Self {
+        self.client_build = command;
+        self
+    }
+
+    #[must_use]
+    pub fn renderer_build(mut self, command: CommandSpec) -> Self {
+        self.renderer_build = command;
+        self
+    }
+
+    #[must_use]
+    pub const fn build_frontend(mut self, enabled: bool) -> Self {
+        self.build_frontend = enabled;
         self
     }
 
@@ -130,10 +155,11 @@ impl DevSupervisor {
 
         let result = async {
             loop {
+                self.build_frontend(&cwd).await?;
                 let mut rust = spawn("Rust", &self.config.rust, &cwd)?;
                 if self.config.watch_rust {
                     eprintln!(
-                        "px dev: watching Rust (app/, src/, routes/, config/, database/, Cargo.toml)"
+                        "px dev: watching application and React sources for rebuilds"
                     );
                 }
 
@@ -205,6 +231,14 @@ impl DevSupervisor {
         terminate(&mut vite).await?;
         result
     }
+
+    async fn build_frontend(&self, cwd: &Path) -> Result<(), DevError> {
+        if !self.config.build_frontend {
+            return Ok(());
+        }
+        run_to_completion("Client build", &self.config.client_build, cwd).await?;
+        run_to_completion("Renderer build", &self.config.renderer_build, cwd).await
+    }
 }
 
 enum Event {
@@ -233,7 +267,7 @@ fn start_rust_watcher(cwd: &Path) -> Result<RustWatcher, DevError> {
     })
     .map_err(DevError::Watch)?;
 
-    for relative in ["app", "src", "routes", "config", "database"] {
+    for relative in ["app", "src", "routes", "config", "database", "views"] {
         let path = cwd.join(relative);
         if path.is_dir() {
             watcher
@@ -283,7 +317,10 @@ fn is_relevant_event(cwd: &Path, event: &notify::Event) -> bool {
         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {}
         _ => return false,
     }
-    event.paths.iter().any(|path| is_watched_rust_path(cwd, path))
+    event
+        .paths
+        .iter()
+        .any(|path| is_watched_rust_path(cwd, path))
 }
 
 fn is_watched_rust_path(cwd: &Path, path: &Path) -> bool {
@@ -297,10 +334,10 @@ fn is_watched_rust_path(cwd: &Path, path: &Path) -> bool {
     let first = first.to_string_lossy();
     matches!(
         first.as_ref(),
-        "app" | "src" | "routes" | "config" | "database" | "Cargo.toml"
-    ) && !relative
-        .components()
-        .any(|component| matches!(component, std::path::Component::Normal(name) if name == "target"))
+        "app" | "src" | "routes" | "config" | "database" | "views" | "Cargo.toml"
+    ) && !relative.components().any(
+        |component| matches!(component, std::path::Component::Normal(name) if name == "target"),
+    )
 }
 
 async fn recv_change(changes: &mut Option<RustWatcher>) -> Result<(), DevError> {
@@ -342,6 +379,23 @@ fn spawn(label: &'static str, spec: &CommandSpec, cwd: &Path) -> Result<Child, D
         process: label,
         source,
     })
+}
+
+async fn run_to_completion(
+    label: &'static str,
+    spec: &CommandSpec,
+    cwd: &Path,
+) -> Result<(), DevError> {
+    let mut child = spawn(label, spec, cwd)?;
+    let status = child.wait().await.map_err(DevError::Wait)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(DevError::Exited {
+            process: label,
+            status,
+        })
+    }
 }
 
 #[cfg(unix)]
@@ -416,7 +470,7 @@ pub enum DevError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{fs, time::Duration};
 
     fn shell(script: &str) -> CommandSpec {
         CommandSpec::new("sh").args(["-c", script])
@@ -438,14 +492,14 @@ mod tests {
     }
 
     #[test]
-    fn watched_paths_cover_app_sources_not_views() {
+    fn watched_paths_cover_app_and_react_sources() {
         let cwd = PathBuf::from("/app");
         assert!(is_watched_rust_path(
             &cwd,
             &cwd.join("app/controllers/home.rs")
         ));
         assert!(is_watched_rust_path(&cwd, &cwd.join("Cargo.toml")));
-        assert!(!is_watched_rust_path(
+        assert!(is_watched_rust_path(
             &cwd,
             &cwd.join("views/pages/home.tsx")
         ));
@@ -459,6 +513,7 @@ mod tests {
     async fn shutdown_stops_and_reaps_both_processes() {
         let supervisor = DevSupervisor::new(
             DevConfig::default()
+                .build_frontend(false)
                 .watch_rust(false)
                 .rust(shell("sleep 10 & wait"))
                 .vite(shell("sleep 10 & wait")),
@@ -476,6 +531,7 @@ mod tests {
     async fn one_failed_process_stops_the_other_without_watch() {
         let supervisor = DevSupervisor::new(
             DevConfig::default()
+                .build_frontend(false)
                 .watch_rust(false)
                 .rust(shell("exit 7"))
                 .vite(shell("sleep 10")),
@@ -495,6 +551,7 @@ mod tests {
     async fn rust_exit_with_watch_waits_for_shutdown_without_failing() {
         let supervisor = DevSupervisor::new(
             DevConfig::default()
+                .build_frontend(false)
                 .watch_rust(true)
                 .rust(shell("exit 1"))
                 .vite(shell("sleep 10 & wait")),
@@ -506,5 +563,35 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn frontend_builds_run_before_the_backend() {
+        let marker = std::env::temp_dir().join(format!(
+            "phoenix-dev-build-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let marker = marker.to_string_lossy().into_owned();
+        let supervisor = DevSupervisor::new(
+            DevConfig::default()
+                .watch_rust(false)
+                .client_build(shell(&format!("printf client > {marker}")))
+                .renderer_build(shell(&format!("printf renderer >> {marker}")))
+                .rust(shell("sleep 10"))
+                .vite(shell("sleep 10")),
+        );
+        supervisor
+            .run_with_shutdown(async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "clientrenderer");
+        fs::remove_file(marker).unwrap();
     }
 }

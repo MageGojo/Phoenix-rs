@@ -1,14 +1,15 @@
 use std::{
     env,
     ffi::OsString,
+    io::{self, IsTerminal, Write},
     path::PathBuf,
     process::{Command, ExitCode},
 };
 
 use phoenix_cli::{
     ControllerOptions, DependencySource, DevConfig, DevSupervisor, GenerateOptions, ModelOptions,
-    NewProjectOptions, ProjectGenerator, create_project, release_build, release_install,
-    release_rollback, release_status,
+    NewProjectOptions, ProjectDatabase, ProjectFrontend, ProjectGenerator, ProjectRenderMode,
+    create_project, release_build, release_install, release_rollback, release_status,
 };
 
 const HELP: &str = r"Phoenix-rs application CLI (px)
@@ -18,7 +19,9 @@ Install: cargo install px-cli
          cargo install --path crates/phoenix-cli
 
 Usage:
-  px new <project> [--framework-path <path>] [--no-install] [--no-git]
+  px new [project] [--render-mode islands|spa|ssr] [--database sqlite|pgsql|mysql|all]
+                   [--tailwind] [--git] [--frontend tsx|jsx]
+                   [--framework-path <path>] [--no-install] [--no-git]
   px dev
   px migrate
   px status
@@ -137,8 +140,9 @@ async fn dev(arguments: Vec<String>) -> Result<(), String> {
 
     println!("Phoenix development environment");
     println!("  application: {}", generator.root().display());
-    println!("  backend:     cargo run -- serve  (hot reload on Rust changes)");
-    println!("  frontend:    npm run dev -- --strictPort  (Vite HMR)");
+    println!("  build:       npm run build:client && npm run build:ssr (automatic)");
+    println!("  backend:     cargo run -- serve  (restarts after Rust/React changes)");
+    println!("  frontend:    npm run dev -- --strictPort");
     println!("Press Ctrl-C to stop both processes.\n");
 
     DevSupervisor::new(DevConfig::default().working_directory(generator.root()))
@@ -214,14 +218,65 @@ fn fresh_options(arguments: &[String]) -> Result<Vec<String>, String> {
     }
 }
 
-fn new_project(arguments: Vec<String>) -> Result<(), String> {
-    let (target, flags) = required_name(arguments)?;
+fn new_project(mut arguments: Vec<String>) -> Result<(), String> {
+    let target = if arguments
+        .first()
+        .is_some_and(|argument| !argument.starts_with('-'))
+    {
+        arguments.remove(0)
+    } else {
+        prompt_name()?
+    };
+    let flags = arguments;
     let mut options = NewProjectOptions::new(&target);
+    let interactive = io::stdin().is_terminal();
+    let mut render_mode_set = false;
+    let mut database_set = false;
+    let mut tailwind_set = false;
+    let mut git_set = false;
+    let mut frontend_set = false;
     let mut index = 0;
     while index < flags.len() {
         match flags[index].as_str() {
             "--no-install" => options.install_dependencies = false,
-            "--no-git" => options.initialize_git = false,
+            "--no-git" => {
+                options.initialize_git = false;
+                git_set = true;
+            }
+            "--git" => {
+                options.initialize_git = true;
+                git_set = true;
+            }
+            "--tailwind" | "--tailwindcss" => {
+                options.tailwind = true;
+                tailwind_set = true;
+            }
+            "--no-tailwind" => {
+                options.tailwind = false;
+                tailwind_set = true;
+            }
+            "--render-mode" => {
+                index += 1;
+                let value = flags.get(index).ok_or("--render-mode requires a value")?;
+                options.render_mode = value.parse::<ProjectRenderMode>()?;
+                render_mode_set = true;
+            }
+            "--database" => {
+                index += 1;
+                let value = flags.get(index).ok_or("--database requires a value")?;
+                options.database = Some(value.parse::<ProjectDatabase>()?);
+                database_set = true;
+            }
+            "--no-database" => {
+                options.database = None;
+                database_set = true;
+            }
+            "--frontend" => {
+                index += 1;
+                let value = flags.get(index).ok_or("--frontend requires a value")?;
+                options.frontend = value.parse::<ProjectFrontend>()?;
+                frontend_set = true;
+            }
             "--framework-path" => {
                 index += 1;
                 let path = flags.get(index).ok_or("--framework-path requires a path")?;
@@ -231,6 +286,25 @@ fn new_project(arguments: Vec<String>) -> Result<(), String> {
         }
         index += 1;
     }
+    if interactive {
+        if !render_mode_set {
+            options.render_mode = prompt_render_mode()?;
+        }
+        if !database_set {
+            options.database = prompt_database()?;
+        }
+        if !tailwind_set {
+            options.tailwind =
+                prompt_yes_no("Configure Tailwind CSS? [0] No (default) [1] Yes", false)?;
+        }
+        if !git_set {
+            options.initialize_git =
+                prompt_yes_no("Initialize Git? [0] No (default) [1] Yes", false)?;
+        }
+        if !frontend_set {
+            options.frontend = prompt_frontend()?;
+        }
+    }
     create_project(&options).map_err(|error| error.to_string())?;
     println!(
         "Created Phoenix application at {}",
@@ -238,6 +312,76 @@ fn new_project(arguments: Vec<String>) -> Result<(), String> {
     );
     println!("Next: cd {} && px dev", options.target.display());
     Ok(())
+}
+
+fn prompt_name() -> Result<String, String> {
+    let name = prompt("Project name", None)?;
+    if name.is_empty() {
+        return Err("project name is required; run `px new my-app` or enter a name".to_owned());
+    }
+    Ok(name)
+}
+
+fn prompt_render_mode() -> Result<ProjectRenderMode, String> {
+    match prompt(
+        "Render mode: [0] Islands (default) [1] SPA [2] SSR",
+        Some("0"),
+    )?
+    .as_str()
+    {
+        "" | "0" | "islands" | "island" => Ok(ProjectRenderMode::Islands),
+        "1" | "spa" => Ok(ProjectRenderMode::Spa),
+        "2" | "ssr" => Ok(ProjectRenderMode::Ssr),
+        _ => Err("render mode must be 0, 1, 2, islands, spa, or ssr".to_owned()),
+    }
+}
+
+fn prompt_database() -> Result<Option<ProjectDatabase>, String> {
+    match prompt(
+        "Database: [0] None (default) [1] SQLite [2] PostgreSQL [3] MySQL [4] All",
+        Some("0"),
+    )?
+    .as_str()
+    {
+        "" | "0" | "none" | "no" | "n" => Ok(None),
+        "1" | "sqlite" => Ok(Some(ProjectDatabase::Sqlite)),
+        "2" | "pgsql" | "postgres" | "postgresql" => Ok(Some(ProjectDatabase::Pgsql)),
+        "3" | "mysql" | "mariadb" => Ok(Some(ProjectDatabase::Mysql)),
+        "4" | "all" => Ok(Some(ProjectDatabase::All)),
+        _ => Err("database must be 0, 1, 2, 3, 4, none, sqlite, pgsql, mysql, or all".to_owned()),
+    }
+}
+
+fn prompt_frontend() -> Result<ProjectFrontend, String> {
+    match prompt("React source: [0] TSX (default) [1] JSX", Some("0"))?.as_str() {
+        "" | "0" | "tsx" | "ts" => Ok(ProjectFrontend::Tsx),
+        "1" | "jsx" | "js" => Ok(ProjectFrontend::Jsx),
+        _ => Err("frontend must be 0, 1, tsx, or jsx".to_owned()),
+    }
+}
+
+fn prompt_yes_no(label: &str, default: bool) -> Result<bool, String> {
+    match prompt(label, Some(if default { "1" } else { "0" }))?.as_str() {
+        "" | "0" | "n" | "no" => Ok(false),
+        "1" | "y" | "yes" => Ok(true),
+        _ => Err("enter 0/1 or y/n".to_owned()),
+    }
+}
+
+fn prompt(label: &str, default: Option<&str>) -> Result<String, String> {
+    let suffix = default.map_or_else(String::new, |value| format!(" [{value}]"));
+    print!("{label}{suffix}: ");
+    io::stdout().flush().map_err(|error| error.to_string())?;
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?;
+    let value = line.trim().to_ascii_lowercase();
+    Ok(if value.is_empty() {
+        default.unwrap_or_default().to_owned()
+    } else {
+        value
+    })
 }
 
 fn make_controller(arguments: Vec<String>) -> Result<(), String> {

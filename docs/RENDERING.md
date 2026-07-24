@@ -14,7 +14,7 @@ Page::new("docs/show", props); // 默认 Islands
 
 当前实现由页面响应显式覆盖默认值。路由级和应用配置级覆盖留给后续配置层；生产环境不允许因为 renderer 故障静默改变语义。
 
-`px new` 生成的控制器统一通过 `respond_with_renderer` 响应，并已把 `NodeRenderer` 注入请求状态。因此切换首屏模式时，只需修改页面链上的 `.spa()`：改为 `.ssr()`、`.islands()`，或删除它以使用默认 Islands；无需改路由或控制器响应方法。SPA 会跳过 renderer，SSR/Islands 则使用它输出首屏 HTML 和 island 描述。首次使用 SSR/Islands 前仍需构建 renderer 产物，见「构建产物」。
+`px new` 生成的控制器统一通过 `respond_with_renderer` 响应，并已把 `NodeRenderer` 注入请求状态。因此切换首屏模式时，只需修改页面链上的 `.spa()`：改为 `.ssr()`、`.islands()`，或删除它以使用默认 Islands；无需改路由或控制器响应方法。SPA 会跳过 renderer，SSR/Islands 则使用它输出首屏 HTML 和 island 描述。`px dev` 会自动构建并在源码变化时重建 client 与 renderer 产物。
 
 ## 2. 模式对比
 
@@ -264,11 +264,10 @@ export default defineConfig({
 });
 ```
 
-必须先构建 client，再构建 renderer：
+`px dev` 会自动先构建 client，再构建 renderer；发布构建使用：
 
 ```bash
-npm run build:client
-npm run build:ssr
+npm run build
 ```
 
 renderer 构建会读取 client manifest；manifest 缺失、schema 非法或 contract hash 不一致时立即失败。不要并行运行这两个构建，也不要混用不同提交生成的产物。

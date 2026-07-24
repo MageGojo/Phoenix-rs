@@ -152,7 +152,7 @@ cd examples/blog
 ../../target/debug/px dev
 ```
 
-`px` 包位于 `crates/phoenix-cli`。`px dev` 同时启动后端（`cargo run -- serve` + Rust 源码热重载）与前端（`npm run dev -- --strictPort` / Vite HMR）。Ctrl-C 或 Vite 提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
+`px` 包位于 `crates/phoenix-cli`。`px dev` 在启动后端前按顺序构建 client 与 SSR renderer；Rust 或 React 源码变化时会重新构建两个产物并重启后端，开发文档因此使用与发布构建相同的 manifest、renderer 与 React 输出。Vite 继续运行以提供前端开发服务。Ctrl-C 或 Vite 提前退出时，另一侧的整个子进程组也会被回收。只调试后端时仍可单独运行 `cargo run -p phoenix-blog-example`。
 
 也可以通过环境变量修改监听地址：
 

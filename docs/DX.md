@@ -179,9 +179,9 @@ px dev
 
 `px` 是 crates.io 包名与二进制名。`px new` 在无本地框架检出时依赖门面包 `phoenixrs`（应用仍 `use phoenix::`）。详见根 README「命名」一节。
 
-`px new` 会生成完整 Cargo/npm/Vite/TypeScript 配置、标准 `app/`（含 `commands/`）、`routes/`、`database/migrations/`、`database/seeders/`、`config/app.toml` + `database.toml` + `config/schemas/` + `taplo.toml`、`deploy/restart.sh.example`、`views/`、`public/`、`storage/` 目录、可运行的 SPA 首页和 Rust Page Props 契约（`.gitignore` 含 `/dist`）。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。配置入口复用 `phoenix-config`：`config/*.toml` < `.env` < 进程环境；生产校验公开 URL、数据库、可信代理与 Host allowlist。需要 JWT 或加密密钥时用 `required_secret(name, minimum_bytes)` 声明。
+`px new` 可交互选择 Islands（默认）/ SPA / SSR、无数据库（默认）或 SQLite/PostgreSQL/MySQL/全部驱动、Tailwind CSS、是否初始化 Git（默认否）和 TSX（默认）/ JSX；相同选项也可用 `--render-mode`、`--database`、`--tailwind`、`--git` 与 `--frontend` 传入。未选择数据库时不会写入 Toasty 依赖、数据库配置或迁移目录。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。`px dev` 自动构建 client 与 SSR renderer，并在 Rust/React 源码变化后先重建产物再重启后端，开发与 `npm run build` 使用相同 manifest 和渲染器输出。
 
-默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认同时执行 `npm install`、刷新 `views/generated` 并初始化本地 Git；可用 `--no-install`、`--no-git`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
+默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认执行 `npm install` 和刷新 `views/generated`，Git 初始化需在交互菜单中选择或传递 `--git`；可用 `--no-install`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
 
 数据库命令：
 
