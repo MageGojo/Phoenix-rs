@@ -179,7 +179,7 @@ px dev
 
 `px` 是 crates.io 包名与二进制名。`px new` 在无本地框架检出时依赖门面包 `phoenixrs`（应用仍 `use phoenix::`）。详见根 README「命名」一节。
 
-`px new` 可交互选择 Islands（默认）/ SPA / SSR、无数据库（默认）或 SQLite/PostgreSQL/MySQL/全部驱动、Tailwind CSS、是否初始化 Git（默认否）和 TSX（默认）/ JSX；相同选项也可用 `--render-mode`、`--database`、`--tailwind`、`--git` 与 `--frontend` 传入。未选择数据库时不会写入 Toasty 依赖、数据库配置或迁移目录。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。`px dev` 自动构建 client 与 SSR renderer，并在 Rust/React 源码变化后先重建产物再重启后端；开发模式使用 Vite dev client，前端走 HMR，后端 Rust/路由变化触发浏览器 full reload，开发与 `npm run build` 使用相同 manifest 和渲染器输出。
+`px new` 可交互选择 Islands（默认）/ SPA / SSR、无数据库（默认）或 SQLite/PostgreSQL/MySQL/全部驱动、Tailwind CSS、是否初始化 Git（默认否）和 TSX（默认）/ JSX；相同选项也可用 `--render-mode`、`--database`、`--tailwind`、`--git` 与 `--frontend` 传入。未选择数据库时不会写入 Toasty 依赖、数据库配置或迁移目录。应用入口是 `phoenix-console`：`cargo run -- serve` 启动 HTTP，`px make:command Update` 生成并注册自定义子命令。`px update` 只刷新框架核心文件（`src/lib.rs` / `src/main.rs`、Vite/TS 配置、config schemas、依赖钉扎与可选 `phoenix-manage`），不改业务代码（controllers / routes / pages）。`px dev` 自动构建 client 与 SSR renderer，并在 Rust/React 源码变化后先重建产物再重启后端；开发模式使用 Vite dev client，前端走 HMR，后端 Rust/路由变化触发浏览器 full reload，开发与 `npm run build` 使用相同 manifest 和渲染器输出。
 
 默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认执行 `npm install` 和刷新 `views/generated`，Git 初始化需在交互菜单中选择或传递 `--git`；可用 `--no-install`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
 

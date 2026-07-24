@@ -19,11 +19,66 @@ const MIGRATIONS_END: &str = "// </phoenix:migration-registry>";
 const COMMANDS_START: &str = "// <phoenix:commands>";
 const COMMANDS_END: &str = "// </phoenix:commands>";
 const PROJECT_OPTIONS_FILE: &str = ".phoenix";
+const PHOENIXRS_VERSION: &str = "0.1.3";
+const APIZERO_REACT_VERSION: &str = "0.1.2";
+const APIZERO_REACT_SSR_VERSION: &str = "0.1.2";
+const APIZERO_VITE_VERSION: &str = "0.1.3";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DependencySource {
     Registry,
     Local(PathBuf),
+}
+
+/// Options for [`ProjectGenerator::update_core`] / `px update`.
+#[derive(Clone, Debug)]
+pub struct UpdateProjectOptions {
+    pub dependencies: DependencySource,
+    pub install_dependencies: bool,
+    pub dry_run: bool,
+}
+
+impl UpdateProjectOptions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            dependencies: DependencySource::discover(),
+            install_dependencies: true,
+            dry_run: false,
+        }
+    }
+
+    #[must_use]
+    pub fn dependencies(mut self, dependencies: DependencySource) -> Self {
+        self.dependencies = dependencies;
+        self
+    }
+
+    #[must_use]
+    pub const fn install_dependencies(mut self, install: bool) -> Self {
+        self.install_dependencies = install;
+        self
+    }
+
+    #[must_use]
+    pub const fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+}
+
+impl Default for UpdateProjectOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StoredProjectOptions {
+    frontend: ProjectFrontend,
+    database: Option<ProjectDatabase>,
+    render_mode: ProjectRenderMode,
+    tailwind: bool,
 }
 
 /// Initial React rendering mode selected by `px new`.
@@ -610,15 +665,168 @@ impl ProjectGenerator {
     }
 
     fn frontend(&self) -> ProjectFrontend {
-        fs::read_to_string(self.root.join(PROJECT_OPTIONS_FILE))
-            .ok()
-            .and_then(|source| {
-                source
-                    .lines()
-                    .find_map(|line| line.strip_prefix("frontend=").map(str::to_owned))
-            })
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_default()
+        self.stored_options().frontend
+    }
+
+    fn stored_options(&self) -> StoredProjectOptions {
+        read_stored_options(&self.root)
+    }
+
+    /// Refresh framework-owned core files without touching business code.
+    ///
+    /// Updates `src/lib.rs` / `src/main.rs`, Vite/TS config, config schemas, dependency
+    /// pins for `phoenixrs` / `@apizero/*`, and (when the project uses a database)
+    /// `src/bin/phoenix-manage.rs`. Leaves controllers, routes, pages, and user TOML alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid local framework roots, I/O failures, or npm failures.
+    pub fn update_core(
+        &self,
+        options: &UpdateProjectOptions,
+    ) -> Result<Vec<PathBuf>, ScaffoldError> {
+        if let DependencySource::Local(root) = &options.dependencies
+            && !is_framework_root(root)
+        {
+            return Err(ScaffoldError::InvalidFrameworkRoot(root.clone()));
+        }
+
+        let package = read_package_name(&self.root)?;
+        let crate_name = package.replace('-', "_");
+        let stored = self.stored_options();
+        let has_database = stored.database.is_some();
+        let (rust_dependency, react, react_ssr, vite) =
+            framework_dependency_pins(&options.dependencies)?;
+
+        let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();
+        planned.insert("src/main.rs".into(), main_template(&crate_name));
+        planned.insert("src/lib.rs".into(), lib_template(has_database));
+        planned.insert("config/mod.rs".into(), config_template(has_database));
+        planned.insert(
+            "config/schemas/phoenix-config-app.schema.json".into(),
+            include_str!("../schemas/phoenix-config-app.schema.json").to_owned(),
+        );
+        planned.insert(
+            "taplo.toml".into(),
+            app_taplo_template(has_database),
+        );
+        planned.insert(
+            "vite.config.ts".into(),
+            vite_template(false, stored.tailwind),
+        );
+        planned.insert(
+            "vite.ssr.config.ts".into(),
+            vite_template(true, stored.tailwind),
+        );
+        planned.insert("tsconfig.json".into(), tsconfig_template());
+        planned.insert(
+            "deploy/restart.sh.example".into(),
+            deploy_restart_example(),
+        );
+        planned.insert(
+            ".gitignore".into(),
+            "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned(),
+        );
+        planned.insert(
+            PROJECT_OPTIONS_FILE.into(),
+            format_stored_options(&stored),
+        );
+
+        if let Some(database) = stored.database {
+            planned.insert(
+                "src/bin/phoenix-manage.rs".into(),
+                management_template(&crate_name),
+            );
+            planned.insert(
+                "config/schemas/phoenix-config-database.schema.json".into(),
+                include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
+            );
+            // Ensure empty registries exist when upgrading a no-db project that later
+            // recorded a database in `.phoenix` — do not overwrite populated registries.
+            for (path, content) in [
+                (
+                    "app/models/mod.rs",
+                    empty_model_registry(),
+                ),
+                (
+                    "database/migrations/mod.rs",
+                    empty_migration_registry(),
+                ),
+                ("database/seeders/mod.rs", seeder_template()),
+            ] {
+                if !self.root.join(path).is_file() {
+                    planned.insert(path.into(), content);
+                }
+            }
+            if !self.root.join("config/database.toml").is_file() {
+                planned.insert(
+                    "config/database.toml".into(),
+                    database_toml_template(database),
+                );
+            }
+        }
+
+        let cargo_path = PathBuf::from("Cargo.toml");
+        let cargo = fs::read_to_string(self.root.join(&cargo_path)).map_err(|source| {
+            ScaffoldError::Io {
+                path: self.root.join(&cargo_path),
+                source,
+            }
+        })?;
+        let cargo = patch_cargo_toml_core(&cargo, &rust_dependency);
+        planned.insert(cargo_path, cargo);
+
+        let package_json_path = PathBuf::from("package.json");
+        let package_json =
+            fs::read_to_string(self.root.join(&package_json_path)).map_err(|source| {
+                ScaffoldError::Io {
+                    path: self.root.join(&package_json_path),
+                    source,
+                }
+            })?;
+        let package_json =
+            patch_package_json_core(&package_json, &react, &react_ssr, &vite, stored.tailwind)?;
+        planned.insert(package_json_path, package_json);
+
+        let mut changed = Vec::new();
+        for (relative, content) in &planned {
+            let absolute = self.root.join(relative);
+            let existing = match fs::read_to_string(&absolute) {
+                Ok(text) => text,
+                Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+                Err(source) => {
+                    return Err(ScaffoldError::Io {
+                        path: absolute,
+                        source,
+                    });
+                }
+            };
+            if existing == *content {
+                continue;
+            }
+            changed.push(absolute.clone());
+            if options.dry_run {
+                continue;
+            }
+            if let Some(parent) = absolute.parent() {
+                fs::create_dir_all(parent).map_err(|source| ScaffoldError::Io {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+            fs::write(&absolute, content).map_err(|source| ScaffoldError::Io {
+                path: absolute,
+                source,
+            })?;
+        }
+
+        if !options.dry_run && options.install_dependencies && self.root.join("package.json").is_file()
+        {
+            run_required("npm", &["install"], &self.root)?;
+            let _ = self.refresh_types()?;
+        }
+
+        Ok(changed)
     }
 }
 
@@ -630,21 +838,27 @@ fn is_project_root(path: &Path) -> bool {
         && path.join("views").is_dir()
 }
 
-fn project_files(
-    package: &str,
-    options: &NewProjectOptions,
-) -> Result<Vec<(PathBuf, String)>, ScaffoldError> {
-    let (rust_dependency, react, react_ssr, vite) = match &options.dependencies {
-        DependencySource::Registry => (
-            "phoenix = { package = \"phoenixrs\", version = \"0.1.3\", default-features = false }"
-                .to_owned(),
-            "https://registry.npmjs.org/@apizero/react/-/react-0.1.2.tgz".to_owned(),
-            "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-0.1.2.tgz".to_owned(),
-            "https://registry.npmjs.org/@apizero/vite/-/vite-0.1.3.tgz".to_owned(),
-        ),
+fn framework_dependency_pins(
+    source: &DependencySource,
+) -> Result<(String, String, String, String), ScaffoldError> {
+    match source {
+        DependencySource::Registry => Ok((
+            format!(
+                "phoenix = {{ package = \"phoenixrs\", version = \"{PHOENIXRS_VERSION}\", default-features = false }}"
+            ),
+            format!(
+                "https://registry.npmjs.org/@apizero/react/-/react-{APIZERO_REACT_VERSION}.tgz"
+            ),
+            format!(
+                "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-{APIZERO_REACT_SSR_VERSION}.tgz"
+            ),
+            format!(
+                "https://registry.npmjs.org/@apizero/vite/-/vite-{APIZERO_VITE_VERSION}.tgz"
+            ),
+        )),
         DependencySource::Local(root) => {
             let root = absolute_path(root)?;
-            (
+            Ok((
                 format!(
                     "phoenix = {{ package = \"phoenixrs\", path = {}, default-features = false }}",
                     json_string(&root.join("crates/phoenix").to_string_lossy())
@@ -652,9 +866,298 @@ fn project_files(
                 format!("file:{}", root.join("packages/phoenix-react").display()),
                 format!("file:{}", root.join("packages/phoenix-react-ssr").display()),
                 format!("file:{}", root.join("packages/phoenix-vite").display()),
-            )
+            ))
         }
+    }
+}
+
+fn format_stored_options(options: &StoredProjectOptions) -> String {
+    let database = options.database.map_or("none", database_option_key);
+    let render_mode = match options.render_mode {
+        ProjectRenderMode::Spa => "spa",
+        ProjectRenderMode::Ssr => "ssr",
+        ProjectRenderMode::Islands => "islands",
     };
+    format!(
+        "frontend={}\nrender_mode={render_mode}\ndatabase={database}\ntailwind={}\n",
+        options.frontend.extension(),
+        if options.tailwind { "true" } else { "false" },
+    )
+}
+
+fn database_option_key(database: ProjectDatabase) -> &'static str {
+    match database {
+        ProjectDatabase::Sqlite => "sqlite",
+        ProjectDatabase::Pgsql => "pgsql",
+        ProjectDatabase::Mysql => "mysql",
+        ProjectDatabase::All => "all",
+    }
+}
+
+fn read_stored_options(root: &Path) -> StoredProjectOptions {
+    let mut options = StoredProjectOptions {
+        frontend: ProjectFrontend::default(),
+        database: None,
+        render_mode: ProjectRenderMode::default(),
+        tailwind: false,
+    };
+
+    if let Ok(source) = fs::read_to_string(root.join(PROJECT_OPTIONS_FILE)) {
+        for line in source.lines() {
+            if let Some(value) = line.strip_prefix("frontend=") {
+                if let Ok(frontend) = value.parse() {
+                    options.frontend = frontend;
+                }
+            } else if let Some(value) = line.strip_prefix("render_mode=") {
+                if let Ok(render_mode) = value.parse() {
+                    options.render_mode = render_mode;
+                }
+            } else if let Some(value) = line.strip_prefix("database=") {
+                options.database = match value.trim() {
+                    "" | "none" | "no" => None,
+                    other => other.parse().ok(),
+                };
+            } else if let Some(value) = line.strip_prefix("tailwind=") {
+                options.tailwind = matches!(value.trim(), "1" | "true" | "yes");
+            }
+        }
+    }
+
+    if options.database.is_none()
+        && (root.join("src/bin/phoenix-manage.rs").is_file()
+            || root.join("config/database.toml").is_file())
+    {
+        options.database = infer_database(root);
+    }
+    if !options.tailwind
+        && fs::read_to_string(root.join("package.json"))
+            .ok()
+            .is_some_and(|text| text.contains("tailwindcss"))
+    {
+        options.tailwind = true;
+    }
+    if options.render_mode == ProjectRenderMode::default() {
+        if let Ok(controller) = fs::read_to_string(root.join("app/controllers/home_controller.rs"))
+        {
+            if controller.contains(".spa()") {
+                options.render_mode = ProjectRenderMode::Spa;
+            } else if controller.contains(".ssr()") {
+                options.render_mode = ProjectRenderMode::Ssr;
+            } else if controller.contains(".islands()") {
+                options.render_mode = ProjectRenderMode::Islands;
+            }
+        }
+    }
+    if options.frontend == ProjectFrontend::default()
+        && root.join("views/pages/home.jsx").is_file()
+        && !root.join("views/pages/home.tsx").is_file()
+    {
+        options.frontend = ProjectFrontend::Jsx;
+    }
+    options
+}
+
+fn infer_database(root: &Path) -> Option<ProjectDatabase> {
+    if let Ok(cargo) = fs::read_to_string(root.join("Cargo.toml")) {
+        if cargo.contains("default = [\"all-databases\"]") || cargo.contains("all-databases =") {
+            return Some(ProjectDatabase::All);
+        }
+        if cargo.contains("default = [\"mysql\"]") {
+            return Some(ProjectDatabase::Mysql);
+        }
+        if cargo.contains("default = [\"pgsql\"]") {
+            return Some(ProjectDatabase::Pgsql);
+        }
+        if cargo.contains("default = [\"sqlite\"]") {
+            return Some(ProjectDatabase::Sqlite);
+        }
+    }
+    if let Ok(database) = fs::read_to_string(root.join("config/database.toml")) {
+        for line in database.lines() {
+            if let Some(value) = line.trim().strip_prefix("default = ") {
+                let value = value.trim().trim_matches('"');
+                return value.parse().ok();
+            }
+        }
+    }
+    Some(ProjectDatabase::Sqlite)
+}
+
+fn read_package_name(root: &Path) -> Result<String, ScaffoldError> {
+    let path = root.join("Cargo.toml");
+    let text = fs::read_to_string(&path).map_err(|source| ScaffoldError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    let mut in_package = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+        if in_package && let Some(value) = trimmed.strip_prefix("name = ") {
+            let value = value.trim();
+            if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                return Ok(value[1..value.len() - 1].to_owned());
+            }
+        }
+    }
+    Err(ScaffoldError::InvalidManagedFile(path))
+}
+
+fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
+    let mut lines = cargo.lines().map(str::to_owned).collect::<Vec<_>>();
+    let mut replaced = false;
+    for line in &mut lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("phoenix =") || trimmed.starts_with("phoenixrs =") {
+            *line = phoenix_dependency.to_owned();
+            replaced = true;
+        }
+    }
+    if !replaced {
+        if let Some(index) = lines.iter().position(|line| line.trim() == "[dependencies]") {
+            lines.insert(index + 1, phoenix_dependency.to_owned());
+        } else {
+            lines.push(String::new());
+            lines.push("[dependencies]".to_owned());
+            lines.push(phoenix_dependency.to_owned());
+        }
+    }
+
+    let required_features = [
+        ("tls =", "tls = [\"phoenix/tls\"]"),
+        ("websocket =", "websocket = [\"phoenix/websocket\"]"),
+        ("sse =", "sse = [\"phoenix/sse\"]"),
+        ("auth =", "auth = [\"phoenix/auth\"]"),
+        ("jwt =", "jwt = [\"phoenix/jwt\"]"),
+        ("password =", "password = [\"phoenix/password\"]"),
+        ("metrics =", "metrics = [\"phoenix/metrics\"]"),
+        ("redis =", "redis = [\"phoenix/redis\"]"),
+        ("storage =", "storage = [\"phoenix/storage\"]"),
+        ("queue =", "queue = [\"phoenix/queue\"]"),
+        ("mail =", "mail = [\"phoenix/mail\"]"),
+        ("testing =", "testing = [\"phoenix/testing\"]"),
+    ];
+    let mut missing = Vec::new();
+    for (prefix, line) in required_features {
+        if !lines.iter().any(|existing| existing.trim_start().starts_with(prefix)) {
+            missing.push(line.to_owned());
+        }
+    }
+    if !missing.is_empty() {
+        let insert_at = lines
+            .iter()
+            .position(|line| line.trim() == "[dependencies]")
+            .unwrap_or(lines.len());
+        for (offset, line) in missing.into_iter().enumerate() {
+            lines.insert(insert_at + offset, line);
+        }
+    }
+
+    let mut body = lines.join("\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body
+}
+
+fn patch_package_json_core(
+    raw: &str,
+    react: &str,
+    react_ssr: &str,
+    vite: &str,
+    tailwind: bool,
+) -> Result<String, ScaffoldError> {
+    let mut value: serde_json::Value = serde_json::from_str(raw).map_err(|source| {
+        ScaffoldError::Io {
+            path: PathBuf::from("package.json"),
+            source: std::io::Error::new(ErrorKind::InvalidData, source.to_string()),
+        }
+    })?;
+    let object = value.as_object_mut().ok_or_else(|| ScaffoldError::Io {
+        path: PathBuf::from("package.json"),
+        source: std::io::Error::new(ErrorKind::InvalidData, "package.json root must be an object"),
+    })?;
+
+    let dependencies = object
+        .entry("dependencies")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(deps) = dependencies.as_object_mut() {
+        deps.insert(
+            "@apizero/react".to_owned(),
+            serde_json::Value::String(react.to_owned()),
+        );
+        deps.insert(
+            "@apizero/react-ssr".to_owned(),
+            serde_json::Value::String(react_ssr.to_owned()),
+        );
+        deps.insert(
+            "@apizero/vite".to_owned(),
+            serde_json::Value::String(vite.to_owned()),
+        );
+    }
+
+    let scripts = object
+        .entry("scripts")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(scripts) = scripts.as_object_mut() {
+        scripts.insert(
+            "dev".to_owned(),
+            serde_json::Value::String("vite --host 127.0.0.1".to_owned()),
+        );
+        scripts.insert(
+            "build".to_owned(),
+            serde_json::Value::String("npm run build:client && npm run build:ssr".to_owned()),
+        );
+        scripts.insert(
+            "build:client".to_owned(),
+            serde_json::Value::String("vite build".to_owned()),
+        );
+        scripts.insert(
+            "build:ssr".to_owned(),
+            serde_json::Value::String("vite build --config vite.ssr.config.ts".to_owned()),
+        );
+        scripts.insert(
+            "types".to_owned(),
+            serde_json::Value::String(
+                "node -e \"import('@apizero/vite').then(({ generateRouteTypes }) => generateRouteTypes('routes', 'views/generated/routes.ts', '.', 'views/generated/contracts.ts'))\""
+                    .to_owned(),
+            ),
+        );
+        scripts.insert(
+            "typecheck".to_owned(),
+            serde_json::Value::String("npm run types && tsc --noEmit".to_owned()),
+        );
+    }
+
+    if tailwind {
+        let dev_dependencies = object
+            .entry("devDependencies")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(deps) = dev_dependencies.as_object_mut() {
+            deps.entry("@tailwindcss/vite".to_owned())
+                .or_insert_with(|| serde_json::Value::String("^4.3.0".to_owned()));
+            deps.entry("tailwindcss".to_owned())
+                .or_insert_with(|| serde_json::Value::String("^4.3.0".to_owned()));
+        }
+    }
+
+    let mut rendered = serde_json::to_string_pretty(&value).map_err(|source| ScaffoldError::Io {
+        path: PathBuf::from("package.json"),
+        source: std::io::Error::new(ErrorKind::InvalidData, source.to_string()),
+    })?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn project_files(
+    package: &str,
+    options: &NewProjectOptions,
+) -> Result<Vec<(PathBuf, String)>, ScaffoldError> {
+    let (rust_dependency, react, react_ssr, vite) =
+        framework_dependency_pins(&options.dependencies)?;
     let crate_name = package.replace('-', "_");
     let tailwind = if options.tailwind {
         ",\n    \"@tailwindcss/vite\": \"^4.3.0\",\n    \"tailwindcss\": \"^4.3.0\""
@@ -723,11 +1226,18 @@ fn project_files(
         toasty_dependency = toasty_dependency,
     );
 
+    let stored = StoredProjectOptions {
+        frontend: options.frontend,
+        database: options.database,
+        render_mode: options.render_mode,
+        tailwind: options.tailwind,
+    };
+
     let mut files = vec![
         ("Cargo.toml".into(), cargo_toml),
         (
             PROJECT_OPTIONS_FILE.into(),
-            format!("frontend={}\n", options.frontend.extension()),
+            format_stored_options(&stored),
         ),
         ("package.json".into(), package_json),
         (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned()),
@@ -2791,6 +3301,56 @@ mod tests {
         assert!(models.contains("Comment"));
         let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
         assert!(migrations.contains("pub fn all()"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn update_core_refreshes_framework_files_only() {
+        let root = temporary_directory("update-core");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .initialize_git(false)
+                .install_dependencies(false),
+        )
+        .unwrap();
+
+        let route_before = fs::read_to_string(root.join("routes/web.rs")).unwrap();
+        let page_before = fs::read_to_string(root.join("views/pages/home.tsx")).unwrap();
+        fs::write(root.join("src/lib.rs"), "// stale core\n").unwrap();
+        fs::write(
+            root.join("routes/web.rs"),
+            format!("{route_before}\n// business marker\n"),
+        )
+        .unwrap();
+
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        let changed = generator
+            .update_core(
+                &UpdateProjectOptions::new()
+                    .dependencies(DependencySource::Local(framework_root()))
+                    .install_dependencies(false),
+            )
+            .unwrap();
+        assert!(
+            changed
+                .iter()
+                .any(|path| path.ends_with("src/lib.rs")),
+            "expected src/lib.rs to be refreshed"
+        );
+
+        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("let production = config.environment().is_production()"));
+        assert!(!lib.contains("// stale core"));
+        let route_after = fs::read_to_string(root.join("routes/web.rs")).unwrap();
+        assert!(route_after.contains("// business marker"));
+        assert_eq!(
+            fs::read_to_string(root.join("views/pages/home.tsx")).unwrap(),
+            page_before
+        );
+        let options = fs::read_to_string(root.join(".phoenix")).unwrap();
+        assert!(options.contains("render_mode=islands"));
+        assert!(options.contains("database=none"));
         fs::remove_dir_all(root).unwrap();
     }
 

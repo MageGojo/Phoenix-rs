@@ -64,6 +64,7 @@ px make:controller Admin/PostController --resource
 px make:page posts/index
 px make:island LikeButton
 px make:command Update
+px update                 # refresh framework core only
 px migrate
 px dev
 # ship:

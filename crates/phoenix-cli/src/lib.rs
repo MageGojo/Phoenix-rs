@@ -7,5 +7,5 @@ pub use release::{release_build, release_install, release_rollback, release_stat
 pub use scaffold::{
     ControllerOptions, DependencySource, GenerateOptions, ModelOptions, NewProjectOptions,
     ProjectDatabase, ProjectFrontend, ProjectGenerator, ProjectRenderMode, ScaffoldError,
-    create_project,
+    UpdateProjectOptions, create_project,
 };

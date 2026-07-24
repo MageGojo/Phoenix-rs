@@ -9,7 +9,8 @@ use std::{
 use phoenix_cli::{
     ControllerOptions, DependencySource, DevConfig, DevSupervisor, GenerateOptions, ModelOptions,
     NewProjectOptions, ProjectDatabase, ProjectFrontend, ProjectGenerator, ProjectRenderMode,
-    create_project, release_build, release_install, release_rollback, release_status,
+    UpdateProjectOptions, create_project, release_build, release_install, release_rollback,
+    release_status,
 };
 
 const HELP: &str = r"Phoenix-rs application CLI (px)
@@ -22,6 +23,7 @@ Usage:
   px new [project] [--render-mode islands|spa|ssr] [--database sqlite|pgsql|mysql|all]
                    [--tailwind] [--git] [--frontend tsx|jsx]
                    [--framework-path <path>] [--no-install] [--no-git]
+  px update [--framework-path <path>] [--no-install] [--dry-run]
   px dev
   px migrate
   px status
@@ -50,6 +52,7 @@ Usage:
 
 Examples:
   px new my-app
+  px update
   px migrate
   px rollback --step 2
   px fresh --seed
@@ -90,6 +93,7 @@ async fn run(raw: Vec<OsString>) -> Result<(), String> {
     match command.as_str() {
         "dev" => dev(arguments).await,
         "new" => new_project(arguments),
+        "update" => update_project(arguments),
         "migrate" => database_command("migrate", &no_options(&arguments)?),
         "status" => database_command("status", &no_options(&arguments)?),
         "rollback" => database_command("rollback", &rollback_options(&arguments)?),
@@ -311,6 +315,53 @@ fn new_project(mut arguments: Vec<String>) -> Result<(), String> {
         options.target.display()
     );
     println!("Next: cd {} && px dev", options.target.display());
+    Ok(())
+}
+
+fn update_project(arguments: Vec<String>) -> Result<(), String> {
+    let mut options = UpdateProjectOptions::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--no-install" => options.install_dependencies = false,
+            "--dry-run" => options.dry_run = true,
+            "--framework-path" => {
+                index += 1;
+                let path = arguments
+                    .get(index)
+                    .ok_or("--framework-path requires a path")?;
+                options.dependencies = DependencySource::Local(PathBuf::from(path));
+            }
+            flag => return Err(format!("unknown update option `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let generator = current_generator()?;
+    let changed = generator
+        .update_core(&options)
+        .map_err(|error| error.to_string())?;
+    if changed.is_empty() {
+        println!("Core files already up to date at {}", generator.root().display());
+        return Ok(());
+    }
+    let label = if options.dry_run { "WOULD UPDATE" } else { "UPDATED" };
+    for path in &changed {
+        println!(
+            "{label} {}",
+            path.strip_prefix(generator.root())
+                .unwrap_or(path)
+                .display()
+        );
+    }
+    if options.dry_run {
+        println!("Dry run only; re-run without --dry-run to apply.");
+    } else {
+        println!(
+            "Updated Phoenix core files in {} (business code left untouched).",
+            generator.root().display()
+        );
+    }
     Ok(())
 }
 
