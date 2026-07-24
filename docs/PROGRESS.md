@@ -464,9 +464,9 @@
 
 ## 2026-07-24：公开同步 + px-cli 0.1.1
 
-- 推送 GitHub `origin` + GitCode `gitcode`：`@apizero/*` 前端包名、`px dev` Rust 热重载、脚手架 tarball 依赖
-- crates.io 发布 `px-cli` **0.1.1**（含 notify 热重载与 `@apizero` 脚手架）
-  状态：进行中
+- 推送 GitHub `origin` + GitCode `gitcode`：`@apizero/*` 前端包名、`px dev` Rust 热重载、脚手架 tarball 依赖（`258e87a`）
+- crates.io 已发布 `px-cli` **0.1.1**
+  状态：已完成@258e87a
 
 
 - `DevSupervisor` 默认 `watch_rust`：监听 `app/`、`src/`、`routes/`、`config/`、`database/`、`Cargo.toml`，变更后重启 `cargo run -- serve`
