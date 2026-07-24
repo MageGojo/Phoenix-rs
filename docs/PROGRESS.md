@@ -517,6 +517,6 @@
 
 - 已完成：`tls` / `websocket` / `sse` / `auth` / `jwt` / `password` / `metrics` 做成门面 feature（WS 与 SSE 不合并）；数据库 optional WIP 一并收口。
 - 验收：`cargo check -p phoenixrs --no-default-features`；分别 `--features tls|websocket|sse|auth|jwt|password|metrics` 及组合；无 feature 时 dep tree 不含 rustls/tungstenite/jsonwebtoken/argon2；`cargo test --workspace --locked` 全绿；blog 启用 `sqlite,password`。
-- 产物：各底层 crate features + `crates/phoenix/{Cargo.toml,src/lib.rs}` + scaffold + ADR-042 + `docs/FEATURES.md` 等文档同步
-- 发布：`phoenixrs 0.1.3` / `px-cli 0.1.4` / 相关 crate `0.1.1`–`0.1.2`；GitHub + GitCode push + GitHub Release
-- 状态：进行中@发布
+- 产物：各底层 crate features + `crates/phoenix/{Cargo.toml,src/lib.rs}` + scaffold + ADR-042 + 文档同步
+- 发布：`@c9ffe1b` 已 push GitHub + GitCode；GitHub Release [v0.1.3](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.3)；crates.io：`phoenixrs 0.1.3`、`px-cli 0.1.4`、相关 crate `0.1.1`/`phoenix-view 0.1.2`
+- 状态：已完成@c9ffe1b
