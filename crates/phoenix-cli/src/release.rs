@@ -99,7 +99,7 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
     let migrations = ensure_dir(root.join("database/migrations"))?;
 
     let client_manifest = root.join("public/assets/phoenix-manifest.json");
-    let ssr_manifest = root.join("public/ssr/phoenix-manifest.json");
+    let ssr_manifest = root.join("public/ssr/phoenix-renderer.json");
     let contract_hash = read_json_str_field(&client_manifest, "contract_hash")
         .or_else(|| read_json_str_field(&ssr_manifest, "contract_hash"));
 
@@ -114,7 +114,7 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
             client_manifest: read_json_str_field(&client_manifest, "version")
                 .map(|_| "public/assets/phoenix-manifest.json".to_owned()),
             ssr_manifest: read_json_str_field(&ssr_manifest, "version")
-                .map(|_| "public/ssr/phoenix-manifest.json".to_owned()),
+                .map(|_| "public/ssr/phoenix-renderer.json".to_owned()),
             contract_hash,
             rustc_version: rustc_version(),
             profile: Some("release".to_owned()),

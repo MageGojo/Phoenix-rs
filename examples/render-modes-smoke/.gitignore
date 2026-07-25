@@ -1,0 +1,10 @@
+/target
+/node_modules
+/public/assets
+/public/ssr
+/views/generated/*.ts
+/dist
+/storage/*.sqlite
+/storage/*.sqlite-*
+.env
+.DS_Store

@@ -7,6 +7,7 @@ use std::{
     error::Error,
     fmt::{Display, Formatter},
     future::Future,
+    path::{Path, PathBuf},
     pin::Pin,
 };
 
@@ -108,8 +109,10 @@ impl Console {
     ///
     /// # Errors
     ///
-    /// Returns an error for unknown commands or when a command fails.
+    /// Returns an error when a packaged release root cannot be entered, for
+    /// unknown commands, or when a command fails.
     pub async fn run(self) -> CommandResult {
+        enter_packaged_release_root()?;
         self.run_argv(std::env::args()).await
     }
 
@@ -184,6 +187,40 @@ impl Console {
         lines.push(format!("Run `{} help` for this message.", self.binary_name));
         lines.push(String::new());
         lines.join("\n")
+    }
+}
+
+/// Enter the release root when the executable lives in the conventional
+/// `<release>/bin/<application>` layout.
+///
+/// Phoenix application configuration, static assets, and the Node renderer all
+/// use paths relative to the application root. Process managers normally set
+/// their working directory to `<deploy>/current`, but a release binary should
+/// behave the same when it is started directly from its `bin/` directory.
+fn enter_packaged_release_root() -> std::io::Result<Option<PathBuf>> {
+    let Ok(executable) = std::env::current_exe() else {
+        return Ok(None);
+    };
+    let Some(root) = packaged_release_root(&executable) else {
+        return Ok(None);
+    };
+    std::env::set_current_dir(&root)?;
+    Ok(Some(root))
+}
+
+fn packaged_release_root(executable: &Path) -> Option<PathBuf> {
+    let bin = executable.parent()?;
+    if bin.file_name().and_then(|name| name.to_str()) != Some("bin") {
+        return None;
+    }
+    let root = bin.parent()?;
+    if root.join("manifest.toml").is_file()
+        && root.join("config").is_dir()
+        && root.join("public").is_dir()
+    {
+        Some(root.to_path_buf())
+    } else {
+        None
     }
 }
 
@@ -283,10 +320,12 @@ pub const fn crate_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[allow(clippy::unused_async)]
     async fn update(_ctx: CommandContext<'_>) -> CommandResult {
@@ -348,6 +387,46 @@ mod tests {
             .await
             .expect("serve should succeed");
         assert!(called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn discovers_packaged_release_root_from_bin_executable() {
+        let root = temporary_directory("packaged-root");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("config")).unwrap();
+        fs::create_dir_all(root.join("public")).unwrap();
+        fs::write(root.join("manifest.toml"), "schema_version = 1\n").unwrap();
+
+        assert_eq!(
+            packaged_release_root(&root.join("bin/demo")),
+            Some(root.clone())
+        );
+        assert_eq!(packaged_release_root(&root.join("demo")), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_incomplete_bin_layouts() {
+        let root = temporary_directory("incomplete-root");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("config")).unwrap();
+        fs::create_dir_all(root.join("public")).unwrap();
+
+        assert_eq!(packaged_release_root(&root.join("bin/demo")), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "phoenix-console-{label}-{}-{nonce}",
+            std::process::id()
+        ))
     }
 
     #[tokio::test]

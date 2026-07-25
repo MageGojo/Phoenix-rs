@@ -546,3 +546,20 @@
 - 验收：`cargo test -p px-cli`；重建 `px_text` release staging，HTML 引用 `/assets/client-HaMzEeQc.css` 与 `/assets/phoenix-N3wLaEhm.js`，两者 HTTP 200。
 - 版本：`px-cli 0.1.9`
 - 状态：已完成@4833fdb（GitHub/GitCode + Release [v0.1.9](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.9) + crates.io）
+
+## 2026-07-25：release `bin/` 直接 serve + 三模式 smoke
+
+- 根因：在 `releases/<ver>/staging/bin` 下执行 `./<app> serve` 时 cwd 仍是 `bin/`，相对路径读不到 `public/assets/phoenix-manifest.json`，表现为 `Error: Read(Os { kind: NotFound })`。
+- 修复：
+  1. `phoenix-console` 在常规 `<root>/bin/<app>` 布局下自动 `chdir` 到 release 根（探测 `manifest.toml` + `config/` + `public/`）
+  2. `AssetManifestError::Read` 携带文件路径，便于诊断
+  3. `px release` 元数据改为正确的 `public/ssr/phoenix-renderer.json`
+- 新增示例：`examples/render-modes-smoke` 同项目演示 SPA(=CPA) / Islands / SSR（`/spa` `/islands` `/ssr`）
+- 验收：
+  - `cargo test -p phoenix-console --lib`（含 packaged root 探测）
+  - `cargo test -p phoenix-view --lib` assets；`cargo test -p px-cli --lib release`
+  - 重建 `px_12345` 后从 `bin/` 启动 `./px-12345 serve` → 200
+  - 本地 `px release --version 0.1.0 --tarball` smoke；从 staging `bin/` 启动后三模式 header 正确，SPA 空壳 / Islands 含 counter / SSR 含完整 HTML，`/assets/phoenix-*.js` 200
+  - `cargo run -- serve`（无 `PHOENIX_VITE_DEV`）三模式同样通过
+- 产物：`crates/phoenix-console/src/lib.rs`、`crates/phoenix-view/src/assets.rs`、`crates/phoenix-cli/src/release.rs`、`examples/render-modes-smoke/**`
+- 状态：进行中（待 commit）

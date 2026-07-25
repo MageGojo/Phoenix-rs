@@ -43,7 +43,11 @@ impl RendererManifest {
     ///
     /// Returns an error for unreadable/invalid JSON or unsafe build identity.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, AssetManifestError> {
-        let bytes = fs::read(path).map_err(AssetManifestError::Read)?;
+        let path = path.as_ref();
+        let bytes = fs::read(path).map_err(|source| AssetManifestError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let manifest: Self = serde_json::from_slice(&bytes).map_err(AssetManifestError::Decode)?;
         manifest.validate()?;
         Ok(manifest)
@@ -73,7 +77,11 @@ impl AssetManifest {
     /// Returns an error when the file cannot be read, JSON is invalid, the
     /// schema is unsupported, or any asset path can escape the asset root.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, AssetManifestError> {
-        let bytes = fs::read(path).map_err(AssetManifestError::Read)?;
+        let path = path.as_ref();
+        let bytes = fs::read(path).map_err(|source| AssetManifestError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let manifest: Self = serde_json::from_slice(&bytes).map_err(AssetManifestError::Decode)?;
         manifest.validate()?;
         Ok(manifest)
@@ -201,8 +209,12 @@ fn validate_asset_path(path: &str) -> Result<(), AssetManifestError> {
 
 #[derive(Debug, Error)]
 pub enum AssetManifestError {
-    #[error("failed to read the asset manifest: {0}")]
-    Read(std::io::Error),
+    #[error("failed to read asset manifest {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to decode the asset manifest: {0}")]
     Decode(serde_json::Error),
     #[error("asset manifest schema {0} is not supported")]
@@ -272,5 +284,20 @@ mod tests {
             manifest().verify_contract("different"),
             Err(AssetManifestError::ContractMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn read_errors_include_manifest_path() {
+        for result in [
+            AssetManifest::load("missing-assets-manifest.json").map(|_| ()),
+            RendererManifest::load("missing-renderer-manifest.json").map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(AssetManifestError::Read { path, source })
+                    if source.kind() == std::io::ErrorKind::NotFound
+                        && path.to_string_lossy().starts_with("missing-")
+            ));
+        }
     }
 }

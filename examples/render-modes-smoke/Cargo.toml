@@ -1,0 +1,39 @@
+[package]
+name = "render-modes-smoke"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+default-run = "render-modes-smoke"
+
+[features]
+# Database support is omitted unless selected during `px new`.
+default = []
+database = []
+tls = ["phoenix/tls"]
+websocket = ["phoenix/websocket"]
+sse = ["phoenix/sse"]
+auth = ["phoenix/auth"]
+jwt = ["phoenix/jwt"]
+password = ["phoenix/password"]
+metrics = ["phoenix/metrics"]
+redis = ["phoenix/redis"]
+storage = ["phoenix/storage"]
+queue = ["phoenix/queue"]
+mail = ["phoenix/mail"]
+testing = ["phoenix/testing"]
+
+[dependencies]
+phoenix = { package = "phoenixrs", path = "../../crates/phoenix", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "unwind"
+strip = "symbols"
+
+[workspace]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Copy to deploy/restart.sh and make executable.
+# Used by `px release:install` / `px release:rollback` when --restart-cmd is omitted.
+set -eu
+systemctl restart my-app

@@ -1,0 +1,27 @@
+{
+  "name": "render-modes-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run build:client && npm run build:ssr",
+    "build:client": "vite build",
+    "build:ssr": "vite build --config vite.ssr.config.ts",
+    "types": "node -e \"import('@apizero/vite').then(({ generateRouteTypes }) => generateRouteTypes('routes', 'views/generated/routes.ts', '.', 'views/generated/contracts.ts'))\"",
+    "typecheck": "npm run types && tsc --noEmit"
+  },
+  "dependencies": {
+    "@apizero/react": "file:../../packages/phoenix-react",
+    "@apizero/react-ssr": "file:../../packages/phoenix-react-ssr",
+    "@apizero/vite": "file:../../packages/phoenix-vite",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.3.6"
+  }
+}

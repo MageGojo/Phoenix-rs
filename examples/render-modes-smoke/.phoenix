@@ -1,0 +1,4 @@
+frontend=tsx
+render_mode=islands
+database=none
+tailwind=false

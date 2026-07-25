@@ -1,0 +1,10 @@
+# Application settings (Laravel-style config/app).
+# Secrets and machine-specific overrides belong in `.env`.
+# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
+
+#:schema ./schemas/phoenix-config-app.schema.json
+
+name = "render-modes-smoke"
+env = "development"
+addr = "127.0.0.1:3000"
+url = "http://127.0.0.1:3000"

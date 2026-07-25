@@ -1,0 +1,6 @@
+# Taplo / Even Better TOML schema associations for config/*.toml autocomplete.
+
+[[rule]]
+include = ["config/app.toml"]
+[rule.schema]
+path = "./config/schemas/phoenix-config-app.schema.json"
