@@ -19,6 +19,25 @@
 
 默认 Cargo features：`sqlite, password, jwt, auth, websocket, sse, metrics, storage, queue, mail`。`tls` / `redis` 为可选，默认不启用。
 
+### TLS（可选，dev / release 二进制）
+
+```bash
+mkdir -p storage/certs
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout storage/certs/private-key.pem -out storage/certs/certificate.pem \
+  -days 30 -subj "/CN=127.0.0.1" \
+  -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"
+cargo run --features tls -- serve   # 或先 cargo build --release --features tls
+# 另开终端（需设置三个 env）：
+APP_TLS_ADDR=127.0.0.1:3443 \
+APP_TLS_CERT=storage/certs/certificate.pem \
+APP_TLS_KEY=storage/certs/private-key.pem \
+  ./target/debug/render-modes-smoke serve
+curl -sk https://127.0.0.1:3443/hello
+```
+
+Redis / PostgreSQL / MySQL 与 JWT refresh 等缺口用仓库根 `./scripts/verify-external-features.sh`（Docker）验收，见 [`docs/EXTERNAL_FEATURE_VERIFY.md`](../../docs/EXTERNAL_FEATURE_VERIFY.md)。
+
 验收日志样例见 [`docs/FEATURE_VERIFY.md`](docs/FEATURE_VERIFY.md)；旁路示例（blog / multi-app / redis·db SKIP）见 [`docs/SIDE_EXAMPLES.md`](docs/SIDE_EXAMPLES.md)。
 
 ## 开发

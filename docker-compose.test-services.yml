@@ -1,0 +1,62 @@
+# Ephemeral external services for local contract tests (mirrors CI images/creds).
+# Host ports are offset so they do not collide with other local stacks.
+#
+#   docker compose -f docker-compose.test-services.yml up -d --wait
+#   docker compose -f docker-compose.test-services.yml down -v
+#
+# Env (exported by scripts/verify-external-features.sh):
+#   PHOENIX_TEST_REDIS_URL=redis://127.0.0.1:16379/0
+#   PHOENIX_TEST_POSTGRES_URL=postgresql://phoenix:phoenix_test_password@127.0.0.1:15432/phoenix_test
+#   PHOENIX_TEST_MYSQL_URL=mysql://phoenix:phoenix_test_password@127.0.0.1:13306/phoenix_test
+
+name: phoenix-test-services
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: phoenix_test
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix_test_password
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phoenix -d phoenix_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: phoenix_test
+      MYSQL_USER: phoenix
+      MYSQL_PASSWORD: phoenix_test_password
+      MYSQL_ROOT_PASSWORD: phoenix_root_password
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "127.0.0.1",
+          "-u",
+          "phoenix",
+          "--password=phoenix_test_password",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20

@@ -21,6 +21,7 @@ default = [
 ]
 database = ["phoenix/database"]
 sqlite = ["database", "phoenix/sqlite"]
+# Optional: `cargo run --features tls -- serve` with APP_TLS_* env (see README).
 tls = ["phoenix/tls"]
 websocket = ["phoenix/websocket"]
 sse = ["phoenix/sse"]

@@ -20,10 +20,30 @@ async fn main() -> CommandResult {
                 })
                 .ansi(!production)
                 .init()?;
-            let server = render_modes_smoke::application(config)
-                .await?
-                .bind(&address)
-                .await?;
+            let application = render_modes_smoke::application(config).await?;
+
+            #[cfg(feature = "tls")]
+            if let (Ok(tls_addr), Ok(cert), Ok(key)) = (
+                std::env::var("APP_TLS_ADDR"),
+                std::env::var("APP_TLS_CERT"),
+                std::env::var("APP_TLS_KEY"),
+            ) {
+                let tls = phoenix::prelude::TlsConfig::from_files(&cert, &key)?;
+                let server = application.bind_tls(&tls_addr, tls).await?;
+                println!(
+                    "Phoenix application ready at https://{} (TLS listening on {})",
+                    tls_addr,
+                    server.local_addr()
+                );
+                server
+                    .run_with_shutdown(async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    })
+                    .await?;
+                return Ok(());
+            }
+
+            let server = application.bind(&address).await?;
             println!(
                 "Phoenix application ready at {public_url} (listening on {})",
                 server.local_addr()

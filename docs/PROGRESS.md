@@ -582,3 +582,12 @@
 - 明确不做：redis/pgsql/mysql 不进 smoke 默认依赖；`testing` 不进 release；blog/multi-app 不改写成 `px release` 应用
 - 产物：`examples/render-modes-smoke/{Cargo.toml,app/features/**,app/plugins/**,app/controllers/features_controller.rs,scripts/**,docs/**,README.md}`；`docs/PROGRESS.md`；`docs/工具与约定.md`
 - 状态：已完成@2a67da2
+
+## 2026-07-25：Docker 补环境自测外部依赖与缺口能力
+
+- 新增 `docker-compose.test-services.yml`（redis:16379 / postgres:15432 / mysql:13306，对齐 CI 镜像与账号）
+- 新增 `scripts/verify-external-features.sh`：起服务 → redis/pg/mysql contract → JWT refresh → auth lib → testing → runtime tls → smoke TLS debug/release
+- smoke：`tls` feature + `APP_TLS_*` 走 `bind_tls`；`curl -sk https://127.0.0.1:3443/hello` 双二进制 PASS
+- 实测：redis/postgres/mysql/jwt.refresh/auth/testing/runtime.tls/tls.dev/tls.release 全 PASS（见 `docs/EXTERNAL_FEATURE_VERIFY.md`）
+- 清理：`docker compose -f docker-compose.test-services.yml down -v`（可选 `colima stop`）
+- 状态：进行中（待 commit 回填）
