@@ -1,9 +1,10 @@
 use phoenix::prelude::{CommandResult, Console, LogFormat, Logging};
 
-use render_modes_smoke::commands;
+use render_modes_smoke::{commands, features};
 
 #[tokio::main]
 async fn main() -> CommandResult {
+    let plugins = features::plugins()?;
     Console::new(env!("CARGO_PKG_NAME"))
         .about("Phoenix application")
         .serve(|_ctx| async move {
@@ -34,7 +35,11 @@ async fn main() -> CommandResult {
                 .await?;
             Ok(())
         })
-        .commands(commands::registry())
+        .commands(
+            commands::registry()
+                .into_iter()
+                .chain(plugins.into_commands()),
+        )
         .run()
         .await
 }

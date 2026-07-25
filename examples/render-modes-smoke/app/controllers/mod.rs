@@ -1,7 +1,9 @@
 // <phoenix:modules>
+pub mod features_controller;
 pub mod home_controller;
 pub mod note_controller;
 pub mod render_modes_controller;
+pub use features_controller::FeaturesController;
 pub use home_controller::HomeController;
 pub use note_controller::NoteController;
 pub use render_modes_controller::RenderModesController;

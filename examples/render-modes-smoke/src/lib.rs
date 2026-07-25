@@ -4,6 +4,8 @@ pub mod commands;
 pub mod config;
 #[path = "../app/controllers/mod.rs"]
 pub mod controllers;
+#[path = "../app/features/mod.rs"]
+pub mod features;
 #[path = "../app/middleware/mod.rs"]
 pub mod middleware;
 #[cfg(feature = "database")]
@@ -12,6 +14,8 @@ pub mod migrations;
 #[cfg(feature = "database")]
 #[path = "../app/models/mod.rs"]
 pub mod models;
+#[path = "../app/plugins/mod.rs"]
+pub mod plugins;
 #[path = "../app/props/mod.rs"]
 pub mod props;
 #[path = "../app/requests/mod.rs"]
@@ -23,15 +27,16 @@ pub mod resources;
 pub mod seeders;
 
 use phoenix::prelude::{
-    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NodeRenderer, NonceSecurityPolicy,
-    RateLimit, RateLimitConfig, RendererConfig, RendererManifest, RequestId, Routes,
-    ServeProductionAssets, SessionConfig, SessionMiddleware, SessionStore, StateMiddleware,
-    TrustedProxies,
+    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, Metrics, MetricsMiddleware,
+    NodeRenderer, NonceSecurityPolicy, RateLimit, RateLimitConfig, RendererConfig,
+    RendererManifest, Request, RequestId, Routes, ServeProductionAssets, SessionConfig,
+    SessionMiddleware, SessionStore, StateMiddleware, TrustedProxies,
 };
 #[cfg(feature = "database")]
 use phoenix::prelude::{Database, DatabaseError};
 
 use config::AppConfig;
+use features::FeatureServices;
 
 #[must_use]
 #[allow(clippy::duplicate_mod)]
@@ -39,19 +44,31 @@ pub fn routes(
     config: &AppConfig,
     assets: Option<&AssetManifest>,
     renderer: &NodeRenderer,
+    services: &FeatureServices,
+    metrics: &Metrics,
 ) -> Routes {
     let session_config = SessionConfig {
         secure: config.public_url().starts_with("https://"),
         ..SessionConfig::default()
     };
     let session_store = SessionStore::memory(session_config.max_age);
+    let metrics_endpoint = metrics.clone();
+    let plugins = features::plugins().expect("greeter feature installs");
 
     let mut routes = phoenix::mount_routes!()
+        .merge(features::http_routes(services))
+        .merge(plugins.into_routes())
+        .get("/internal/metrics", move |_request: Request| {
+            let metrics = metrics_endpoint.clone();
+            async move { metrics.response() }
+        })
+        .name("internal.metrics")
         .with_middleware(TrustedProxies::new(
             config.trusted_proxies().iter().copied(),
         ))
         .with_middleware(RequestId)
-        .with_middleware(AccessLog);
+        .with_middleware(AccessLog)
+        .with_middleware(MetricsMiddleware::new(metrics.clone()));
     if let Some(assets) = assets.cloned() {
         // Serve hashed Vite assets before session/CSRF so static GETs stay cheap.
         routes = routes.with_middleware(ServeProductionAssets::new(assets, "public/assets"));
@@ -68,6 +85,7 @@ pub fn routes(
         .with_middleware(StateMiddleware::new(config.clone()))
         .with_middleware(StateMiddleware::new(assets.cloned()))
         .with_middleware(StateMiddleware::new(renderer.clone()))
+        .with_middleware(StateMiddleware::new(services.clone()))
 }
 
 fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {
@@ -110,10 +128,17 @@ pub async fn application(
     };
     renderer.warm_up().await?;
     let db = database(&config).await?;
-    Ok(Application::new(
-        routes(&config, assets.as_ref(), &renderer)
-            .with_middleware(StateMiddleware::new(db)),
-    )?)
+    let services = FeatureServices::new()?;
+    let metrics = Metrics::new();
+    let built = routes(
+        &config,
+        assets.as_ref(),
+        &renderer,
+        &services,
+        &metrics,
+    )
+    .with_middleware(StateMiddleware::new(db));
+    Ok(Application::new(built)?.metrics(metrics))
 }
 
 /// Connect the configured database with every registered Toasty model.

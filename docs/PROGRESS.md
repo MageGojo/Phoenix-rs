@@ -571,3 +571,14 @@
 - 编译产物验收：`px release --version 0.1.1 --tarball`；staging 含 `bin/phoenix-manage` + `bin/render-modes-smoke`；`./bin/phoenix-manage migrate`；从 `bin/` 启动后 `POST/GET` 写入 `release-note-1`，assets 200
 - 产物：`examples/render-modes-smoke/**`（含 `src/bin/phoenix-manage.rs`、`app/models/note.rs`、`routes/notes.rs`）
 - 状态：已完成@d173269
+
+## 2026-07-25：框架能力开发/产物双路径验收
+
+- 靶场：`examples/render-modes-smoke` 默认 features 扩至 `sqlite,password,jwt,auth,websocket,sse,metrics,storage,queue,mail`；挂载 `/features/*`、`/internal/metrics`、`/hello` + `greet`（FeatureSet greeter）
+- 脚本：`scripts/verify-features.sh` + `scripts/ws_ping.mjs`（同一套 curl/WS 检查开发态与 release 产物）
+- 开发态：`px migrate` + `px dev` → verify → **pass=20 fail=0**（日志见 `examples/render-modes-smoke/docs/FEATURE_VERIFY.md`）
+- 产物：`px release --version 0.2.0 --tarball` → staging `mkdir storage` + `phoenix-manage migrate` → `bin/render-modes-smoke serve` → 同一脚本 → **pass=20 fail=0**；`greet` → `smoke-hello`
+- 旁路：`phoenix-blog-example` / `phoenix-multi-app-example` release 二进制抽测 **PASS**；`phoenix-redis` / PG / MySQL 无 env·无服务 → **SKIP**（`docs/SIDE_EXAMPLES.md`）
+- 明确不做：redis/pgsql/mysql 不进 smoke 默认依赖；`testing` 不进 release；blog/multi-app 不改写成 `px release` 应用
+- 产物：`examples/render-modes-smoke/{Cargo.toml,app/features/**,app/plugins/**,app/controllers/features_controller.rs,scripts/**,docs/**,README.md}`；`docs/PROGRESS.md`；`docs/工具与约定.md`
+- 状态：进行中（待本条目 commit 后回填哈希）
