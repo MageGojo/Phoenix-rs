@@ -581,4 +581,4 @@
 - 旁路：`phoenix-blog-example` / `phoenix-multi-app-example` release 二进制抽测 **PASS**；`phoenix-redis` / PG / MySQL 无 env·无服务 → **SKIP**（`docs/SIDE_EXAMPLES.md`）
 - 明确不做：redis/pgsql/mysql 不进 smoke 默认依赖；`testing` 不进 release；blog/multi-app 不改写成 `px release` 应用
 - 产物：`examples/render-modes-smoke/{Cargo.toml,app/features/**,app/plugins/**,app/controllers/features_controller.rs,scripts/**,docs/**,README.md}`；`docs/PROGRESS.md`；`docs/工具与约定.md`
-- 状态：进行中（待本条目 commit 后回填哈希）
+- 状态：已完成@2a67da2
