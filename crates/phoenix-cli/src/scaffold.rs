@@ -706,10 +706,7 @@ impl ProjectGenerator {
             "config/schemas/phoenix-config-app.schema.json".into(),
             include_str!("../schemas/phoenix-config-app.schema.json").to_owned(),
         );
-        planned.insert(
-            "taplo.toml".into(),
-            app_taplo_template(has_database),
-        );
+        planned.insert("taplo.toml".into(), app_taplo_template(has_database));
         planned.insert(
             "vite.config.ts".into(),
             vite_template(false, stored.tailwind),
@@ -719,18 +716,12 @@ impl ProjectGenerator {
             vite_template(true, stored.tailwind),
         );
         planned.insert("tsconfig.json".into(), tsconfig_template());
-        planned.insert(
-            "deploy/restart.sh.example".into(),
-            deploy_restart_example(),
-        );
+        planned.insert("deploy/restart.sh.example".into(), deploy_restart_example());
         planned.insert(
             ".gitignore".into(),
             "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned(),
         );
-        planned.insert(
-            PROJECT_OPTIONS_FILE.into(),
-            format_stored_options(&stored),
-        );
+        planned.insert(PROJECT_OPTIONS_FILE.into(), format_stored_options(&stored));
 
         if let Some(database) = stored.database {
             planned.insert(
@@ -744,14 +735,8 @@ impl ProjectGenerator {
             // Ensure empty registries exist when upgrading a no-db project that later
             // recorded a database in `.phoenix` — do not overwrite populated registries.
             for (path, content) in [
-                (
-                    "app/models/mod.rs",
-                    empty_model_registry(),
-                ),
-                (
-                    "database/migrations/mod.rs",
-                    empty_migration_registry(),
-                ),
+                ("app/models/mod.rs", empty_model_registry()),
+                ("database/migrations/mod.rs", empty_migration_registry()),
                 ("database/seeders/mod.rs", seeder_template()),
             ] {
                 if !self.root.join(path).is_file() {
@@ -820,7 +805,9 @@ impl ProjectGenerator {
             })?;
         }
 
-        if !options.dry_run && options.install_dependencies && self.root.join("package.json").is_file()
+        if !options.dry_run
+            && options.install_dependencies
+            && self.root.join("package.json").is_file()
         {
             run_required("npm", &["install"], &self.root)?;
             let _ = self.refresh_types()?;
@@ -852,9 +839,7 @@ fn framework_dependency_pins(
             format!(
                 "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-{APIZERO_REACT_SSR_VERSION}.tgz"
             ),
-            format!(
-                "https://registry.npmjs.org/@apizero/vite/-/vite-{APIZERO_VITE_VERSION}.tgz"
-            ),
+            format!("https://registry.npmjs.org/@apizero/vite/-/vite-{APIZERO_VITE_VERSION}.tgz"),
         )),
         DependencySource::Local(root) => {
             let root = absolute_path(root)?;
@@ -1017,7 +1002,10 @@ fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
         }
     }
     if !replaced {
-        if let Some(index) = lines.iter().position(|line| line.trim() == "[dependencies]") {
+        if let Some(index) = lines
+            .iter()
+            .position(|line| line.trim() == "[dependencies]")
+        {
             lines.insert(index + 1, phoenix_dependency.to_owned());
         } else {
             lines.push(String::new());
@@ -1042,7 +1030,10 @@ fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
     ];
     let mut missing = Vec::new();
     for (prefix, line) in required_features {
-        if !lines.iter().any(|existing| existing.trim_start().starts_with(prefix)) {
+        if !lines
+            .iter()
+            .any(|existing| existing.trim_start().starts_with(prefix))
+        {
             missing.push(line.to_owned());
         }
     }
@@ -1070,15 +1061,17 @@ fn patch_package_json_core(
     vite: &str,
     tailwind: bool,
 ) -> Result<String, ScaffoldError> {
-    let mut value: serde_json::Value = serde_json::from_str(raw).map_err(|source| {
-        ScaffoldError::Io {
+    let mut value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|source| ScaffoldError::Io {
             path: PathBuf::from("package.json"),
             source: std::io::Error::new(ErrorKind::InvalidData, source.to_string()),
-        }
-    })?;
+        })?;
     let object = value.as_object_mut().ok_or_else(|| ScaffoldError::Io {
         path: PathBuf::from("package.json"),
-        source: std::io::Error::new(ErrorKind::InvalidData, "package.json root must be an object"),
+        source: std::io::Error::new(
+            ErrorKind::InvalidData,
+            "package.json root must be an object",
+        ),
     })?;
 
     let dependencies = object
@@ -1144,10 +1137,11 @@ fn patch_package_json_core(
         }
     }
 
-    let mut rendered = serde_json::to_string_pretty(&value).map_err(|source| ScaffoldError::Io {
-        path: PathBuf::from("package.json"),
-        source: std::io::Error::new(ErrorKind::InvalidData, source.to_string()),
-    })?;
+    let mut rendered =
+        serde_json::to_string_pretty(&value).map_err(|source| ScaffoldError::Io {
+            path: PathBuf::from("package.json"),
+            source: std::io::Error::new(ErrorKind::InvalidData, source.to_string()),
+        })?;
     rendered.push('\n');
     Ok(rendered)
 }
@@ -3089,7 +3083,10 @@ mod tests {
         assert!(application.contains("StateMiddleware::new(renderer.clone())"));
         assert!(application.contains("RendererConfig::production"));
         assert!(application.contains("renderer.warm_up().await"));
-        assert!(application.contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()"));
+        assert!(
+            application
+                .contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()")
+        );
         assert!(application.contains("RendererConfig::node(\"public/ssr/renderer.js\")"));
         let home_controller =
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
@@ -3343,14 +3340,14 @@ mod tests {
             )
             .unwrap();
         assert!(
-            changed
-                .iter()
-                .any(|path| path.ends_with("src/lib.rs")),
+            changed.iter().any(|path| path.ends_with("src/lib.rs")),
             "expected src/lib.rs to be refreshed"
         );
 
         let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-        assert!(lib.contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()"));
+        assert!(
+            lib.contains("let vite_dev_server = std::env::var_os(\"PHOENIX_VITE_DEV\").is_some()")
+        );
         assert!(!lib.contains("// stale core"));
         let route_after = fs::read_to_string(root.join("routes/web.rs")).unwrap();
         assert!(route_after.contains("// business marker"));

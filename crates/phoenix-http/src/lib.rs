@@ -23,17 +23,17 @@ use thiserror::Error;
 #[doc(hidden)]
 pub use tokio_util::sync::CancellationToken as ResponseCancellationToken;
 
-mod upgrade;
 #[cfg(feature = "sse")]
 mod sse;
+mod upgrade;
 #[cfg(feature = "websocket")]
 mod ws;
 
-pub use upgrade::ConnectionUpgrade;
 #[cfg(feature = "sse")]
 pub use sse::{
     InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError, SseEvent,
 };
+pub use upgrade::ConnectionUpgrade;
 #[cfg(feature = "websocket")]
 pub use ws::{
     CloseCode, CloseFrame, Message, WebSocket, WebSocketConfigError, WebSocketError,

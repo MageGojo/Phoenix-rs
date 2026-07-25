@@ -1169,8 +1169,7 @@ async fn handle_distributed_session(
     next: Next,
     backend: Arc<dyn SessionBackend>,
     config: Arc<SessionConfig>,
-    #[cfg(feature = "metrics")]
-    metrics: Option<Metrics>,
+    #[cfg(feature = "metrics")] metrics: Option<Metrics>,
 ) -> Response {
     let supplied_id =
         cookie_value(request.headers(), &config.cookie_name).filter(|id| valid_session_id(id));

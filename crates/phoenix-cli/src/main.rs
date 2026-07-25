@@ -364,10 +364,17 @@ fn update_project(arguments: Vec<String>) -> Result<(), String> {
         .update_core(&options)
         .map_err(|error| error.to_string())?;
     if changed.is_empty() {
-        println!("Core files already up to date at {}", generator.root().display());
+        println!(
+            "Core files already up to date at {}",
+            generator.root().display()
+        );
         return Ok(());
     }
-    let label = if options.dry_run { "WOULD UPDATE" } else { "UPDATED" };
+    let label = if options.dry_run {
+        "WOULD UPDATE"
+    } else {
+        "UPDATED"
+    };
     for path in &changed {
         println!(
             "{label} {}",
@@ -405,7 +412,11 @@ fn prompt_render_mode() -> Result<ProjectRenderMode, String> {
         "Rendering mode",
         "Choose how React pages are delivered to the browser.",
         &[
-            ("0", "Islands", "Recommended — hydrate only interactive components"),
+            (
+                "0",
+                "Islands",
+                "Recommended — hydrate only interactive components",
+            ),
             ("1", "SPA", "Client-rendered application shell"),
             ("2", "SSR", "Render the full HTML document on every request"),
         ],
@@ -424,7 +435,11 @@ fn prompt_database() -> Result<Option<ProjectDatabase>, String> {
         "Database",
         "Optional — adds Toasty dependencies, configuration, and migration scaffolding.",
         &[
-            ("0", "None", "No database dependency; smallest release binary"),
+            (
+                "0",
+                "None",
+                "No database dependency; smallest release binary",
+            ),
             ("1", "SQLite", "Local file database with zero configuration"),
             ("2", "PostgreSQL", "Enable the pgsql driver feature"),
             ("3", "MySQL", "Enable the MySQL / MariaDB driver feature"),

@@ -1,12 +1,12 @@
 //! Default-deny RBAC and ABAC authorization for Phoenix applications.
 
+#[cfg(feature = "jwt")]
+use std::marker::PhantomData;
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
     sync::Arc,
 };
-#[cfg(feature = "jwt")]
-use std::marker::PhantomData;
 
 #[cfg(feature = "jwt")]
 use phoenix_crypto::{Jwt, JwtClaims};

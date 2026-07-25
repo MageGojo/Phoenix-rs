@@ -3,8 +3,6 @@ pub use phoenix_auth as auth;
 pub use phoenix_config as config;
 pub use phoenix_console as console;
 pub use phoenix_console::commands;
-pub use phoenix_runtime as core;
-pub use phoenix_runtime::applications;
 pub use phoenix_crypto as crypto;
 #[cfg(feature = "database")]
 pub use phoenix_database as database;
@@ -18,6 +16,8 @@ pub use phoenix_metrics as metrics;
 pub use phoenix_plugin as plugin;
 pub use phoenix_routing as routing;
 pub use phoenix_routing::routes;
+pub use phoenix_runtime as core;
+pub use phoenix_runtime::applications;
 pub use phoenix_security as security;
 pub use phoenix_validation as validation;
 pub use phoenix_view as view;
@@ -34,6 +34,8 @@ pub use phoenix_storage as storage;
 pub use phoenix_testing as testing;
 
 pub mod prelude {
+    #[cfg(all(feature = "auth", feature = "jwt"))]
+    pub use phoenix_auth::PrincipalFromJwt;
     #[cfg(feature = "auth")]
     pub use phoenix_auth::{
         AbacPolicy, AuditReason, AuthorizationAudit, AuthorizationAuditEvent,
@@ -41,17 +43,8 @@ pub mod prelude {
         CurrentPrincipal, Permission, PolicyFn, Principal, Rbac, RbacError, RequirePermission,
         Role, policy_fn,
     };
-    #[cfg(all(feature = "auth", feature = "jwt"))]
-    pub use phoenix_auth::PrincipalFromJwt;
     pub use phoenix_config::{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue};
     pub use phoenix_console::{CommandContext, CommandEntry, CommandResult, Console, commands};
-    pub use phoenix_runtime::applications;
-    pub use phoenix_runtime::{
-        Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
-        MultiApplicationError, Server, ServerError, ServerHandle,
-    };
-    #[cfg(feature = "tls")]
-    pub use phoenix_runtime::{TlsConfig, TlsConfigError};
     pub use phoenix_crypto::{
         BlindIndexError, BlindIndexKey, BlindIndexer, Ciphertext,
         EncryptionError as CryptoEncryptionError, EncryptionKey, Encryptor, MAX_BLIND_INDEX_KEYS,
@@ -72,24 +65,31 @@ pub mod prelude {
     };
     pub use phoenix_http::{
         BoxFuture, ByteStream, ConnectionInfo, CspNonce, Download, Form, FormRejection,
-        FromMultipart, FromRequest, Handler, Header, HeaderRejection, IntoResponse, InvalidCspNonce,
-        Json, JsonRejection, Method, Middleware, Mime, Multipart, MultipartData, MultipartField,
-        MultipartRejection, Next, Path, PathRejection, Query, QueryRejection, Redirect, Request,
-        RequestBodyError, RequestBodyMode, RequestBodyStream, RequestBodyStreamRejection, Response,
-        ResponseBody, ResponseContext, RouteManifest, SecurityHeaders, State, StateMiddleware,
-        StateRejection, StatusCode, StreamingHandler, TransportScheme, TypedHandler, Uri, Version,
-        middleware_fn, streaming, typed,
-    };
-    #[cfg(feature = "sse")]
-    pub use phoenix_http::{
-        InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError,
-        SseEvent,
+        FromMultipart, FromRequest, Handler, Header, HeaderRejection, IntoResponse,
+        InvalidCspNonce, Json, JsonRejection, Method, Middleware, Mime, Multipart, MultipartData,
+        MultipartField, MultipartRejection, Next, Path, PathRejection, Query, QueryRejection,
+        Redirect, Request, RequestBodyError, RequestBodyMode, RequestBodyStream,
+        RequestBodyStreamRejection, Response, ResponseBody, ResponseContext, RouteManifest,
+        SecurityHeaders, State, StateMiddleware, StateRejection, StatusCode, StreamingHandler,
+        TransportScheme, TypedHandler, Uri, Version, middleware_fn, streaming, typed,
     };
     #[cfg(feature = "websocket")]
     pub use phoenix_http::{
         CloseCode, CloseFrame, Message, WebSocket, WebSocketConfigError, WebSocketError,
         WebSocketUpgrade, WebSocketUpgradeRejection,
     };
+    #[cfg(feature = "sse")]
+    pub use phoenix_http::{
+        InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError,
+        SseEvent,
+    };
+    pub use phoenix_runtime::applications;
+    pub use phoenix_runtime::{
+        Application, ApplicationModule, HttpProtocol, MultiApplicationBuilder,
+        MultiApplicationError, Server, ServerError, ServerHandle,
+    };
+    #[cfg(feature = "tls")]
+    pub use phoenix_runtime::{TlsConfig, TlsConfigError};
     // ConnectionUpgrade is always available for Hyper upgrades.
     pub use phoenix_http::ConnectionUpgrade;
     pub use phoenix_logging::{LogFormat, Logging, LoggingError, LoggingGuard};
@@ -135,12 +135,12 @@ pub mod prelude {
         JobEnvelope, JobError, JobHandler, JobId, MemoryQueue, PushOptions, PushResult, Queue,
         QueueBackend, QueueError, ShutdownSignal, ShutdownToken, Worker, WorkerConfig,
     };
+    #[cfg(all(feature = "redis", feature = "jwt"))]
+    pub use phoenix_redis::RedisTokenStore;
     #[cfg(feature = "redis")]
     pub use phoenix_redis::{
         RedisBackends, RedisConnectError, RedisRateLimitBackend, RedisSessionBackend, RedisStores,
     };
-    #[cfg(all(feature = "redis", feature = "jwt"))]
-    pub use phoenix_redis::RedisTokenStore;
     #[cfg(feature = "storage")]
     pub use phoenix_storage::{LocalDisk, Storage, StorageError, sanitize_key};
     #[cfg(feature = "testing")]

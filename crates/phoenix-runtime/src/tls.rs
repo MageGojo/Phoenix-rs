@@ -118,4 +118,3 @@ pub enum TlsConfigError {
     #[error("TLS handshake timeout must be greater than zero")]
     InvalidHandshakeTimeout,
 }
-
