@@ -562,4 +562,4 @@
   - 本地 `px release --version 0.1.0 --tarball` smoke；从 staging `bin/` 启动后三模式 header 正确，SPA 空壳 / Islands 含 counter / SSR 含完整 HTML，`/assets/phoenix-*.js` 200
   - `cargo run -- serve`（无 `PHOENIX_VITE_DEV`）三模式同样通过
 - 产物：`crates/phoenix-console/src/lib.rs`、`crates/phoenix-view/src/assets.rs`、`crates/phoenix-cli/src/release.rs`、`examples/render-modes-smoke/**`
-- 状态：进行中（待 commit）
+- 状态：已完成@b918aed
