@@ -48,9 +48,9 @@ jobs:
       - name: Generate Rust LCOV
         run: |
           mkdir -p coverage/rust
-          # Ignore CLI argv dispatch glue only (not library business modules).
+          # Ignore px-cli entry/dispatch glue only. Library crates (incl. phoenix-release) stay in the gate.
           cargo llvm-cov --workspace --locked --all-features \
-            --ignore-filename-regex 'crates/phoenix-cli/src/main\.rs$' \
+            --ignore-filename-regex 'crates/phoenix-cli/src/(main|release)\.rs$' \
             --fail-under-lines 85 \
             --lcov --output-path coverage/rust/lcov.info
       - name: Install exact Node dependencies

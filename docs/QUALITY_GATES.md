@@ -26,10 +26,10 @@ npm run test:e2e:ssr-csp
 cargo deny check advisories licenses bans sources
 npm audit --audit-level=high
 # Coverage job also starts Redis (PHOENIX_TEST_REDIS_URL) so redis contracts count.
-# CLI argv glue `crates/phoenix-cli/src/main.rs` is ignored; library crates are not.
+# Ignore px-cli dispatch glue (`main.rs` / `release.rs`); library crates are not excluded.
 PHOENIX_TEST_REDIS_URL='redis://127.0.0.1:6379/0' \
   cargo llvm-cov --workspace --locked --all-features \
-  --ignore-filename-regex 'crates/phoenix-cli/src/main\.rs$' \
+  --ignore-filename-regex 'crates/phoenix-cli/src/(main|release)\.rs$' \
   --fail-under-lines 85
 npm run test:coverage:js
 cargo bench --locked --manifest-path benchmarks/Cargo.toml --bench blind_index
