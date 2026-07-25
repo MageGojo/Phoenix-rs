@@ -4,7 +4,7 @@ description = "Phoenix-rs: Laravel-inspired Rust + React web framework by ApiZer
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-version = "0.1.3"
+version = "0.1.4"
 authors.workspace = true
 readme = "../../README.md"
 homepage = "https://apizero.cn/"
@@ -45,7 +45,7 @@ mail = ["dep:phoenix-mail"]
 [dependencies]
 phoenix-auth = { version = "0.1.1", path = "../phoenix-auth", default-features = false, optional = true }
 phoenix-config = { version = "0.1.1", path = "../phoenix-config" }
-phoenix-console = { version = "0.1.1", path = "../phoenix-console" }
+phoenix-console = { version = "0.1.2", path = "../phoenix-console" }
 phoenix-runtime = { version = "0.1.1", path = "../phoenix-runtime", default-features = false }
 phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
 phoenix-database = { version = "0.1.1", path = "../phoenix-database", default-features = false, optional = true }
@@ -63,7 +63,7 @@ phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-fe
 phoenix-storage = { version = "0.1.1", path = "../phoenix-storage", optional = true }
 phoenix-testing = { version = "0.1.1", path = "../phoenix-testing", optional = true }
 phoenix-validation = { version = "0.1.1", path = "../phoenix-validation" }
-phoenix-view = { version = "0.1.3", path = "../phoenix-view", default-features = false }
+phoenix-view = { version = "0.1.4", path = "../phoenix-view", default-features = false }
 
 [lints]
 workspace = true
