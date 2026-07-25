@@ -598,4 +598,4 @@
 - crates.io：`phoenix-console 0.1.2`、`phoenix-view 0.1.4`、`phoenixrs 0.1.4`、`px-cli 0.1.10`
 - GitHub Release：[v0.1.10](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.10)
 - 未上传：`.env` / 证书与 sqlite / `dist/` / Docker 卷；未重发无变更 crate / npm
-- 状态：进行中（待 commit 回填）
+- 状态：已完成@57637b0
