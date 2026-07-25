@@ -591,3 +591,11 @@
 - 实测：redis/postgres/mysql/jwt.refresh/auth/testing/runtime.tls/tls.dev/tls.release 全 PASS（见 `docs/EXTERNAL_FEATURE_VERIFY.md`）
 - 清理：`docker compose -f docker-compose.test-services.yml down -v`（可选 `colima stop`）
 - 状态：已完成@63b377c
+
+## 2026-07-25：同步 GitHub / GitCode + crates.io v0.1.10
+
+- Push：`origin` + `gitcode` → `main@b585575`
+- crates.io：`phoenix-console 0.1.2`、`phoenix-view 0.1.4`、`phoenixrs 0.1.4`、`px-cli 0.1.10`
+- GitHub Release：[v0.1.10](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.10)
+- 未上传：`.env` / 证书与 sqlite / `dist/` / Docker 卷；未重发无变更 crate / npm
+- 状态：进行中（待 commit 回填）
