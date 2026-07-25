@@ -109,11 +109,11 @@ pub async fn application(
         )
     };
     renderer.warm_up().await?;
-    Ok(Application::new(routes(
-        &config,
-        assets.as_ref(),
-        &renderer,
-    ))?)
+    let db = database(&config).await?;
+    Ok(Application::new(
+        routes(&config, assets.as_ref(), &renderer)
+            .with_middleware(StateMiddleware::new(db)),
+    )?)
 }
 
 /// Connect the configured database with every registered Toasty model.

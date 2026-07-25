@@ -563,3 +563,11 @@
   - `cargo run -- serve`（无 `PHOENIX_VITE_DEV`）三模式同样通过
 - 产物：`crates/phoenix-console/src/lib.rs`、`crates/phoenix-view/src/assets.rs`、`crates/phoenix-cli/src/release.rs`、`examples/render-modes-smoke/**`
 - 状态：已完成@b918aed
+
+## 2026-07-25：render-modes-smoke 启用 SQLite 并双路径验收
+
+- 内容：`.phoenix database=sqlite`；Cargo `sqlite` feature + `toasty`；`config/database.toml`；`phoenix-manage`；`Note` 模型/迁移；`GET/POST /notes` 真实读写；`application()` 注入 `StateMiddleware<Database>`
+- 开发态验收：`px migrate` → `px dev` → CSRF + `POST /notes {"name":"dev-note-1"}` → `GET /notes` HTML 含该笔记
+- 编译产物验收：`px release --version 0.1.1 --tarball`；staging 含 `bin/phoenix-manage` + `bin/render-modes-smoke`；`./bin/phoenix-manage migrate`；从 `bin/` 启动后 `POST/GET` 写入 `release-note-1`，assets 200
+- 产物：`examples/render-modes-smoke/**`（含 `src/bin/phoenix-manage.rs`、`app/models/note.rs`、`routes/notes.rs`）
+- 状态：进行中（待 commit）

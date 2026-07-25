@@ -19,8 +19,12 @@ export default function Home({ title, description }: HomeProps) {
           <strong>SSR</strong>
           <span>Server renders and hydrates the whole page.</span>
         </a>
+        <a href="/notes">
+          <strong>SQLite</strong>
+          <span>Migrate, create, and list notes from disk.</span>
+        </a>
       </nav>
-      <code>Open each link to compare the render mode.</code>
+      <code>Open each link to compare render modes and database I/O.</code>
     </main>
   );
 }

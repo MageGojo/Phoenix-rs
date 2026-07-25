@@ -1,6 +1,7 @@
 // <phoenix:modules>
 pub mod home_props;
 pub mod islands_props;
+pub mod notes;
 pub mod spa_props;
 pub mod ssr_props;
 pub use home_props::HomeProps;

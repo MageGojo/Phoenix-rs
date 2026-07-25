@@ -2,7 +2,7 @@ pub use phoenix::config::{AppConfig, AppConfigBuilder, ConfigError, Environment,
 
 /// Load this application's configuration.
 ///
-/// Reads `config/app.toml`, then `.env`, then process environment.
+/// Reads `config/app.toml` + `config/database.toml`, then `.env`, then process environment.
 ///
 /// # Errors
 ///

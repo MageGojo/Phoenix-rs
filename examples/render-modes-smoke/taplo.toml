@@ -4,3 +4,8 @@
 include = ["config/app.toml"]
 [rule.schema]
 path = "./config/schemas/phoenix-config-app.schema.json"
+
+[[rule]]
+include = ["config/database.toml"]
+[rule.schema]
+path = "./config/schemas/phoenix-config-database.schema.json"

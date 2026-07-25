@@ -1,4 +1,4 @@
 frontend=tsx
 render_mode=islands
-database=none
+database=sqlite
 tailwind=false

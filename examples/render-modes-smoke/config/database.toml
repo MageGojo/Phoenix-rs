@@ -1,0 +1,36 @@
+# Database connections (Laravel-style config/database).
+#
+# Switch engines by changing `default`:
+#   default = "sqlite"   # local file, zero setup
+#   default = "pgsql"    # PostgreSQL
+#   default = "mysql"    # MySQL / MariaDB
+# Enable the matching Cargo feature only when this application uses a database.
+#
+# Or set DB_CONNECTION=pgsql|mysql in `.env` without editing this file.
+# Put DB_PASSWORD in `.env` — do not commit production passwords here.
+# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
+
+#:schema ./schemas/phoenix-config-database.schema.json
+
+default = "sqlite"
+
+[connections.sqlite]
+driver = "sqlite"
+# Path is relative to the application root (creates parent dirs as needed by the OS/driver).
+database = "storage/app.sqlite"
+
+[connections.pgsql]
+driver = "pgsql"
+host = "127.0.0.1"
+port = 5432
+database = "phoenix"
+username = "phoenix"
+password = ""
+
+[connections.mysql]
+driver = "mysql"
+host = "127.0.0.1"
+port = 3306
+database = "phoenix"
+username = "phoenix"
+password = ""
