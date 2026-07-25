@@ -590,4 +590,4 @@
 - smoke：`tls` feature + `APP_TLS_*` 走 `bind_tls`；`curl -sk https://127.0.0.1:3443/hello` 双二进制 PASS
 - 实测：redis/postgres/mysql/jwt.refresh/auth/testing/runtime.tls/tls.dev/tls.release 全 PASS（见 `docs/EXTERNAL_FEATURE_VERIFY.md`）
 - 清理：`docker compose -f docker-compose.test-services.yml down -v`（可选 `colima stop`）
-- 状态：进行中（待 commit 回填）
+- 状态：已完成@63b377c
