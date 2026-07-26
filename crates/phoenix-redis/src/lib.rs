@@ -9,17 +9,29 @@
 
 #![forbid(unsafe_code)]
 
+mod broadcast;
 mod keys;
+#[cfg(feature = "queue")]
+mod queue;
 mod rate_limit;
+#[cfg(feature = "schedule")]
+mod schedule_lock;
 mod session;
 #[cfg(feature = "jwt")]
 mod token;
 
+pub use broadcast::RedisBroadcaster;
+#[cfg(feature = "schedule")]
+pub use keys::schedule_lock_key;
 pub use keys::{
-    access_key, family_key, family_members_key, rate_limit_key, redact_redis_url, refresh_key,
-    session_key,
+    BROADCAST_CHANNEL, access_key, family_key, family_members_key, rate_limit_key,
+    redact_redis_url, refresh_key, session_key,
 };
+#[cfg(feature = "queue")]
+pub use queue::{DEFAULT_VISIBILITY_TIMEOUT, RedisQueue};
 pub use rate_limit::RedisRateLimitBackend;
+#[cfg(feature = "schedule")]
+pub use schedule_lock::RedisScheduleLock;
 pub use session::RedisSessionBackend;
 #[cfg(feature = "jwt")]
 pub use token::RedisTokenStore;
@@ -92,6 +104,27 @@ impl RedisStores {
     #[must_use]
     pub fn token(&self) -> RedisTokenStore {
         RedisTokenStore::new(self.conn.clone())
+    }
+
+    /// Durable job queue backend for `name`, sharing this connection pool.
+    ///
+    /// Implements [`phoenix_queue::QueueBackend`]; workers across processes may
+    /// share one queue name. See [`RedisQueue`] for the key space and
+    /// visibility-timeout semantics.
+    #[cfg(feature = "queue")]
+    #[must_use]
+    pub fn queue(&self, name: impl Into<String>) -> RedisQueue {
+        RedisQueue::new(self.conn.clone(), name.into())
+    }
+
+    /// Distributed scheduler overlap lock, sharing this connection pool.
+    ///
+    /// Implements [`phoenix_schedule::ScheduleLock`]; inject it with
+    /// `Schedule::with_lock` so only one instance runs a given job at a time.
+    #[cfg(feature = "schedule")]
+    #[must_use]
+    pub fn schedule_lock(&self) -> RedisScheduleLock {
+        RedisScheduleLock::new(self.conn.clone())
     }
 }
 

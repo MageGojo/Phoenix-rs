@@ -10,21 +10,34 @@ homepage.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["queue", "schedule"]
 jwt = ["phoenix-crypto/jwt"]
+# Redis-backed durable job queue (implements `phoenix_queue::QueueBackend`).
+queue = ["dep:phoenix-queue"]
+# Redis-backed distributed scheduler lock (`phoenix_schedule::ScheduleLock`).
+schedule = ["dep:phoenix-schedule", "dep:uuid", "dep:tracing"]
 
 [dependencies]
+futures-util.workspace = true
 phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
-phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+# The `websocket` feature carries the Hub and its cross-instance Broadcaster
+# seam, which `RedisBroadcaster` implements.
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false, features = ["websocket"] }
+phoenix-queue = { version = "0.1.1", path = "../phoenix-queue", default-features = false, optional = true }
+phoenix-schedule = { version = "0.1.1", path = "../phoenix-schedule", optional = true }
 phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-features = false }
 redis = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing = { workspace = true, optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 [dev-dependencies]
 phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", features = ["jwt"] }
+phoenix-queue = { version = "0.1.1", path = "../phoenix-queue" }
+phoenix-schedule = { version = "0.1.1", path = "../phoenix-schedule" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

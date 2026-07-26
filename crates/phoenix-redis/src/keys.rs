@@ -7,6 +7,12 @@ pub(crate) const FAMILY_PREFIX: &str = "phoenix:token:family:";
 pub(crate) const FAMILY_MEMBERS_PREFIX: &str = "phoenix:token:family_members:";
 pub(crate) const ACCESS_PREFIX: &str = "phoenix:token:access:";
 
+/// Default Redis pub/sub channel for cross-instance realtime fan-out.
+///
+/// Not a key prefix: pub/sub channels live in their own namespace and are never
+/// persisted.
+pub const BROADCAST_CHANNEL: &str = "phoenix:ws:broadcast";
+
 #[must_use]
 pub fn session_key(id: &str) -> String {
     format!("{SESSION_PREFIX}{id}")
@@ -35,6 +41,44 @@ pub fn family_members_key(family_id: &str) -> String {
 #[must_use]
 pub fn access_key(token_id: &str) -> String {
     format!("{ACCESS_PREFIX}{token_id}")
+}
+
+/// Key space for the Redis job queue, namespaced per queue name.
+#[cfg(feature = "queue")]
+pub(crate) struct QueueKeys {
+    /// ZSET, score = `available_at` (unix secs), member = job id.
+    pub ready: String,
+    /// ZSET, score = visibility deadline (unix secs), member = job id.
+    pub reserved: String,
+    /// HASH, field = job id, value = envelope JSON.
+    pub jobs: String,
+    /// HASH, field = job id, value = attempts counter.
+    pub attempts: String,
+    /// HASH, field = idempotency key, value = job id (while in-flight).
+    pub idem: String,
+    /// LIST, dead-lettered `{"attempts":N,"envelope":…}` records.
+    pub dead: String,
+}
+
+#[cfg(feature = "queue")]
+impl QueueKeys {
+    pub(crate) fn new(name: &str) -> Self {
+        Self {
+            ready: format!("phoenix:queue:{name}:ready"),
+            reserved: format!("phoenix:queue:{name}:reserved"),
+            jobs: format!("phoenix:queue:{name}:jobs"),
+            attempts: format!("phoenix:queue:{name}:attempts"),
+            idem: format!("phoenix:queue:{name}:idem"),
+            dead: format!("phoenix:queue:{name}:dead"),
+        }
+    }
+}
+
+/// Key for a distributed scheduler overlap lock, keyed by job name.
+#[cfg(feature = "schedule")]
+#[must_use]
+pub fn schedule_lock_key(name: &str) -> String {
+    format!("phoenix:lock:{name}")
 }
 
 /// Redact password material in a Redis URL for logs and `Debug`.
@@ -97,6 +141,24 @@ mod tests {
         assert_eq!(family_key("f"), "phoenix:token:family:f");
         assert_eq!(family_members_key("f"), "phoenix:token:family_members:f");
         assert_eq!(access_key("jti"), "phoenix:token:access:jti");
+    }
+
+    #[cfg(feature = "queue")]
+    #[test]
+    fn queue_keys_are_namespaced_per_queue() {
+        let keys = QueueKeys::new("emails");
+        assert_eq!(keys.ready, "phoenix:queue:emails:ready");
+        assert_eq!(keys.reserved, "phoenix:queue:emails:reserved");
+        assert_eq!(keys.jobs, "phoenix:queue:emails:jobs");
+        assert_eq!(keys.attempts, "phoenix:queue:emails:attempts");
+        assert_eq!(keys.idem, "phoenix:queue:emails:idem");
+        assert_eq!(keys.dead, "phoenix:queue:emails:dead");
+    }
+
+    #[cfg(feature = "schedule")]
+    #[test]
+    fn schedule_lock_key_matches_design_doc() {
+        assert_eq!(schedule_lock_key("sitemap"), "phoenix:lock:sitemap");
     }
 
     #[test]

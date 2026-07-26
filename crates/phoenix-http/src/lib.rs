@@ -23,12 +23,21 @@ use thiserror::Error;
 #[doc(hidden)]
 pub use tokio_util::sync::CancellationToken as ResponseCancellationToken;
 
+#[cfg(feature = "websocket")]
+mod hub;
 #[cfg(feature = "sse")]
 mod sse;
 mod upgrade;
 #[cfg(feature = "websocket")]
 mod ws;
 
+#[cfg(feature = "websocket")]
+pub use hub::{
+    AllowAll, Authorizer, Broadcaster, Connection, ConnectionContext, ConnectionId, ConnectionMeta,
+    Hub, HubBuilder, HubConfig, HubId, JoinError, LocalBroadcaster, Outbound, Outgoing, PeerFrame,
+    PeerStream, PeerTarget, PresenceEvent, PresenceEventKind, PresenceMember, SendError,
+    SlowConsumer,
+};
 #[cfg(feature = "sse")]
 pub use sse::{
     InvalidSseField, KeepAlive, LastEventId, LastEventIdRejection, Sse, SseConfigError, SseEvent,
@@ -41,6 +50,38 @@ pub use ws::{
 };
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+/// Default path of the Phoenix secure-transport ECDH handshake endpoint.
+///
+/// Shared wire constants for the "one-tap encrypted transport" feature. The
+/// cryptography lives in `phoenix-crypto` and the response codec in
+/// `phoenix-view`; both sit *above* `phoenix-http` in the dependency graph, so
+/// the protocol's magic strings are centralized here to keep the client and
+/// server halves byte-for-byte aligned.
+pub const SECURE_HANDSHAKE_PATH: &str = "/__phoenix/secure/handshake";
+
+/// Request header a client sets (`= "1"`) to ask the server to encrypt the
+/// page-protocol reply for the negotiated session.
+pub const SECURE_REQUEST_HEADER: &str = "x-phoenix-secure";
+
+/// Request header carrying the negotiated `key_id` for the encrypted reply.
+pub const SECURE_KEY_HEADER: &str = "x-phoenix-key";
+
+/// Header marking a body as an encrypted (`"1"`) or plaintext (`"0"`) Phoenix
+/// secure frame. Set by the server on responses and by the client on encrypted
+/// request bodies.
+pub const SECURE_ENCRYPTED_HEADER: &str = "x-phoenix-encrypted";
+
+/// Request header carrying the content type of an encrypted request body's
+/// *plaintext*, so the server can restore it after opening the frame. Absent
+/// means `application/json`.
+pub const SECURE_PLAINTEXT_TYPE_HEADER: &str = "x-phoenix-content-type";
+
+/// Content type of a binary Phoenix secure frame.
+pub const SECURE_CONTENT_TYPE: &str = "application/vnd.phoenix.secure";
+
+/// Content type of a (plaintext or JSON-encrypted) page-protocol response.
+pub const PAGE_PROTOCOL_MEDIA_TYPE: &str = "application/vnd.phoenix.page+json";
 
 /// Transport scheme established by the socket or a trusted proxy layer.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -397,6 +438,18 @@ impl Request {
     /// or the [`RequestBodyStream`] extractor on those routes.
     pub fn body(&self) -> &Bytes {
         &self.body
+    }
+
+    /// Replace the buffered request body.
+    ///
+    /// For middleware that transforms a body before the handler sees it (the
+    /// secure transport decrypts request frames this way). Callers are
+    /// responsible for keeping `Content-Type` and `Content-Length` consistent
+    /// with the new bytes; extractors read the buffer, not the headers, so a
+    /// stale `Content-Length` is not load-bearing here but is still misleading
+    /// if left behind.
+    pub fn replace_body(&mut self, body: Bytes) {
+        self.body = body;
     }
 
     #[must_use]
