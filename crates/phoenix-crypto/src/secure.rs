@@ -115,6 +115,10 @@ pub enum SecureError {
     /// The system clock is before the Unix epoch.
     #[error("system clock is before the Unix epoch")]
     Clock,
+    /// The session store could not be read or written. Requests that need a
+    /// session fail closed rather than falling back to plaintext.
+    #[error("secure session store unavailable: {0}")]
+    SessionStore(String),
 }
 
 /// Current Unix time in seconds.
@@ -347,8 +351,112 @@ struct Session {
     expires_at: u64,
 }
 
-struct Inner {
+/// Where negotiated session keys live.
+///
+/// The default [`MemorySecureSessionStore`] keeps them in this process, which
+/// means a client must keep talking to the instance it handshook with. Behind a
+/// load balancer that needs either sticky routing on `key_id` or a shared
+/// store — `phoenix-redis` ships `RedisSecureSessionStore` for the latter.
+///
+/// **What is being stored is key material.** A shared store holds live
+/// AES-256-GCM keys, so it inherits the same handling as any other secret:
+/// authenticated, TLS-only, and ideally not persisted to disk. The short
+/// [`SecureTransportConfig::session_ttl`] is what bounds the exposure.
+pub trait SecureSessionStore: Send + Sync {
+    /// Persist a negotiated key under `key_id` until `expires_at` (Unix
+    /// seconds). Overwriting an existing id is not expected — ids carry 128
+    /// bits of entropy — and is treated as a replacement.
+    fn insert(
+        &self,
+        key_id: &str,
+        key: Zeroizing<[u8; 32]>,
+        expires_at: u64,
+    ) -> BoxFuture<Result<(), SecureError>>;
+
+    /// Fetch a live key, or `None` when it is unknown or already expired.
+    ///
+    /// Returning `Err` fails the request closed; it never falls back to
+    /// plaintext, because a store that cannot answer cannot prove the session
+    /// is real.
+    fn get(
+        &self,
+        key_id: &str,
+        now: u64,
+    ) -> BoxFuture<Result<Option<Zeroizing<[u8; 32]>>, SecureError>>;
+}
+
+/// In-process [`SecureSessionStore`]: the default, and the only one that keeps
+/// key material off the network entirely.
+///
+/// Expired entries are pruned lazily on insert, and the table is capped by
+/// [`SecureTransportConfig::max_sessions`], evicting the soonest-to-expire
+/// first.
+pub struct MemorySecureSessionStore {
     sessions: RwLock<HashMap<String, Session>>,
+    max_sessions: usize,
+}
+
+impl MemorySecureSessionStore {
+    /// Empty store holding at most `max_sessions` entries.
+    #[must_use]
+    pub fn new(max_sessions: usize) -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            max_sessions,
+        }
+    }
+}
+
+impl std::fmt::Debug for MemorySecureSessionStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MemorySecureSessionStore")
+            .field("max_sessions", &self.max_sessions)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SecureSessionStore for MemorySecureSessionStore {
+    fn insert(
+        &self,
+        key_id: &str,
+        key: Zeroizing<[u8; 32]>,
+        expires_at: u64,
+    ) -> BoxFuture<Result<(), SecureError>> {
+        let result = (|| {
+            let mut sessions = self
+                .sessions
+                .write()
+                .map_err(|_| SecureError::SessionStore("lock poisoned".to_owned()))?;
+            prune_expired(&mut sessions, expires_at.saturating_sub(1));
+            enforce_capacity(&mut sessions, self.max_sessions);
+            sessions.insert(key_id.to_owned(), Session { key, expires_at });
+            Ok(())
+        })();
+        Box::pin(async move { result })
+    }
+
+    fn get(
+        &self,
+        key_id: &str,
+        now: u64,
+    ) -> BoxFuture<Result<Option<Zeroizing<[u8; 32]>>, SecureError>> {
+        let result = self
+            .sessions
+            .read()
+            .map_err(|_| SecureError::SessionStore("lock poisoned".to_owned()))
+            .map(|sessions| {
+                sessions
+                    .get(key_id)
+                    .filter(|session| session.expires_at >= now)
+                    .map(|session| session.key.clone())
+            });
+        Box::pin(async move { result })
+    }
+}
+
+struct Inner {
+    store: Arc<dyn SecureSessionStore>,
     config: SecureTransportConfig,
 }
 
@@ -363,14 +471,23 @@ pub struct SecureTransport {
 }
 
 impl SecureTransport {
-    /// Create a transport with the given configuration.
+    /// Create a transport with the given configuration and an in-process
+    /// session store.
     #[must_use]
     pub fn new(config: SecureTransportConfig) -> Self {
+        let store = Arc::new(MemorySecureSessionStore::new(config.max_sessions));
+        Self::with_store(config, store)
+    }
+
+    /// Create a transport whose sessions live in `store`.
+    ///
+    /// Use a shared store when instances are interchangeable behind a load
+    /// balancer; see [`SecureSessionStore`] for what that means for the key
+    /// material.
+    #[must_use]
+    pub fn with_store(config: SecureTransportConfig, store: Arc<dyn SecureSessionStore>) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                sessions: RwLock::new(HashMap::new()),
-                config,
-            }),
+            inner: Arc::new(Inner { store, config }),
         }
     }
 
@@ -401,7 +518,7 @@ impl SecureTransport {
 
     /// Negotiate a session for `client_public_raw`, store it, and return the
     /// handshake response payload.
-    fn establish(&self, client_public_raw: &[u8]) -> Result<HandshakeResponse, SecureError> {
+    async fn establish(&self, client_public_raw: &[u8]) -> Result<HandshakeResponse, SecureError> {
         let key_id = mint_key_id()?;
         let (server_public_raw, session_key) =
             server_handshake(client_public_raw, key_id.as_bytes())?;
@@ -410,22 +527,10 @@ impl SecureTransport {
         let ttl = self.inner.config.session_ttl.as_secs();
         let expires_at = now.saturating_add(ttl);
 
-        {
-            let mut sessions = self
-                .inner
-                .sessions
-                .write()
-                .map_err(|_| SecureError::KeyAgreement)?;
-            prune_expired(&mut sessions, now);
-            enforce_capacity(&mut sessions, self.inner.config.max_sessions);
-            sessions.insert(
-                key_id.clone(),
-                Session {
-                    key: session_key,
-                    expires_at,
-                },
-            );
-        }
+        self.inner
+            .store
+            .insert(&key_id, session_key, expires_at)
+            .await?;
 
         Ok(HandshakeResponse {
             v: PROTOCOL_VERSION,
@@ -437,17 +542,14 @@ impl SecureTransport {
     }
 
     /// Look up a live session key by `key_id`, or `None` if unknown/expired.
-    fn session_key(&self, key_id: &str, now: u64) -> Option<Zeroizing<[u8; 32]>> {
-        let sessions = self.inner.sessions.read().ok()?;
-        let session = sessions.get(key_id)?;
-        if session.expires_at < now {
-            return None;
-        }
-        Some(session.key.clone())
+    async fn session_key(&self, key_id: &str, now: u64) -> Option<Zeroizing<[u8; 32]>> {
+        // A store error is not a reason to serve plaintext; it is treated the
+        // same as "no such session", which fails an encrypted request closed.
+        self.inner.store.get(key_id, now).await.ok().flatten()
     }
 
     /// Serve one handshake request.
-    fn respond_handshake(&self, request: &Request) -> Response {
+    async fn respond_handshake(&self, request: &Request) -> Response {
         if request.body().len() > self.inner.config.max_handshake_body {
             return handshake_error(StatusCode::PAYLOAD_TOO_LARGE, "handshake body too large");
         }
@@ -465,7 +567,7 @@ impl SecureTransport {
         else {
             return handshake_error(StatusCode::BAD_REQUEST, "invalid client public key");
         };
-        match self.establish(&client_public_raw) {
+        match self.establish(&client_public_raw).await {
             Ok(payload) => match serde_json::to_vec(&payload) {
                 Ok(bytes) => handshake_ok(bytes),
                 Err(_) => {
@@ -480,7 +582,7 @@ impl SecureTransport {
     }
 
     /// Extract a valid secure directive from request headers, if present.
-    fn request_directive(
+    async fn request_directive(
         &self,
         request: &Request,
         now: u64,
@@ -498,7 +600,7 @@ impl SecureTransport {
             .get(SECURE_KEY_HEADER)
             .and_then(|value| value.to_str().ok())?
             .to_owned();
-        let key = self.session_key(&key_id, now)?;
+        let key = self.session_key(&key_id, now).await?;
         Some((key_id, key))
     }
 
@@ -720,7 +822,7 @@ pub struct SecureHandshakeHandler {
 impl Handler for SecureHandshakeHandler {
     fn call(&self, request: Request) -> BoxFuture<Response> {
         let transport = self.transport.clone();
-        Box::pin(async move { transport.respond_handshake(&request) })
+        Box::pin(async move { transport.respond_handshake(&request).await })
     }
 }
 
@@ -732,35 +834,32 @@ pub struct SecureTransportLayer {
 impl Middleware for SecureTransportLayer {
     fn handle(&self, mut request: Request, next: Next) -> BoxFuture<Response> {
         let transport = self.transport.clone();
-        let now = unix_now().ok();
-        let directive = now.and_then(|now| transport.request_directive(&request, now));
-
-        // Open an encrypted request body before the handler runs, so extractors
-        // see ordinary plaintext. Without a live session there is nothing to
-        // open with: a request that claims to be encrypted is rejected rather
-        // than handed on as ciphertext.
-        if let Some((key_id, key)) = &directive {
-            let Some(now) = now else {
-                return Box::pin(async {
-                    secure_request_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "server clock unavailable",
-                    )
-                });
+        Box::pin(async move {
+            let Ok(now) = unix_now() else {
+                return secure_request_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server clock unavailable",
+                );
             };
-            if let Err(rejection) = transport.decrypt_request(&mut request, key_id, key, now) {
-                return Box::pin(async move { *rejection });
-            }
-        } else if is_encrypted_request(&request) {
-            return Box::pin(async {
-                secure_request_error(
+            // The session lookup may cross the network (a shared store), so it
+            // happens here rather than before the future is built.
+            let directive = transport.request_directive(&request, now).await;
+
+            // Open an encrypted request body before the handler runs, so
+            // extractors see ordinary plaintext. Without a live session there
+            // is nothing to open with: a request that claims to be encrypted is
+            // rejected rather than handed on as ciphertext.
+            if let Some((key_id, key)) = &directive {
+                if let Err(rejection) = transport.decrypt_request(&mut request, key_id, key, now) {
+                    return *rejection;
+                }
+            } else if is_encrypted_request(&request) {
+                return secure_request_error(
                     StatusCode::BAD_REQUEST,
                     "encrypted request without a live session",
-                )
-            });
-        }
+                );
+            }
 
-        Box::pin(async move {
             let response = next.run(request).await;
             match directive {
                 Some((key_id, key)) => transport.encrypt_page_response(response, &key_id, &key),

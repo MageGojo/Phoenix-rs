@@ -16,6 +16,7 @@ mod queue;
 mod rate_limit;
 #[cfg(feature = "schedule")]
 mod schedule_lock;
+mod secure_session;
 mod session;
 #[cfg(feature = "jwt")]
 mod token;
@@ -25,13 +26,14 @@ pub use broadcast::RedisBroadcaster;
 pub use keys::schedule_lock_key;
 pub use keys::{
     BROADCAST_CHANNEL, access_key, family_key, family_members_key, rate_limit_key,
-    redact_redis_url, refresh_key, session_key,
+    redact_redis_url, refresh_key, secure_session_key, session_key,
 };
 #[cfg(feature = "queue")]
 pub use queue::{DEFAULT_VISIBILITY_TIMEOUT, RedisQueue};
 pub use rate_limit::RedisRateLimitBackend;
 #[cfg(feature = "schedule")]
 pub use schedule_lock::RedisScheduleLock;
+pub use secure_session::RedisSecureSessionStore;
 pub use session::RedisSessionBackend;
 #[cfg(feature = "jwt")]
 pub use token::RedisTokenStore;
@@ -91,6 +93,15 @@ impl RedisStores {
     #[must_use]
     pub fn session(&self) -> RedisSessionBackend {
         RedisSessionBackend::new(self.conn.clone())
+    }
+
+    /// Store for encrypted-transport session keys.
+    ///
+    /// **This key space holds live AES session keys.** See
+    /// [`RedisSecureSessionStore`] for the handling that requires.
+    #[must_use]
+    pub fn secure_sessions(&self) -> RedisSecureSessionStore {
+        RedisSecureSessionStore::new(self.conn.clone())
     }
 
     /// Rate-limit backend sharing this connection pool.

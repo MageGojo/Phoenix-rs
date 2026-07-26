@@ -169,7 +169,32 @@ controller：
 | `max_sessions` | 100_000 | 进程内会话上限，超限淘汰最早过期者 |
 | `max_request_frame` | 1 MiB | 加密**请求**帧大小上限，超限在解密前就返回 413 |
 
-会话过期在每次握手时惰性清理（`prune_expired`）；查表命中过期条目视为未命中。
+会话过期在每次握手时惰性清理；查表命中过期条目视为未命中。
+
+### 会话存哪里（多实例部署必读）
+
+`SecureTransport::new(config)` 用**进程内**会话表；`SecureTransport::with_store(config, store)` 换成共享的。
+
+| | `MemorySecureSessionStore`（默认） | `RedisSecureSessionStore` |
+| --- | --- | --- |
+| 位置 | 本进程内存 | Redis `phoenix:secure:{key_id}`，带 `PX` 过期 |
+| 多实例 | 客户端**必须**回到握手那台（按 `key_id` 粘性路由） | 实例可互换，随便路由 |
+| 密钥material 上网 | 不上网 | **上网** |
+| 重启 | 全部失效，客户端重新握手 | 存活到 TTL |
+
+```rust
+let stores = RedisStores::connect(&redis_url).await?;
+let transport = SecureTransport::with_store(
+    SecureTransportConfig::default(),
+    Arc::new(stores.secure_sessions()),
+);
+```
+
+> **这里存的是密钥material，不是普通缓存。** 能读这个键空间的人，就能解密所有在线页面会话的流量。因此：走 TLS（`rediss://`）+ `AUTH`；优先用**关闭持久化**的实例，避免密钥落进 RDB/AOF 文件；把 `session_ttl` 保持短（默认 5 分钟就是暴露窗口的上界）。
+>
+> 想让密钥完全不上网，就用**粘性路由 + 进程内存储**——那仍然是保证更强的一档；共享存储是给「实例必须可互换」的部署用的。
+
+存储读不出来时**按失败处理**：不会退回明文去「兜底」。一个答不上来的存储无法证明这个会话是真的。
 
 ## 5.1 请求体加密（上行）
 
@@ -233,8 +258,9 @@ X-Phoenix-Content-Type: application/json     # 明文本来的类型
   机制；这类请求仍只由 TLS 保护。
 - **不覆盖非页面协议响应**：静态资源、SSE/WS 不在本机制内。
 - **不做主动攻击者防护**：见 §0，无法对能在客户端执行代码者隐藏内容。
-- **无跨进程会话共享**：会话表在进程内存里，多实例部署下客户端必须与握手时同一个
-  实例通话（或按 `key_id` 做粘性路由）。
+- **共享存储不做密钥加密存放**：Redis 里存的是 base64 的原始会话密钥，靠 TLS +
+  `AUTH` + 短 TTL 保护，而不是再套一层「主密钥」。多一层会把主密钥的分发问题变成
+  新的最弱环节，且并不改变「能读 Redis 就能解密流量」这个事实。
 
 ## 10. 测试与实现索引
 
@@ -249,6 +275,9 @@ X-Phoenix-Content-Type: application/json     # 明文本来的类型
   与旧 `Aes256GcmCodec`/`EncryptedPayload` JSON 路径并存。
 - `crates/phoenix-runtime/src/lib.rs`：`secure_transport(...)` 一键接线；端到端
   测试用独立 ring 客户端复算密钥、解出正确信封，并断言无 secure 头时逐字节回退明文。
+- `crates/phoenix-redis/src/secure_session.rs`：`RedisSecureSessionStore`；
+  `tests/secure_session_contracts.rs`（需真实 Redis）证明「在 A 握手、请求打到 B
+  仍然拿到密文」，并用进程内存储做**反例对照**（不共享，所以必须粘性路由）。
 - `crates/phoenix-http/src/lib.rs`：共享线上常量。
 - 客户端契约：`packages/phoenix-react/src/secure.ts`（`decryptFrame` /
   `sealRequest`），接线在 `page-client.ts` 的 `submitPage`；用例覆盖封帧字节布局、

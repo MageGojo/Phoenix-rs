@@ -18,6 +18,7 @@ queue = ["dep:phoenix-queue"]
 schedule = ["dep:phoenix-schedule", "dep:uuid", "dep:tracing"]
 
 [dependencies]
+base64.workspace = true
 futures-util.workspace = true
 phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
 # The `websocket` feature carries the Hub and its cross-instance Broadcaster
@@ -32,10 +33,13 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing = { workspace = true, optional = true }
+zeroize.workspace = true
 uuid = { version = "1", features = ["v4"], optional = true }
 
 [dev-dependencies]
+base64.workspace = true
 phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", features = ["jwt"] }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 phoenix-queue = { version = "0.1.1", path = "../phoenix-queue" }
 phoenix-schedule = { version = "0.1.1", path = "../phoenix-schedule" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

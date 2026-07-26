@@ -17,8 +17,9 @@ pub use jwt::{Jwt, JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, 
 #[cfg(feature = "password")]
 pub use password::{Password, PasswordError};
 pub use secure::{
-    FrameDirection, SecureError, SecureHandshakeHandler, SecureTransport, SecureTransportConfig,
-    SecureTransportLayer, open_frame, seal_frame, server_handshake,
+    FrameDirection, MemorySecureSessionStore, SecureError, SecureHandshakeHandler,
+    SecureSessionStore, SecureTransport, SecureTransportConfig, SecureTransportLayer, open_frame,
+    seal_frame, server_handshake,
 };
 #[cfg(feature = "jwt")]
 pub use token::{

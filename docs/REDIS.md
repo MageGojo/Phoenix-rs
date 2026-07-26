@@ -45,8 +45,11 @@ crates/phoenix-redis/
 | Queue（每 name） | `phoenix:queue:{name}:{ready,reserved,jobs,attempts,idem,dead}` | ZSET/ZSET/HASH/HASH/HASH/LIST，详见 `docs/QUEUE.md` |
 | Schedule lock | `phoenix:lock:{name}` | 锁 token 字符串，`SET NX PX`；Drop 时按 token 安全释放 |
 | 实时广播 | `phoenix:ws:broadcast` | **pub/sub 频道，不是键**：不落盘、不占内存、`KEYS` 看不到 |
+| 加密传输会话 | `phoenix:secure:{key_id}` | **存的是密钥material**：base64 的 AES-256-GCM 会话密钥，带 `PX` 过期 |
 
 禁止把明文 refresh token、Cookie 值或用户密码写入 Redis。
+
+> `phoenix:secure:*` 是唯一存放密钥material 的键空间。能读它的人能解密所有在线页面会话的流量：走 TLS + `AUTH`，优先关闭持久化，`session_ttl` 保持短。不需要多实例可互换时，用粘性路由 + 进程内存储更安全。详见 [SECURE_TRANSPORT.md](SECURE_TRANSPORT.md)。
 
 ## 原子语义
 
@@ -78,6 +81,13 @@ crates/phoenix-redis/
 - 获取：`SET phoenix:lock:{name} <uuid-token> NX PX <ttl>`。
 - 释放：Lua `if GET == token then DEL`，**按 token 安全释放**，绝不误删他人的锁（TTL 过期被别的实例重获后尤为关键）。
 - Redis 不可达时 fail-closed（`try_acquire` 返回 `None`，跳过本次运行）。
+
+### SecureSessionStore（`RedisSecureSessionStore`）
+
+- `insert` = `PSETEX phoenix:secure:{key_id} <剩余毫秒> <base64 密钥>`；`get` = `GET`。
+- 过期完全交给 Redis 的 `PX`，不需要额外清理任务；已过期的 insert 直接跳过（负 TTL 会被 Redis 拒绝）。
+- 读写失败**按会话不存在处理**（fail closed），绝不退回明文。
+- `Debug` 不渲染连接对象——那会把带凭据的 Redis URL 打出来。
 
 ### Broadcaster（`RedisBroadcaster`）
 
@@ -133,9 +143,11 @@ PHOENIX_TEST_REDIS_URL=redis://127.0.0.1/0 cargo test -p phoenix-redis --locked
 ```bash
 # 跨实例广播 contract（两个 Hub + 两个 broadcaster 模拟两台实例）
 PHOENIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test -p phoenix-redis --test broadcast_contracts
+# 跨进程加密会话 contract（在 A 握手、请求打到 B 仍拿到密文）
+PHOENIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test -p phoenix-redis --test secure_session_contracts
 ```
 
-未设置 `PHOENIX_TEST_REDIS_URL` 时，集成测试（`tests/contracts.rs`、`tests/queue_lock_contracts.rs`、`tests/broadcast_contracts.rs`）直接 return（不算失败）；Lua 逻辑之外的键编码、死信序列化、状态映射、以及广播的线上 JSON 格式有离线单测覆盖。
+未设置 `PHOENIX_TEST_REDIS_URL` 时，集成测试（`tests/contracts.rs`、`tests/queue_lock_contracts.rs`、`tests/broadcast_contracts.rs`、`tests/secure_session_contracts.rs`）直接 return（不算失败）；Lua 逻辑之外的键编码、死信序列化、状态映射、以及广播的线上 JSON 格式有离线单测覆盖。
 
 ## 集成建议（`phoenix` crate）
 

@@ -6,6 +6,7 @@ pub(crate) const REFRESH_PREFIX: &str = "phoenix:token:refresh:";
 pub(crate) const FAMILY_PREFIX: &str = "phoenix:token:family:";
 pub(crate) const FAMILY_MEMBERS_PREFIX: &str = "phoenix:token:family_members:";
 pub(crate) const ACCESS_PREFIX: &str = "phoenix:token:access:";
+pub(crate) const SECURE_SESSION_PREFIX: &str = "phoenix:secure:";
 
 /// Default Redis pub/sub channel for cross-instance realtime fan-out.
 ///
@@ -41,6 +42,15 @@ pub fn family_members_key(family_id: &str) -> String {
 #[must_use]
 pub fn access_key(token_id: &str) -> String {
     format!("{ACCESS_PREFIX}{token_id}")
+}
+
+/// Key holding one encrypted-transport session key.
+///
+/// **Key material lives here** — see `RedisSecureSessionStore` for the
+/// handling this key space requires.
+#[must_use]
+pub fn secure_session_key(key_id: &str) -> String {
+    format!("{SECURE_SESSION_PREFIX}{key_id}")
 }
 
 /// Key space for the Redis job queue, namespaced per queue name.
