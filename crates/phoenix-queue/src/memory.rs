@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Mutex,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use crate::{JobEnvelope, JobId, PushResult, QueueBackend, QueueError};
@@ -18,6 +18,10 @@ enum JobState {
 struct StoredJob {
     envelope: JobEnvelope,
     state: JobState,
+    /// Instant after which a reserved job may be reclaimed (visibility
+    /// timeout). `None` means "reserved indefinitely" — the default when no
+    /// visibility timeout is configured.
+    reserved_until: Option<SystemTime>,
 }
 
 /// Process-local FIFO queue with idempotency and dead-letter support.
@@ -29,9 +33,19 @@ struct StoredJob {
 /// with the original id (payload is not replaced). After [`ack`](QueueBackend::ack)
 /// or [`dead_letter`](QueueBackend::dead_letter), the key is released and may be
 /// reused.
+///
+/// # Visibility timeout
+///
+/// By default a reserved job stays reserved until it is acked, failed, or
+/// dead-lettered. Configure a visibility timeout with
+/// [`with_visibility_timeout`](Self::with_visibility_timeout) to mirror the
+/// durable backends: a job that is not resolved within the window is returned
+/// to the ready set (lazily on the next [`reserve`](QueueBackend::reserve), or
+/// eagerly via [`reclaim_expired`](QueueBackend::reclaim_expired)).
 #[derive(Default)]
 pub struct MemoryQueue {
     inner: Mutex<Inner>,
+    visibility_timeout: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -48,6 +62,14 @@ impl MemoryQueue {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reserve jobs invisibly for `timeout`; unresolved reservations become
+    /// reservable again after it elapses (at-least-once delivery).
+    #[must_use]
+    pub const fn with_visibility_timeout(mut self, timeout: Duration) -> Self {
+        self.visibility_timeout = Some(timeout);
+        self
     }
 
     /// Snapshot of dead-lettered envelopes (oldest first).
@@ -114,6 +136,7 @@ impl QueueBackend for MemoryQueue {
             StoredJob {
                 envelope: job,
                 state: JobState::Queued,
+                reserved_until: None,
             },
         );
         Ok(PushResult::Created(id))
@@ -122,6 +145,9 @@ impl QueueBackend for MemoryQueue {
     async fn reserve(&self) -> Result<Option<JobEnvelope>, QueueError> {
         let mut inner = self.inner.lock().expect("memory queue poisoned");
         let now = SystemTime::now();
+        // Lazily recover jobs whose visibility timeout has elapsed so any
+        // caller (not just a dedicated sweeper) reclaims crashed work.
+        reclaim_expired_locked(&mut inner, now);
         let len = inner.ready.len();
 
         for _ in 0..len {
@@ -143,6 +169,7 @@ impl QueueBackend for MemoryQueue {
             }
 
             stored.state = JobState::Reserved;
+            stored.reserved_until = self.visibility_timeout.map(|timeout| now + timeout);
             stored.envelope.attempts = stored.envelope.attempts.saturating_add(1);
             return Ok(Some(stored.envelope.clone()));
         }
@@ -172,6 +199,7 @@ impl QueueBackend for MemoryQueue {
         }
         stored.envelope.available_at = available_at;
         stored.state = JobState::Queued;
+        stored.reserved_until = None;
         inner.ready.push_back(*id);
         Ok(())
     }
@@ -192,8 +220,39 @@ impl QueueBackend for MemoryQueue {
         Ok(())
     }
 
+    async fn reclaim_expired(&self) -> Result<usize, QueueError> {
+        let mut inner = self.inner.lock().expect("memory queue poisoned");
+        Ok(reclaim_expired_locked(&mut inner, SystemTime::now()))
+    }
+
     async fn purge_expired_idempotency(&self) -> Result<usize, QueueError> {
         // Keys are released on terminal states; nothing time-based to purge.
         Ok(0)
     }
+}
+
+/// Return reserved jobs whose visibility deadline has passed to the ready set.
+/// Reclaimed jobs keep their (already-incremented) `attempts`, so repeatedly
+/// crashing on the same job still exhausts `max_attempts` and dead-letters.
+fn reclaim_expired_locked(inner: &mut Inner, now: SystemTime) -> usize {
+    let expired: Vec<JobId> = inner
+        .jobs
+        .iter()
+        .filter(|(_, stored)| {
+            stored.state == JobState::Reserved
+                && stored
+                    .reserved_until
+                    .is_some_and(|deadline| deadline <= now)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+
+    for id in &expired {
+        if let Some(stored) = inner.jobs.get_mut(id) {
+            stored.state = JobState::Queued;
+            stored.reserved_until = None;
+            inner.ready.push_back(*id);
+        }
+    }
+    expired.len()
 }

@@ -1,0 +1,23 @@
+[package]
+name = "phoenix-schedule"
+description = "Laravel-style task scheduler for Phoenix: cron specs, schedule:run and schedule:work"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+phoenix-console = { version = "0.1.2", path = "../phoenix-console" }
+phoenix-queue = { version = "0.1.1", path = "../phoenix-queue", default-features = false }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

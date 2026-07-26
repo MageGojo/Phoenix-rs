@@ -1,6 +1,6 @@
 //! High-level queue facade over a [`QueueBackend`].
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
 
@@ -16,6 +16,9 @@ pub struct PushOptions {
     pub max_attempts: Option<u32>,
     /// Optional dedupe key while the job remains in-flight.
     pub idempotency_key: Option<String>,
+    /// Optional delay before the job becomes reservable (`available_at =
+    /// created_at + delay`). Defaults to immediately runnable.
+    pub delay: Option<Duration>,
 }
 
 impl PushOptions {
@@ -36,6 +39,13 @@ impl PushOptions {
     #[must_use]
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
+        self
+    }
+
+    /// Delay execution: the job only becomes reservable `delay` after push.
+    #[must_use]
+    pub const fn delay(mut self, delay: Duration) -> Self {
+        self.delay = Some(delay);
         self
     }
 }
@@ -87,7 +97,10 @@ where
     ) -> Result<PushResult, QueueError> {
         let value = serde_json::to_value(payload)?;
         let max_attempts = options.max_attempts.unwrap_or(self.default_max_attempts);
-        let job = JobEnvelope::new(name, value, max_attempts, options.idempotency_key);
+        let mut job = JobEnvelope::new(name, value, max_attempts, options.idempotency_key);
+        if let Some(delay) = options.delay {
+            job = job.with_delay(delay);
+        }
         self.backend.push(job).await
     }
 
@@ -102,6 +115,25 @@ where
         payload: impl Serialize,
     ) -> Result<PushResult, QueueError> {
         self.push_json(name, payload, PushOptions::default()).await
+    }
+
+    /// Enqueue a job that becomes runnable only after `delay` has elapsed
+    /// (delayed / scheduled-in-the-future task).
+    ///
+    /// Workers ignore the job until `available_at = now + delay`; ordering
+    /// among already-runnable jobs is unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::push_json`].
+    pub async fn dispatch_in(
+        &self,
+        name: impl Into<String>,
+        payload: impl Serialize,
+        delay: Duration,
+    ) -> Result<PushResult, QueueError> {
+        self.push_json(name, payload, PushOptions::new().delay(delay))
+            .await
     }
 
     /// Push with an explicit idempotency key.

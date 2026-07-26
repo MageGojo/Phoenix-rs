@@ -92,6 +92,17 @@ impl JobEnvelope {
         }
     }
 
+    /// Delay execution: sets `available_at = created_at + delay`.
+    ///
+    /// Backends only hand out jobs whose `available_at` has passed (see
+    /// [`crate::QueueBackend::reserve`]), so the envelope carries the delay
+    /// across serialization to any backend.
+    #[must_use]
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.available_at = self.created_at + delay;
+        self
+    }
+
     /// Whether another attempt is allowed after the current failure.
     #[must_use]
     pub const fn can_retry(&self) -> bool {
@@ -156,6 +167,25 @@ mod system_time_secs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_delay_offsets_available_at_from_created_at() {
+        let delay = Duration::from_secs(90);
+        let job = JobEnvelope::new("demo", serde_json::json!({}), 3, None).with_delay(delay);
+        assert_eq!(job.available_at, job.created_at + delay);
+        assert!(job.delay_until_available(job.created_at) == Some(delay));
+        // Serialization keeps the delayed availability (second precision).
+        let restored: JobEnvelope =
+            serde_json::from_value(serde_json::to_value(&job).expect("serialize"))
+                .expect("deserialize");
+        assert!(
+            restored
+                .available_at
+                .duration_since(restored.created_at)
+                .expect("still delayed")
+                >= Duration::from_secs(89)
+        );
+    }
 
     #[test]
     fn debug_redacts_payload() {
