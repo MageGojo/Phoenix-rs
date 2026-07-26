@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { renderPage } from "@apizero/react-ssr";
-import type { PageEnvelope } from "@apizero/react";
+import {
+  registerRouteManifest,
+  resetRouteManifest,
+  type PageEnvelope,
+} from "@apizero/react";
 
 import { routes } from "./generated/routes.js";
 import type { AuthMessageResource, AuthSessionResource, LoginInput, Member, PasswordResetInput, StoreMemberInput } from "./generated/contracts.js";
@@ -28,19 +32,29 @@ const envelope: PageEnvelope = {
 describe("blog React case", () => {
   it("generates every Rust route name as a TypeScript property tree", () => {
     expect(routes).toEqual({
-      admin: { dashboard: "admin.dashboard" },
-      health: "health",
+      admin: { dashboard: expect.any(Function) },
+      health: expect.any(Function),
       login: { store: expect.any(Function) },
-      logout: { store: "logout.store" },
-      members: { index: "members.index", store: expect.any(Function) },
+      logout: { store: expect.any(Function) },
+      members: { index: expect.any(Function), store: expect.any(Function) },
       "password-reset": { store: expect.any(Function) },
-      react: { islands: "react.islands", spa: "react.spa", ssr: "react.ssr" },
-      register: { store: "register.store" },
-      users: { show: "users.show" },
+      react: {
+        islands: expect.any(Function),
+        spa: expect.any(Function),
+        ssr: expect.any(Function),
+      },
+      register: { store: expect.any(Function) },
+      users: { show: expect.any(Function) },
     });
     expect(routes.members.store.routeName).toBe("members.store");
     expect(routes.login.store.routeName).toBe("login.store");
     expect(routes["password-reset"].store.routeName).toBe("password-reset.store");
+    expect(routes.members.index.routeName).toBe("members.index");
+    expect(routes.users.show.routeName).toBe("users.show");
+    registerRouteManifest({ "users.show": "/users/{user}", "members.index": "/members" });
+    expect(routes.users.show({ user: "林知遥" })).toBe("/users/%E6%9E%97%E7%9F%A5%E9%81%A5");
+    expect(routes.members.index({ query: { page: 2 } })).toBe("/members?page=2");
+    resetRouteManifest();
     expectTypeOf(routes.members.store).parameter(0).toEqualTypeOf<StoreMemberInput>();
     expectTypeOf(routes.members.store).returns.toEqualTypeOf<Promise<Member>>();
     expectTypeOf(routes.login.store).parameter(0).toEqualTypeOf<LoginInput>();
@@ -98,6 +112,7 @@ describe("blog React case", () => {
         ...envelope,
         page: "members/index",
         props: { members, generatedBy: "Rust", total: 100 },
+        routes: { "members.index": "/members" },
       },
       { "members/index": MembersIndex },
     );

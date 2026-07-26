@@ -11,9 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@apizero/react": "0.1.0",
-    "@apizero/react-ssr": "0.1.0",
-    "@apizero/vite": "0.1.0",
+    "@apizero/react": "file:../../packages/phoenix-react",
+    "@apizero/react-ssr": "file:../../packages/phoenix-react-ssr",
+    "@apizero/vite": "file:../../packages/phoenix-vite",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

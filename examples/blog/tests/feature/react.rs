@@ -60,7 +60,12 @@ async fn client_navigation_receives_the_same_business_props() {
 
         assert_eq!(envelope.page, "articles/show");
         assert_eq!(envelope.props["title"], "React meets Phoenix");
-        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        // Page-protocol JSON is marked no-store + Vary so a shared cache or
+        // bfcache never restores a soft-nav response as a document.
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
         assert!(!String::from_utf8_lossy(response.body()).contains("csp_nonce"));
     }
 }

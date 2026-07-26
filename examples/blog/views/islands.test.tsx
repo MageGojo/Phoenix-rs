@@ -58,7 +58,7 @@ describe("member creator island", () => {
       contract_hash: null,
       asset_version: null,
       request_id: null,
-      routes: { "members.store": "/api/members" },
+      routes: { "members.store": "/api/members", "members.index": "/members" },
       islands: [],
     };
     const rendered = renderPage(envelope, { "members/index": MembersIndex });
@@ -110,6 +110,7 @@ describe("member creator island", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ name: "岛屿测试成员" }),
+      signal: expect.any(AbortSignal),
     });
     expect(document.body.textContent).toContain("Rust 已创建 岛屿测试成员");
     expect(document.body.textContent).toContain("rust101@example.test");

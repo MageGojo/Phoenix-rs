@@ -1,4 +1,7 @@
+import { Link } from "@apizero/react";
+
 import MemberCreator from "../../islands/member-creator.js";
+import { members as memberRoutes } from "../../generated/routes.js";
 import type { Member, MembersPageProps } from "../../generated/contracts.js";
 
 export default function MembersIndex({ members, generatedBy, total }: MembersPageProps) {
@@ -10,10 +13,10 @@ export default function MembersIndex({ members, generatedBy, total }: MembersPag
     <div className="directory-shell">
       <a className="skip-link" href="#member-table">跳到成员列表</a>
       <header className="topbar">
-        <a className="brand" href="/members" aria-label="Phoenix Blog 成员目录首页">
+        <Link className="brand" href={memberRoutes.index()} aria-label="Phoenix Blog 成员目录首页">
           <span className="brand-mark">P</span>
           <span>Phoenix Blog</span>
-        </a>
+        </Link>
         <span className="source-note">数据源: {generatedBy}</span>
       </header>
 

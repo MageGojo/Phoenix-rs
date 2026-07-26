@@ -1,6 +1,9 @@
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
+
+import { FieldError, Form } from "@apizero/react";
 
 import { members } from "../generated/routes.js";
+import { StoreMemberInputFields } from "../generated/contracts.js";
 import type { Member } from "../generated/contracts.js";
 
 export interface MemberCreatorProps {
@@ -8,65 +11,60 @@ export interface MemberCreatorProps {
 }
 
 export default function MemberCreator({ initialTotal }: MemberCreatorProps) {
-  const [draftName, setDraftName] = useState("");
   const [createdMembers, setCreatedMembers] = useState<Member[]>([]);
-  const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     message: string;
   } | null>(null);
 
-  async function addMember(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const name = draftName.trim();
-    if (!name || submitting) return;
-
-    setSubmitting(true);
-    setFeedback(null);
-    try {
-      const member = await members.store({ name });
-      setCreatedMembers((current) => [member, ...current]);
-      setDraftName("");
-      setFeedback({ type: "success", message: `Rust 已创建 ${member.name}` });
-    } catch (error) {
-      setFeedback({
-        type: "error",
-        message: error instanceof Error ? error.message : "提交失败，请重试。",
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <section className="member-creator" aria-label="新增成员">
-      <form className="member-composer" onSubmit={addMember}>
-        <div>
-          <strong>新增成员</strong>
-          <span>当前共 {initialTotal + createdMembers.length} 条记录</span>
-        </div>
-        <label htmlFor="new-member-name">
-          <span>成员姓名</span>
-          <input
-            id="new-member-name"
-            value={draftName}
-            onChange={(event) => setDraftName(event.target.value)}
-            placeholder="输入姓名"
-            autoComplete="off"
-            disabled={submitting}
-          />
-        </label>
-        <button type="submit" disabled={!draftName.trim() || submitting}>
-          {submitting ? "提交中..." : "添加成员"}
-        </button>
-        <p
-          className={`member-feedback${feedback?.type === "error" ? " member-feedback-error" : ""}`}
-          aria-live="polite"
-          role={feedback?.type === "error" ? "alert" : undefined}
-        >
-          {feedback?.message ?? ""}
-        </p>
-      </form>
+      <Form
+        className="member-composer"
+        action={members.store}
+        initialValues={{ name: "" }}
+        fields={StoreMemberInputFields}
+        onSuccess={(member) => {
+          setCreatedMembers((current) => [member, ...current]);
+          setFeedback({ type: "success", message: `Rust 已创建 ${member.name}` });
+        }}
+        onError={(error) => {
+          setFeedback({
+            type: "error",
+            message: error instanceof Error ? error.message : "提交失败，请重试。",
+          });
+        }}
+      >
+        {(form) => (
+          <>
+            <div>
+              <strong>新增成员</strong>
+              <span>当前共 {initialTotal + createdMembers.length} 条记录</span>
+            </div>
+            <label htmlFor="new-member-name">
+              <span>成员姓名</span>
+              <input
+                {...form.field("name")}
+                id="new-member-name"
+                placeholder="输入姓名"
+                autoComplete="off"
+                disabled={form.processing}
+              />
+            </label>
+            <FieldError errors={form.errors} name="name" className="member-feedback member-feedback-error" />
+            <button type="submit" disabled={!form.data.name.trim() || form.processing}>
+              {form.processing ? "提交中..." : "添加成员"}
+            </button>
+            <p
+              className={`member-feedback${feedback?.type === "error" ? " member-feedback-error" : ""}`}
+              aria-live="polite"
+              role={feedback?.type === "error" ? "alert" : undefined}
+            >
+              {feedback?.message ?? ""}
+            </p>
+          </>
+        )}
+      </Form>
 
       {createdMembers.length > 0 && (
         <div className="created-members" aria-live="polite">
