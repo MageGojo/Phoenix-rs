@@ -50,6 +50,9 @@ argon2 = "0.5"
 base64 = "0.22"
 bytes = "1"
 dotenvy = "0.15"
+# Already in the lock via the MySQL and Redis drivers; phoenix-pay uses it to
+# inflate the DEFLATE members of a bill archive.
+flate2 = "1"
 futures-util = "0.3"
 http = "1"
 http-body-util = "0.1"

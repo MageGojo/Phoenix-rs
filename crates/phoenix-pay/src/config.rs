@@ -68,6 +68,14 @@ pub struct WechatNativeConfig {
     pub platform_cert_path: Option<PathBuf>,
     /// Absolute HTTPS URL `WeChat` calls back with payment notifications.
     pub notify_url: String,
+    /// Absolute HTTPS URL `WeChat` calls back with **refund** notifications.
+    ///
+    /// `WeChat` takes the refund callback URL per refund request, separately
+    /// from the payment one, so this is its own field. When unset, refunds are
+    /// created without a callback URL and their outcome must be polled with
+    /// [`PayManager::sync_refund`](crate::PayManager::sync_refund).
+    #[serde(default)]
+    pub refund_notify_url: Option<String>,
 }
 
 /// Alipay 当面付 (Face-to-Face, `alipay.trade.precreate`) channel

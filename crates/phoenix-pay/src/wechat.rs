@@ -187,6 +187,9 @@ impl EncryptedResource {
 #[derive(Debug, Deserialize)]
 pub(crate) struct NotifyBody {
     pub resource: EncryptedResource,
+    /// `TRANSACTION.SUCCESS`, `REFUND.SUCCESS`, ... — which callback this is.
+    #[serde(default)]
+    pub event_type: String,
 }
 
 /// Decrypted transaction resource (payment result).
@@ -212,6 +215,41 @@ pub(crate) fn map_refund_status(status: &str) -> Result<RefundStatus, PayError> 
             "unknown WeChat refund status `{other}`"
         ))),
     }
+}
+
+/// Map a `WeChat` refund-notification `refund_status` onto the refund state
+/// machine. Same vocabulary as the synchronous refund `status`.
+pub(crate) fn map_refund_notify_status(status: &str) -> Result<RefundStatus, PayError> {
+    match status {
+        "SUCCESS" => Ok(RefundStatus::Succeeded),
+        "PROCESSING" => Ok(RefundStatus::Processing),
+        "CLOSED" | "ABNORMAL" => Ok(RefundStatus::Failed),
+        other => Err(PayError::InvalidNotify(format!(
+            "unknown WeChat refund_status `{other}`"
+        ))),
+    }
+}
+
+/// Decrypted refund-notification resource.
+///
+/// Note the field name: the refund callback reports `refund_status`, while the
+/// synchronous refund API reports `status`. They carry the same vocabulary but
+/// are not the same key, so they get their own type rather than a shared one
+/// with two optional fields.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RefundNotifyResource {
+    pub out_trade_no: String,
+    pub out_refund_no: String,
+    #[serde(default)]
+    pub refund_id: Option<String>,
+    pub refund_status: String,
+    pub amount: RefundNotifyAmount,
+}
+
+/// The `amount` block of a refund notification (minor units).
+#[derive(Debug, Deserialize)]
+pub(crate) struct RefundNotifyAmount {
+    pub refund: u64,
 }
 
 /// Refund response / query resource.

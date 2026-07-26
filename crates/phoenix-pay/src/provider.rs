@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::{
     Amount, Bill, BillEntry, CreateOrder, NotifyEvent, NotifyRequest, PayError, PaymentAction,
-    PaymentIntent, PaymentStatus, RefundOrder, RefundReceipt, RefundStatus,
+    PaymentIntent, PaymentStatus, RefundNotifyEvent, RefundOrder, RefundReceipt, RefundStatus,
 };
 
 /// A payment channel implementation (`WeChat` Native, Alipay F2F, mock, ...).
@@ -61,6 +61,24 @@ pub trait PaymentProvider: Send + Sync {
         })
     }
 
+    /// Verify an asynchronous **refund** notification and normalize it.
+    ///
+    /// Same hard rule as [`Self::verify_notify`]: authenticate the payload
+    /// before trusting any field. Providers that report refunds only
+    /// synchronously keep the default [`PayError::NotImplemented`], and their
+    /// refunds are polled with [`Self::query_refund`] instead.
+    fn verify_refund_notify(
+        &self,
+        notify: &NotifyRequest,
+    ) -> BoxFuture<Result<RefundNotifyEvent, PayError>> {
+        let _ = notify;
+        Box::pin(async {
+            Err(PayError::NotImplemented(
+                "refund notifications not supported by this provider",
+            ))
+        })
+    }
+
     /// Query one refund's provider-side state.
     fn query_refund(
         &self,
@@ -97,6 +115,18 @@ struct MockNotifyBody {
     status: PaymentStatus,
     #[serde(default)]
     transaction_id: Option<String>,
+}
+
+/// Refund notification body understood by
+/// [`MockProvider::verify_refund_notify`].
+#[derive(Deserialize)]
+struct MockRefundNotifyBody {
+    out_trade_no: String,
+    out_refund_no: String,
+    #[serde(default)]
+    refund_id: Option<String>,
+    amount: u64,
+    status: RefundStatus,
 }
 
 /// Fully working in-process provider for tests and local development.
@@ -184,6 +214,25 @@ impl MockProvider {
             provider: Self::KEY.to_owned(),
             out_refund_no: out_refund_no.to_owned(),
         })
+    }
+
+    /// The JSON body [`Self::verify_refund_notify`] accepts for a settled
+    /// refund, so tests can drive the callback path without a real gateway.
+    #[must_use]
+    pub fn refund_notify_body(
+        out_trade_no: &str,
+        out_refund_no: &str,
+        amount: Amount,
+        status: RefundStatus,
+    ) -> String {
+        serde_json::json!({
+            "out_trade_no": out_trade_no,
+            "out_refund_no": out_refund_no,
+            "refund_id": format!("MOCK-REFUND-{out_refund_no}"),
+            "amount": amount.minor(),
+            "status": status.as_str(),
+        })
+        .to_string()
     }
 
     /// The JSON notification body [`Self::verify_notify`] accepts for a paid order.
@@ -341,6 +390,25 @@ impl PaymentProvider for MockProvider {
                 .refunds
                 .push((refund.out_refund_no.clone(), refund.amount, status));
             Ok(receipt(refund, refund.amount, status))
+        });
+        Box::pin(async move { result })
+    }
+
+    fn verify_refund_notify(
+        &self,
+        notify: &NotifyRequest,
+    ) -> BoxFuture<Result<RefundNotifyEvent, PayError>> {
+        let result = notify.body_str().and_then(|raw| {
+            let parsed: MockRefundNotifyBody = serde_json::from_str(raw)
+                .map_err(|error| PayError::InvalidNotify(error.to_string()))?;
+            Ok(RefundNotifyEvent {
+                out_trade_no: parsed.out_trade_no,
+                out_refund_no: parsed.out_refund_no,
+                refund_id: parsed.refund_id,
+                amount: Amount::cny(parsed.amount),
+                status: parsed.status,
+                raw: raw.to_owned(),
+            })
         });
         Box::pin(async move { result })
     }

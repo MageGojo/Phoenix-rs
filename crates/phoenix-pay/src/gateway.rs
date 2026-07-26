@@ -34,11 +34,17 @@ use crate::transport::{GatewayRequest, GatewayResponse, HyperPayHttp, PayHttp, p
 use crate::wechat::{self, PlatformCerts, SignatureHeaders, request_message, response_message};
 use crate::{
     AlipayF2FConfig, Amount, Bill, CreateOrder, Currency, NotifyEvent, NotifyRequest, PayError,
-    PaymentAction, PaymentIntent, PaymentProvider, PaymentStatus, RefundOrder, RefundReceipt,
-    RefundStatus, WechatNativeConfig, parse_bill_csv,
+    PaymentAction, PaymentIntent, PaymentProvider, PaymentStatus, RefundNotifyEvent, RefundOrder,
+    RefundReceipt, RefundStatus, WechatNativeConfig, parse_bill_csv, parse_bill_csv_bytes,
 };
 
 const USER_AGENT: &str = concat!("phoenix-pay/", env!("CARGO_PKG_VERSION"));
+
+/// Upper bound on the inflated size of a downloaded bill archive.
+///
+/// A day of trades is megabytes at most; this is what stops a hostile or
+/// corrupt archive from being expanded until the process dies.
+const MAX_BILL_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Exhaustive match: adding a currency forces the gateways to handle it.
 fn require_cny(order: &CreateOrder) {
@@ -430,8 +436,15 @@ impl WechatInner {
         if let Some(reason) = &refund.reason {
             body["reason"] = serde_json::Value::String(reason.clone());
         }
-        if !self.config.notify_url.is_empty() {
-            body["notify_url"] = serde_json::Value::String(self.config.notify_url.clone());
+        // The refund callback URL is per-request and separate from the
+        // payment one; without it WeChat reports the outcome only on query.
+        if let Some(url) = self
+            .config
+            .refund_notify_url
+            .as_deref()
+            .filter(|url| !url.is_empty())
+        {
+            body["notify_url"] = serde_json::Value::String(url.to_owned());
         }
         let response = self
             .signed_request(
@@ -562,6 +575,42 @@ impl WechatInner {
             .await
     }
 
+    async fn verify_refund_notify(
+        &self,
+        notify: NotifyRequest,
+    ) -> Result<RefundNotifyEvent, PayError> {
+        // 1. Authenticate before parsing anything.
+        self.verify_notify_signature(&notify).await?;
+        let body: wechat::NotifyBody = serde_json::from_slice(notify.body())
+            .map_err(|error| PayError::InvalidNotify(format!("notify body: {error}")))?;
+        // 2. Refuse a payment callback delivered to the refund route: the two
+        // resources have different shapes, and confusing them would apply a
+        // payment event to a refund record.
+        if !body.event_type.starts_with("REFUND.") {
+            return Err(PayError::InvalidNotify(format!(
+                "expected a REFUND.* event, got `{}`",
+                body.event_type
+            )));
+        }
+        let api_v3_key = self.api_v3_key()?;
+        let plaintext = body
+            .resource
+            .decrypt(&api_v3_key)
+            .map_err(|error| PayError::InvalidNotify(format!("notify resource: {error}")))?;
+        let raw = String::from_utf8(plaintext)
+            .map_err(|_| PayError::InvalidNotify("notify resource is not UTF-8".to_owned()))?;
+        let resource: wechat::RefundNotifyResource = serde_json::from_str(&raw)
+            .map_err(|error| PayError::InvalidNotify(format!("notify resource: {error}")))?;
+        Ok(RefundNotifyEvent {
+            out_trade_no: resource.out_trade_no,
+            out_refund_no: resource.out_refund_no,
+            refund_id: resource.refund_id,
+            amount: Amount::from_minor(resource.amount.refund, Currency::Cny),
+            status: wechat::map_refund_notify_status(&resource.refund_status)?,
+            raw,
+        })
+    }
+
     async fn verify_notify(&self, notify: NotifyRequest) -> Result<NotifyEvent, PayError> {
         // 1. Authenticate: signature headers against the platform certificate.
         self.verify_notify_signature(&notify).await?;
@@ -629,6 +678,15 @@ impl PaymentProvider for WechatNativeProvider {
         let inner = Arc::clone(&self.inner);
         let refund = refund.clone();
         Box::pin(async move { inner.refund(&refund).await })
+    }
+
+    fn verify_refund_notify(
+        &self,
+        notify: &NotifyRequest,
+    ) -> BoxFuture<Result<RefundNotifyEvent, PayError>> {
+        let inner = Arc::clone(&self.inner);
+        let notify = notify.clone();
+        Box::pin(async move { inner.verify_refund_notify(notify).await })
     }
 
     fn query_refund(
@@ -749,12 +807,9 @@ impl AlipayF2FProvider {
 
     /// Signed URL of the daily trade bill for `date` (`YYYY-MM-DD`).
     ///
-    /// Alipay serves the bill as a ZIP archive, which this crate does not
-    /// unpack (it would need a new third-party dependency), so
-    /// [`PaymentProvider::download_bill`] stays unimplemented for this
-    /// provider. Fetch and unzip the URL however the deployment prefers, then
-    /// hand the CSV to [`parse_bill_csv`] and
-    /// [`PayManager::reconcile_bill`](crate::PayManager::reconcile_bill).
+    /// [`PaymentProvider::download_bill`] already fetches, unzips, and parses
+    /// this; reach for the raw URL only to archive the original file or to
+    /// hand it to an external pipeline.
     ///
     /// The URL is short-lived and grants access to settlement data — treat it
     /// as a credential and do not log it.
@@ -1016,6 +1071,57 @@ impl AlipayInner {
         })
     }
 
+    /// Download and parse one day's bill.
+    ///
+    /// Alipay serves the bill as a ZIP holding a detail member and a summary
+    /// member. Rather than guessing which is which from a filename in an
+    /// unknown encoding, every member is offered to the parser and the one
+    /// that yields the most rows wins — a member that is not a trade detail
+    /// simply fails to match a header.
+    async fn download_bill(&self, date: &str) -> Result<Bill, PayError> {
+        let url = self.bill_download_url(date).await?;
+        let response = self
+            .http
+            .request(GatewayRequest {
+                method: Method::GET,
+                url,
+                headers: vec![("user-agent", USER_AGENT.to_owned())],
+                body: Bytes::new(),
+            })
+            .await?;
+        if response.status != StatusCode::OK {
+            return Err(PayError::Reconcile(format!(
+                "bill download returned HTTP {}",
+                response.status
+            )));
+        }
+
+        let members = crate::zip::read_entries(&response.body, MAX_BILL_ARCHIVE_BYTES)?;
+        if members.is_empty() {
+            return Err(PayError::Reconcile("bill archive is empty".to_owned()));
+        }
+        let mut names = Vec::with_capacity(members.len());
+        let mut best: Option<Bill> = None;
+        for member in &members {
+            names.push(member.name.clone());
+            let Ok(bill) = parse_bill_csv_bytes(AlipayF2FProvider::KEY, date, &member.data) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .is_none_or(|current| bill.entries.len() > current.entries.len())
+            {
+                best = Some(bill);
+            }
+        }
+        best.ok_or_else(|| {
+            PayError::Reconcile(format!(
+                "no member of the bill archive is a trade detail ({})",
+                names.join(", ")
+            ))
+        })
+    }
+
     /// Ask Alipay for the signed download URL of one day's bill.
     async fn bill_download_url(&self, date: &str) -> Result<String, PayError> {
         let biz_content = serde_json::json!({ "bill_type": "trade", "bill_date": date });
@@ -1128,12 +1234,11 @@ impl PaymentProvider for AlipayF2FProvider {
         Box::pin(async move { inner.query_refund(&out_trade_no, &out_refund_no).await })
     }
 
-    // `download_bill` is deliberately left at the trait default
-    // (`PayError::NotImplemented`): Alipay publishes the daily bill as a ZIP
-    // archive, and unzipping it would mean a new third-party dependency this
-    // crate does not carry. Use `AlipayF2FProvider::bill_url` to obtain the
-    // signed URL, unpack it however the deployment prefers, then feed the CSV
-    // to `parse_bill_csv` + `PayManager::reconcile_bill`. See docs/PAYMENTS.md.
+    fn download_bill(&self, date: &str) -> BoxFuture<Result<Bill, PayError>> {
+        let inner = Arc::clone(&self.inner);
+        let date = date.to_owned();
+        Box::pin(async move { inner.download_bill(&date).await })
+    }
 }
 
 #[cfg(test)]

@@ -250,35 +250,168 @@ fn status_agrees(local: PaymentStatus, remote: PaymentStatus) -> bool {
     }
 }
 
-/// Header names accepted for each normalized column.
+/// One accepted spelling of a column name or status value.
 ///
-/// The real gateways ship Chinese headers (and disagree with each other), so
-/// one alias table keeps a single parser usable for `WeChat`, Alipay, and the
-/// canonical English form used in tests and hand-made files.
-const HEADER_ALIASES: &[(&str, &[&str])] = &[
+/// Both encodings are carried because the two gateways disagree: `WeChat`
+/// publishes UTF-8, Alipay publishes **GBK**, and GBK cannot be transcoded
+/// without an encoding table this crate has no business shipping. Matching on
+/// raw bytes sidesteps that entirely — and the values we actually read
+/// (order numbers, amounts) are ASCII in both encodings.
+struct Alias {
+    /// UTF-8 spelling, also used by the canonical English form.
+    utf8: &'static str,
+    /// GBK spelling, when the name is Chinese.
+    gbk: &'static [u8],
+}
+
+impl Alias {
+    /// Whether a raw CSV cell is this name in either encoding.
+    fn matches(&self, cell: &[u8]) -> bool {
+        cell == self.utf8.as_bytes() || (!self.gbk.is_empty() && cell == self.gbk)
+    }
+}
+
+/// ASCII-only alias (the canonical English column names).
+const fn ascii(utf8: &'static str) -> Alias {
+    Alias { utf8, gbk: b"" }
+}
+
+/// Column names accepted for each normalized column.
+const HEADER_ALIASES: &[(&str, &[Alias])] = &[
     (
         "out_trade_no",
-        &["out_trade_no", "商户订单号", "商户单号", "商家订单号"],
+        &[
+            ascii("out_trade_no"),
+            Alias {
+                utf8: "商户订单号",
+                gbk: b"\xC9\xCC\xBB\xA7\xB6\xA9\xB5\xA5\xBA\xC5",
+            },
+            Alias {
+                utf8: "商家订单号",
+                gbk: b"\xC9\xCC\xBC\xD2\xB6\xA9\xB5\xA5\xBA\xC5",
+            },
+            Alias {
+                utf8: "商户单号",
+                gbk: b"\xC9\xCC\xBB\xA7\xB5\xA5\xBA\xC5",
+            },
+        ],
     ),
     (
         "transaction_id",
-        &["transaction_id", "微信订单号", "支付宝交易号", "交易号"],
+        &[
+            ascii("transaction_id"),
+            Alias {
+                utf8: "微信订单号",
+                gbk: b"\xCE\xA2\xD0\xC5\xB6\xA9\xB5\xA5\xBA\xC5",
+            },
+            Alias {
+                utf8: "支付宝交易号",
+                gbk: b"\xD6\xA7\xB8\xB6\xB1\xA6\xBD\xBB\xD2\xD7\xBA\xC5",
+            },
+            Alias {
+                utf8: "交易号",
+                gbk: b"\xBD\xBB\xD2\xD7\xBA\xC5",
+            },
+        ],
     ),
     (
         "amount",
         &[
-            "amount",
-            "订单金额",
-            "订单金额（元）",
-            "总金额",
-            "应结订单金额",
+            ascii("amount"),
+            Alias {
+                utf8: "订单金额",
+                gbk: b"\xB6\xA9\xB5\xA5\xBD\xF0\xB6\xEE",
+            },
+            Alias {
+                utf8: "订单金额（元）",
+                gbk: b"\xB6\xA9\xB5\xA5\xBD\xF0\xB6\xEE\xA3\xA8\xD4\xAA\xA3\xA9",
+            },
+            Alias {
+                utf8: "总金额",
+                gbk: b"\xD7\xDC\xBD\xF0\xB6\xEE",
+            },
+            Alias {
+                utf8: "应结订单金额",
+                gbk: b"\xD3\xA6\xBD\xE1\xB6\xA9\xB5\xA5\xBD\xF0\xB6\xEE",
+            },
         ],
     ),
     (
         "refunded",
-        &["refunded", "退款金额", "商户退款金额", "退款金额（元）"],
+        &[
+            ascii("refunded"),
+            Alias {
+                utf8: "退款金额",
+                gbk: b"\xCD\xCB\xBF\xEE\xBD\xF0\xB6\xEE",
+            },
+            Alias {
+                utf8: "商户退款金额",
+                gbk: b"\xC9\xCC\xBB\xA7\xCD\xCB\xBF\xEE\xBD\xF0\xB6\xEE",
+            },
+            Alias {
+                utf8: "退款金额（元）",
+                gbk: b"\xCD\xCB\xBF\xEE\xBD\xF0\xB6\xEE\xA3\xA8\xD4\xAA\xA3\xA9",
+            },
+        ],
     ),
-    ("status", &["status", "交易状态", "业务类型"]),
+    (
+        "status",
+        &[
+            ascii("status"),
+            Alias {
+                utf8: "交易状态",
+                gbk: b"\xBD\xBB\xD2\xD7\xD7\xB4\xCC\xAC",
+            },
+            Alias {
+                utf8: "业务类型",
+                gbk: b"\xD2\xB5\xCE\xF1\xC0\xE0\xD0\xCD",
+            },
+        ],
+    ),
+];
+
+/// Status values accepted in the `status` column, mapped onto the state
+/// machine. An unrecognized value is an error, never a guess.
+const BILL_STATUSES: &[(&[Alias], PaymentStatus)] = &[
+    (
+        &[
+            ascii("SUCCESS"),
+            ascii("TRADE_SUCCESS"),
+            ascii("TRADE_FINISHED"),
+            Alias {
+                utf8: "支付",
+                gbk: b"\xD6\xA7\xB8\xB6",
+            },
+            Alias {
+                utf8: "交易",
+                gbk: b"\xBD\xBB\xD2\xD7",
+            },
+        ],
+        PaymentStatus::Paid,
+    ),
+    (
+        &[
+            ascii("REFUND"),
+            Alias {
+                utf8: "退款",
+                gbk: b"\xCD\xCB\xBF\xEE",
+            },
+        ],
+        PaymentStatus::Refunded,
+    ),
+    (
+        &[
+            ascii("CLOSED"),
+            ascii("REVOKED"),
+            ascii("TRADE_CLOSED"),
+            Alias {
+                utf8: "关闭",
+                gbk: b"\xB9\xD8\xB1\xD5",
+            },
+        ],
+        PaymentStatus::Closed,
+    ),
+    (&[ascii("PAYERROR")], PaymentStatus::Failed),
 ];
 
 /// Parse a provider bill from CSV text.
@@ -298,22 +431,39 @@ const HEADER_ALIASES: &[(&str, &[&str])] = &[
 /// recognizable order-number or amount column, a malformed row, or an amount
 /// that is not a valid decimal.
 pub fn parse_bill_csv(provider: &str, date: &str, csv: &str) -> Result<Bill, PayError> {
+    parse_bill_csv_bytes(provider, date, csv.as_bytes())
+}
+
+/// Parse a provider bill from raw CSV bytes.
+///
+/// Alipay publishes its bill as GBK, which is not valid UTF-8, so the bytes
+/// entry point is the one the drivers use: header cells and status values are
+/// matched against both encodings (see [`Alias`]), and the values actually
+/// read — order numbers, transaction ids, decimal amounts — are ASCII in
+/// either. Any other column may be non-UTF-8 and is never decoded.
+///
+/// # Errors
+///
+/// Same as [`parse_bill_csv`].
+pub fn parse_bill_csv_bytes(provider: &str, date: &str, csv: &[u8]) -> Result<Bill, PayError> {
     let mut lines = csv
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+        .split(|byte| *byte == b'\n')
+        .map(trim_ascii)
+        // Both gateways wrap the detail rows in `#`-prefixed comment and
+        // summary blocks.
+        .filter(|line| !line.is_empty() && !line.starts_with(b"#"));
     let header = lines
         .next()
         .ok_or_else(|| PayError::Reconcile("bill has no header row".to_owned()))?;
-    let columns: Vec<&str> = header.split(',').map(clean_cell).collect();
+    let columns: Vec<&[u8]> = split_cells(header);
     let index = |name: &str| {
         let aliases = HEADER_ALIASES
             .iter()
             .find(|(canonical, _)| *canonical == name)
-            .map_or(&[] as &[&str], |(_, aliases)| *aliases);
+            .map_or(&[] as &[Alias], |(_, aliases)| *aliases);
         columns
             .iter()
-            .position(|column| aliases.contains(column))
+            .position(|column| aliases.iter().any(|alias| alias.matches(column)))
             .ok_or_else(|| PayError::Reconcile(format!("bill has no `{name}` column")))
     };
     let out_trade_no = index("out_trade_no")?;
@@ -324,7 +474,7 @@ pub fn parse_bill_csv(provider: &str, date: &str, csv: &str) -> Result<Bill, Pay
 
     let mut entries = Vec::new();
     for (row, line) in lines.enumerate() {
-        let cells: Vec<&str> = line.split(',').map(clean_cell).collect();
+        let cells = split_cells(line);
         let cell = |position: usize| {
             cells.get(position).copied().ok_or_else(|| {
                 PayError::Reconcile(format!("bill row {} is missing a column", row + 1))
@@ -337,14 +487,14 @@ pub fn parse_bill_csv(provider: &str, date: &str, csv: &str) -> Result<Bill, Pay
             break;
         }
         entries.push(BillEntry {
-            out_trade_no: number.to_owned(),
+            out_trade_no: text(number),
             transaction_id: transaction_id
                 .and_then(|position| cells.get(position).copied())
                 .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-            amount: Amount::cny_from_decimal_str(cell(amount)?)?,
+                .map(text),
+            amount: Amount::cny_from_decimal_str(&text(cell(amount)?))?,
             refunded: match refunded.and_then(|position| cells.get(position).copied()) {
-                Some(value) if !value.is_empty() => Amount::cny_from_decimal_str(value)?,
+                Some(value) if !value.is_empty() => Amount::cny_from_decimal_str(&text(value))?,
                 _ => Amount::cny(0),
             },
             status: match status {
@@ -364,26 +514,63 @@ pub fn parse_bill_csv(provider: &str, date: &str, csv: &str) -> Result<Bill, Pay
 /// Map a bill's status cell onto the order state machine.
 ///
 /// Accepts the canonical lowercase names plus the vocabularies both gateways
-/// print in their bills. Unknown values are an error rather than a guess:
+/// print, in either encoding. Unknown values are an error rather than a guess:
 /// silently treating an unrecognized state as paid is exactly the mistake
 /// reconciliation exists to catch.
-fn parse_bill_status(cell: &str) -> Result<PaymentStatus, PayError> {
-    match cell {
-        // WeChat 交易状态 / Alipay trade_status, plus 业务类型 on refund rows.
-        "SUCCESS" | "TRADE_SUCCESS" | "TRADE_FINISHED" | "支付" => Ok(PaymentStatus::Paid),
-        "REFUND" | "退款" => Ok(PaymentStatus::Refunded),
-        "CLOSED" | "REVOKED" | "TRADE_CLOSED" | "关闭" => Ok(PaymentStatus::Closed),
-        "PAYERROR" => Ok(PaymentStatus::Failed),
-        other => other
-            .parse::<PaymentStatus>()
-            .map_err(|_| PayError::Reconcile(format!("unknown bill status `{other}`"))),
+fn parse_bill_status(cell: &[u8]) -> Result<PaymentStatus, PayError> {
+    for (aliases, status) in BILL_STATUSES {
+        if aliases.iter().any(|alias| alias.matches(cell)) {
+            return Ok(*status);
+        }
     }
+    let decoded = text(cell);
+    decoded
+        .parse::<PaymentStatus>()
+        .map_err(|_| PayError::Reconcile(format!("unknown bill status `{decoded}`")))
+}
+
+/// Split one CSV line into cleaned cells.
+fn split_cells(line: &[u8]) -> Vec<&[u8]> {
+    line.split(|byte| *byte == b',').map(clean_cell).collect()
+}
+
+/// Decode a cell leniently. Only ever applied to columns whose values are
+/// ASCII in both encodings, so the lossy path is unreachable in practice and
+/// harmless if a gateway ever surprises us.
+fn text(cell: &[u8]) -> String {
+    String::from_utf8_lossy(cell).into_owned()
+}
+
+fn trim_ascii(line: &[u8]) -> &[u8] {
+    let mut line = line;
+    while let [first, rest @ ..] = line {
+        if first.is_ascii_whitespace() {
+            line = rest;
+        } else {
+            break;
+        }
+    }
+    while let [rest @ .., last] = line {
+        if last.is_ascii_whitespace() {
+            line = rest;
+        } else {
+            break;
+        }
+    }
+    line
 }
 
 /// Strip the quoting the gateways use (`WeChat` prefixes every cell with a
 /// backtick so spreadsheets keep long numbers as text).
-fn clean_cell(cell: &str) -> &str {
-    cell.trim().trim_start_matches('`').trim_matches('"').trim()
+fn clean_cell(cell: &[u8]) -> &[u8] {
+    let mut cell = trim_ascii(cell);
+    while let [b'`' | b'"', rest @ ..] = cell {
+        cell = rest;
+    }
+    while let [rest @ .., b'"'] = cell {
+        cell = rest;
+    }
+    trim_ascii(cell)
 }
 
 #[cfg(test)]
@@ -578,6 +765,33 @@ out_trade_no,transaction_id,amount,refunded,status
                 .all(|entry| entry.status == PaymentStatus::Paid)
         );
         assert_eq!(bill.net_total().expect("net"), Amount::cny(995));
+    }
+
+    #[test]
+    fn parses_a_gbk_bill_without_transcoding_it() {
+        // Alipay publishes GBK. The header and status cells are matched on raw
+        // bytes; the values we read are ASCII in either encoding.
+        let mut csv: Vec<u8> = Vec::new();
+        csv.extend_from_slice("#支付宝交易明细查询\n".as_bytes());
+        // 商户订单号,业务类型,订单金额（元）
+        csv.extend_from_slice(
+            b"\xC9\xCC\xBB\xA7\xB6\xA9\xB5\xA5\xBA\xC5,\
+              \xD2\xB5\xCE\xF1\xC0\xE0\xD0\xCD,\
+              \xB6\xA9\xB5\xA5\xBD\xF0\xB6\xEE\xA3\xA8\xD4\xAA\xA3\xA9\n",
+        );
+        csv.extend_from_slice(b"T-1,\xBD\xBB\xD2\xD7,9.90\n"); // 交易
+        csv.extend_from_slice(b"T-2,\xCD\xCB\xBF\xEE,0.05\n"); // 退款
+
+        assert!(
+            std::str::from_utf8(&csv).is_err(),
+            "the fixture is not UTF-8"
+        );
+        let bill = parse_bill_csv_bytes("alipay_f2f", "2026-07-25", &csv).expect("parse");
+        assert_eq!(bill.entries.len(), 2);
+        assert_eq!(bill.entries[0].out_trade_no, "T-1");
+        assert_eq!(bill.entries[0].amount, Amount::cny(990));
+        assert_eq!(bill.entries[0].status, PaymentStatus::Paid);
+        assert_eq!(bill.entries[1].status, PaymentStatus::Refunded);
     }
 
     #[test]

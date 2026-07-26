@@ -1931,6 +1931,7 @@ version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "base64",
+ "flate2",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1989,10 +1990,12 @@ dependencies = [
 name = "phoenix-redis"
 version = "0.1.1"
 dependencies = [
+ "base64",
  "futures-util",
  "phoenix-crypto",
  "phoenix-http",
  "phoenix-queue",
+ "phoenix-routing",
  "phoenix-schedule",
  "phoenix-security",
  "redis",
@@ -2002,6 +2005,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

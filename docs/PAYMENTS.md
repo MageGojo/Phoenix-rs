@@ -20,12 +20,13 @@
 | `PaymentStatus` | 订单状态机：`Created → Pending → Paid / Failed / Closed`，`Paid ⇄ Refunding → Refunded`；非法迁移返回 `PayError::InvalidTransition` |
 | `PaymentProvider` | `key()` / `create(&CreateOrder)` / `verify_notify(&NotifyRequest)` / `query(out_trade_no)`，以及默认 `NotImplemented` 的 `close` / `refund` / `query_refund` / `download_bill`；异步风格与 `MailTransport` 一致（`BoxFuture`，可 `Arc<dyn>` 持有） |
 | `RefundOrder` / `RefundStatus` / `RefundReceipt` / `RefundRecord` | 退款请求（`full` / `partial` / `reason`）、退款状态机、网关回执、持久化行 |
-| `Bill` / `BillEntry` / `Discrepancy` / `Reconciliation` | 对账：账单、账单行、差异、比对结果（`reconcile` / `parse_bill_csv`） |
+| `RefundNotifyEvent` / `RefundNotifyOutcome` | 已验签的退款异步通知，及其幂等处理结果 |
+| `Bill` / `BillEntry` / `Discrepancy` / `Reconciliation` | 对账：账单、账单行、差异、比对结果（`reconcile` / `parse_bill_csv` / `parse_bill_csv_bytes`） |
 | `PayHttp` / `HyperPayHttp` | 网关 HTTP 传输接缝：`request(GatewayRequest) -> GatewayResponse`；默认实现 hyper 1.x + rustls（`rustls-native-certs` 系统根证书），测试可指向 127.0.0.1 假网关 |
 | `PaymentAction` | `QrCode(String)` / `Redirect(String)` / `SdkParams(Value)`（`#[non_exhaustive]`） |
 | `PaymentIntent` / `NotifyEvent` / `PaymentRecord` | 下单结果 / 已验签的规范化通知 / 存储行 |
 | `PaymentStore` | 订单：`insert` / `find` / `transition` / `paid_within`；退款：`insert_refund` / `find_refund` / `refunds_for` / `transition_refund` / `record_refund_id`。内置 `MemoryPaymentStore` 与 `DbPaymentStore` |
-| `PayManager` | 门面：`create` / `handle_notify`（幂等）/ `query` / `close` / `find_order` / `refund`（幂等）/ `sync_refund` / `refunds_for` / `reconcile_day` / `reconcile_bill` |
+| `PayManager` | 门面：`create` / `handle_notify`（幂等）/ `query` / `close` / `find_order` / `refund`（幂等）/ `handle_refund_notify`（幂等）/ `sync_refund` / `refunds_for` / `reconcile_day` / `reconcile_bill` |
 | `PayFeature` | Plugin：回调路由 + `payments` / `payment_refunds` 迁移 |
 | `Secret` | 可反序列化的密钥字段，`Debug` 输出 `[REDACTED]`，drop 时 zeroize |
 | `PayError` | thiserror 稳定错误集：`Config`（密钥/配置问题 → 500）、`Gateway`（网关传输/应答验签失败 → 502）、`InvalidNotify`（回调验签/解析失败 → 400）、`NotImplemented`（→ 501）、`InvalidRefund` / `DuplicateRefund` / `RefundNotFound` / `RefundExceedsOrder` / `Reconcile` 等 |
@@ -98,6 +99,8 @@ let parts = features.into_parts();   // routes / migrations
 | `pay.notify.wechat` | `POST /pay/notify/wechat` | 微信异步通知（验签 + 解密后入库；无签名 / 验签失败一律 400） |
 | `pay.notify.alipay` | `POST /pay/notify/alipay` | 支付宝异步通知（RSA2 验签后入库；验签失败一律 400） |
 | `pay.notify.mock` | `POST /pay/notify/mock` | Mock 通知（开发 / 测试） |
+| `pay.notify.wechat.refund` | `POST /pay/notify/wechat/refund` | 微信**退款**异步通知（独立回调 URL） |
+| `pay.notify.mock.refund` | `POST /pay/notify/mock/refund` | Mock 退款通知（开发 / 测试） |
 | `pay.orders.show` | `GET /pay/orders/{provider}/{out_trade_no}` | 本地订单状态查询 |
 
 **CSRF 说明**：回调由支付平台服务器调用，没有会话，也带不了 CSRF token。Phoenix 的 `Csrf` 中间件是按路由组显式挂载的（见 `docs/FEATURES.md` / 安全栈），因此把 `FeatureSet` 的支付路由**单独 merge、不要包进 Session/CSRF 中间件组**即可；通知的真实性由 `PaymentProvider::verify_notify` 的验签保证，而不是 CSRF。
@@ -141,10 +144,28 @@ let receipt = manager
     .await?;
 
 if receipt.status == RefundStatus::Processing {
-    // 异步落地：稍后轮询（可挂到 phoenix-schedule）
+    // 异步落地：等回调，或稍后轮询（可挂到 phoenix-schedule）
     let settled = manager.sync_refund("wechat_native", "R-1001").await?;
 }
 ```
+
+### 退款异步通知（微信）
+
+微信的退款回调**走独立的 URL**，不是支付回调那一个，且 URL 是**每笔退款请求**带上去的。因此：
+
+- 配置项是单独的 `refund_notify_url`（不填就不带回调 URL，只能靠 `sync_refund` 轮询）；
+- 路由也是单独的 `pay.notify.wechat.refund`；
+- 投到退款路由的**支付**回调会被拒绝（`event_type` 必须是 `REFUND.*`）——两种 resource 结构不同，混用会把支付事件写进退款记录。
+
+`PayManager::handle_refund_notify` 的保证：
+
+- 先验签解密再取字段（与支付回调同一条硬规矩）；
+- **金额要对得上**：回调金额与库里那笔退款不一致直接报错，不静默记录；
+- 幂等：网关会重投，重复回调返回 `AlreadyProcessed`，不二次迁移；
+- 只报「仍在处理中」的回调被确认但不算迁移；
+- 落地后同步订单状态（成功累计够 → `Refunded`；全失败 → 回到 `Paid`）。
+
+`REFUND.ABNORMAL` 映射为 `Failed`：它表示退款**没有**成功、需要人工在商户平台处理，把它挂在 pending 上等于永远等不到结果。
 
 `PayManager::refund` 的顺序是刻意的——**先落库，再调网关**：
 
@@ -187,7 +208,7 @@ if !result.is_balanced() {
 - **时区不在本 crate 里**：`day_start` 由调用方给出。两个国内网关都按 UTC+8 出账，本 crate 不带时区库，也不猜。
 - 本地 `Refunding` / `Refunded` 与账单上的 `Paid` **算一致**：退款晚于付款结算，付款日的账单当然还记着这笔。
 - 账单里非 `Paid` 的行，本地没有记录时不报差异（没有钱要对）。
-- `parse_bill_csv` 同时认识规范英文表头与两个网关的中文表头（`商户订单号` / `订单金额` / `交易状态` …），会剥掉微信的反引号前缀，遇到不认识的状态值**报错而不是当成已付**——那正是对账要抓的错。按「仅成功」下载的账单没有状态列时整份按 `Paid` 读。
+- 表头与状态值同时认识规范英文、微信的 UTF-8 中文、支付宝的 **GBK** 中文，会剥掉微信的反引号前缀，遇到不认识的状态值**报错而不是当成已付**——那正是对账要抓的错。按「仅成功」下载的账单没有状态列时整份按 `Paid` 读。
 
 ## 微信 / 支付宝接入现状：真实网关已实现
 
@@ -214,11 +235,11 @@ if !result.is_balanced() {
 - **微信**：`POST /v3/refund/domestic/refunds` 退款、`GET /v3/refund/domestic/refunds/{out_refund_no}` 查询；状态映射 `SUCCESS→Succeeded`、`PROCESSING→Processing`、`CLOSED`/`ABNORMAL→Failed`（`ABNORMAL` 表示需人工处理、钱**没有**退出，所以按失败计）。
 - **微信对账单**：`GET /v3/bill/tradebill?bill_date=&bill_type=SUCCESS` 拿签名下载票据，再签名 GET 取 CSV；下载文件本身没有验签头，因此**用票据里公布的 SHA1 摘要校验后才解析**，摘要不符直接报错。
 - **支付宝**：`alipay.trade.refund` 退款（总是带 `out_request_no` 幂等键）、`alipay.trade.fastpay.refund.query` 查询；该接口同步落地，没有 `Processing` 态。查询返回「成功但空体」表示这笔退款不存在，映射为 `RefundNotFound` 而**不是**零元退款。
-- **支付宝对账单**：`AlipayF2FProvider::bill_url(date)` 返回签名下载 URL。账单是 **ZIP**，解压会引入新的第三方依赖，本 crate 不做，因此 `download_bill` 对该渠道保持 `NotImplemented`——自行解压后用 `parse_bill_csv` + `PayManager::reconcile_bill`。该 URL 是短期凭据，**不要打日志**。
+- **支付宝对账单**：`download_bill` 已打通全流程——查签名 URL → 下载 ZIP → 解压 → 解析。ZIP 里有明细与汇总两个成员，**不靠文件名猜**（文件名同样是 GBK）：把每个成员都喂给解析器，取行数最多的那个，不是交易明细的成员根本匹配不上表头。`bill_url(date)` 仍然保留，用于归档原始文件；它是短期凭据，**不要打日志**。
+- **GBK 不转码**：支付宝账单是 GBK，转码需要一张本 crate 不该携带的编码表。做法是**在字节层匹配**表头与状态值（每个别名同时带 UTF-8 与 GBK 两种拼写），而真正读取的列（订单号、交易号、十进制金额）在两种编码下都是 ASCII。`parse_bill_csv_bytes` 是驱动走的入口，`parse_bill_csv` 是它的 UTF-8 便捷包装。
+- **ZIP 读取器是最小实现**：中央目录 + 本地头 + stored/DEFLATE，不支持加密 / ZIP64 / 分卷。所有长度都对缓冲区做边界检查，解压总量**先封顶再解**（256 MiB）——声称能膨胀到 1 TB 的账单是被拒绝，而不是被尝试。DEFLATE 用 `flate2`，它本来就在 lock 里（MySQL / Redis 驱动带的），没有引入新的第三方 crate。
 
 **仍未实现（后续清单）：**
-
-- 退款的**异步通知**（微信退款回调走独立 notify URL）：目前靠同步应答 + `sync_refund` 轮询覆盖。
 - 微信平台证书**自动轮换细节**：`platform_cert_path` 文件模式不自动重载；下载模式仅按 TTL / 未知 serial 重拉，未实现新旧证书重叠期的平滑切换策略。
 - 微信 JSAPI / H5 / App / 小程序支付，支付宝 WAP / PC 网页支付、公钥**证书模式**（`app_cert_path` / `alipay_root_cert_path` 字段已预留，逻辑未接）。
 - 币种仅 CNY（`Currency` 增员会在网关处强制编译期处理）。

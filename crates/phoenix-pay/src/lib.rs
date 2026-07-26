@@ -30,6 +30,7 @@ mod status;
 mod store;
 mod transport;
 mod wechat;
+mod zip;
 
 pub use amount::{Amount, Currency};
 pub use config::{AlipayF2FConfig, Secret, WechatNativeConfig};
@@ -44,8 +45,12 @@ pub use order::{
     CreateOrder, NotifyEvent, NotifyRequest, PaymentAction, PaymentIntent, PaymentRecord,
 };
 pub use provider::{MockProvider, PaymentProvider};
-pub use reconcile::{Bill, BillEntry, Discrepancy, Reconciliation, parse_bill_csv, reconcile};
-pub use refund::{RefundOrder, RefundReceipt, RefundRecord, RefundStatus};
+pub use reconcile::{
+    Bill, BillEntry, Discrepancy, Reconciliation, parse_bill_csv, parse_bill_csv_bytes, reconcile,
+};
+pub use refund::{
+    RefundNotifyEvent, RefundNotifyOutcome, RefundOrder, RefundReceipt, RefundRecord, RefundStatus,
+};
 pub use status::PaymentStatus;
 pub use store::{MemoryPaymentStore, PaymentStore};
 pub use transport::{GatewayRequest, GatewayResponse, HyperPayHttp, PayHttp};
@@ -57,7 +62,8 @@ pub mod prelude {
         DbPaymentStore, Discrepancy, HyperPayHttp, MemoryPaymentStore, MockProvider, NotifyEvent,
         NotifyOutcome, NotifyRequest, PayError, PayFeature, PayHttp, PayManager, PaymentAction,
         PaymentIntent, PaymentProvider, PaymentRecord, PaymentRow, PaymentStatus, PaymentStore,
-        Reconciliation, RefundOrder, RefundReceipt, RefundRecord, RefundRow, RefundStatus, Secret,
-        WechatNativeConfig, WechatNativeProvider, reconcile,
+        Reconciliation, RefundNotifyEvent, RefundNotifyOutcome, RefundOrder, RefundReceipt,
+        RefundRecord, RefundRow, RefundStatus, Secret, WechatNativeConfig, WechatNativeProvider,
+        reconcile,
     };
 }

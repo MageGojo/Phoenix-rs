@@ -218,6 +218,37 @@ pub struct RefundReceipt {
     pub raw: String,
 }
 
+/// A verified, normalized asynchronous **refund** notification.
+///
+/// `WeChat` delivers refund outcomes to their own callback URL rather than the
+/// payment one, so this is a distinct event from
+/// [`NotifyEvent`](crate::NotifyEvent): it is keyed by `out_refund_no` and
+/// carries a [`RefundStatus`], not a [`PaymentStatus`](crate::PaymentStatus).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RefundNotifyEvent {
+    /// Merchant order number the refund belongs to.
+    pub out_trade_no: String,
+    /// Merchant refund number the event is about.
+    pub out_refund_no: String,
+    /// Provider-side refund id, when present.
+    pub refund_id: Option<String>,
+    /// Refunded amount as the provider reports it.
+    pub amount: Amount,
+    /// Outcome the provider reports; must be a legal refund transition target.
+    pub status: RefundStatus,
+    /// Raw decrypted payload, kept for auditing.
+    pub raw: String,
+}
+
+/// Outcome of processing one asynchronous refund notification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefundNotifyOutcome {
+    /// First delivery: the refund settled and the order status was synced.
+    Processed(RefundNotifyEvent),
+    /// Idempotent replay: the refund already carries the reported status.
+    AlreadyProcessed(RefundNotifyEvent),
+}
+
 /// One persisted row of the `payment_refunds` table (or its in-memory stand-in).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefundRecord {

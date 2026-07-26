@@ -377,6 +377,215 @@ async fn a_provider_error_leaves_an_auditable_failed_refund() {
 }
 
 #[tokio::test]
+async fn a_refund_callback_settles_an_in_flight_refund_idempotently() {
+    let (manager, provider, _store) = mock_manager();
+    paid_order(&manager, &provider, "T900").await;
+    provider.defer_refund("R-CB");
+
+    let receipt = manager
+        .refund("mock", RefundOrder::full("T900", "R-CB", Amount::cny(1234)))
+        .await
+        .expect("accepted");
+    assert_eq!(receipt.status, RefundStatus::Processing);
+
+    let body = MockProvider::refund_notify_body(
+        "T900",
+        "R-CB",
+        Amount::cny(1234),
+        RefundStatus::Succeeded,
+    );
+    let outcome = manager
+        .handle_refund_notify("mock", NotifyRequest::from_body(body.clone()))
+        .await
+        .expect("first callback");
+    let RefundNotifyOutcome::Processed(event) = outcome else {
+        panic!("first callback must be Processed, got {outcome:?}");
+    };
+    assert_eq!(event.out_refund_no, "R-CB");
+    assert_eq!(event.status, RefundStatus::Succeeded);
+
+    let refunds = manager.refunds_for("mock", "T900").await.expect("refunds");
+    assert_eq!(refunds[0].status, RefundStatus::Succeeded);
+    assert_eq!(refunds[0].refund_id.as_deref(), Some("MOCK-REFUND-R-CB"));
+    assert_eq!(
+        manager
+            .find_order("mock", "T900")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        PaymentStatus::Refunded,
+        "the order follows its refunds"
+    );
+
+    // Gateways retry callbacks; a replay must not transition a second time.
+    for _ in 0..3 {
+        let replay = manager
+            .handle_refund_notify("mock", NotifyRequest::from_body(body.clone()))
+            .await
+            .expect("replay");
+        assert!(matches!(replay, RefundNotifyOutcome::AlreadyProcessed(_)));
+    }
+}
+
+#[tokio::test]
+async fn a_failed_refund_callback_restores_the_order() {
+    let (manager, provider, _store) = mock_manager();
+    paid_order(&manager, &provider, "T901").await;
+    provider.defer_refund("R-BAD");
+    manager
+        .refund(
+            "mock",
+            RefundOrder::full("T901", "R-BAD", Amount::cny(1234)),
+        )
+        .await
+        .expect("accepted");
+
+    manager
+        .handle_refund_notify(
+            "mock",
+            NotifyRequest::from_body(MockProvider::refund_notify_body(
+                "T901",
+                "R-BAD",
+                Amount::cny(1234),
+                RefundStatus::Failed,
+            )),
+        )
+        .await
+        .expect("callback");
+
+    assert_eq!(
+        manager
+            .find_order("mock", "T901")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        PaymentStatus::Paid,
+        "the money never left, so the order is paid again"
+    );
+}
+
+#[tokio::test]
+async fn refund_callbacks_are_checked_against_the_stored_refund() {
+    let (manager, provider, _store) = mock_manager();
+    paid_order(&manager, &provider, "T902").await;
+    provider.defer_refund("R-1");
+    manager
+        .refund(
+            "mock",
+            RefundOrder::partial("T902", "R-1", Amount::cny(300), Amount::cny(1234)),
+        )
+        .await
+        .expect("accepted");
+
+    // A callback for a refund we never issued.
+    assert!(matches!(
+        manager
+            .handle_refund_notify(
+                "mock",
+                NotifyRequest::from_body(MockProvider::refund_notify_body(
+                    "T902",
+                    "GHOST",
+                    Amount::cny(300),
+                    RefundStatus::Succeeded,
+                )),
+            )
+            .await,
+        Err(PayError::RefundNotFound { .. })
+    ));
+
+    // A callback that disagrees about the amount is a mismatch to investigate,
+    // not something to record.
+    assert!(matches!(
+        manager
+            .handle_refund_notify(
+                "mock",
+                NotifyRequest::from_body(MockProvider::refund_notify_body(
+                    "T902",
+                    "R-1",
+                    Amount::cny(1234),
+                    RefundStatus::Succeeded,
+                )),
+            )
+            .await,
+        Err(PayError::RefundExceedsOrder { .. })
+    ));
+    assert_eq!(
+        manager.refunds_for("mock", "T902").await.unwrap()[0].status,
+        RefundStatus::Processing,
+        "neither rejected callback changed the stored refund"
+    );
+
+    // A "still processing" callback is acknowledged but is not a transition.
+    let outcome = manager
+        .handle_refund_notify(
+            "mock",
+            NotifyRequest::from_body(MockProvider::refund_notify_body(
+                "T902",
+                "R-1",
+                Amount::cny(300),
+                RefundStatus::Processing,
+            )),
+        )
+        .await
+        .expect("processing callback");
+    assert!(matches!(outcome, RefundNotifyOutcome::AlreadyProcessed(_)));
+}
+
+#[tokio::test]
+async fn the_refund_webhook_route_is_separate_from_the_payment_one() {
+    use phoenix_http::{Method, Request, StatusCode, Uri};
+    use phoenix_plugin::FeatureSet;
+
+    let (manager, provider, _store) = mock_manager();
+    paid_order(&manager, &provider, "T903").await;
+    provider.defer_refund("R-1");
+    manager
+        .refund("mock", RefundOrder::full("T903", "R-1", Amount::cny(1234)))
+        .await
+        .expect("accepted");
+
+    let router = FeatureSet::new()
+        .plugin(PayFeature::new(Arc::clone(&manager)))
+        .expect("install pay feature")
+        .into_parts()
+        .routes
+        .build()
+        .expect("router");
+    assert_eq!(
+        router.url("pay.notify.mock.refund", &[]).expect("named"),
+        "/pay/notify/mock/refund"
+    );
+
+    let body =
+        MockProvider::refund_notify_body("T903", "R-1", Amount::cny(1234), RefundStatus::Succeeded);
+    let post = |path: &str, body: &str| {
+        Request::from_parts(
+            Method::POST,
+            path.parse::<Uri>().expect("uri"),
+            phoenix_http::HeaderMap::new(),
+            body.to_owned().into_bytes().into(),
+        )
+    };
+
+    let response = router.handle(post("/pay/notify/mock/refund", &body)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(payload["code"], "SUCCESS");
+    assert_eq!(payload["out_refund_no"], "R-1");
+    assert_eq!(payload["duplicate"], false);
+
+    let replay = router.handle(post("/pay/notify/mock/refund", &body)).await;
+    let payload: serde_json::Value = serde_json::from_slice(replay.body()).unwrap();
+    assert_eq!(payload["duplicate"], true);
+
+    // A refund payload posted to the *payment* webhook is not a payment event.
+    let wrong = router.handle(post("/pay/notify/mock", &body)).await;
+    assert_ne!(wrong.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn reconciling_a_day_matches_the_bill_against_local_orders() {
     let (manager, provider, store) = mock_manager();
     let window_start = SystemTime::now() - Duration::from_mins(1);

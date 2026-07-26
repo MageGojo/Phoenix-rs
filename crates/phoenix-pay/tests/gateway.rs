@@ -407,6 +407,7 @@ fn wechat_config(with_cert_file: bool) -> WechatNativeConfig {
         private_key_path: fixture("wechat_merchant_key.pem"),
         platform_cert_path: with_cert_file.then(|| fixture("wechat_platform_cert.pem")),
         notify_url: "https://shop.example.com/pay/notify/wechat".to_owned(),
+        refund_notify_url: Some("https://shop.example.com/pay/notify/wechat/refund".to_owned()),
     }
 }
 
@@ -604,6 +605,100 @@ fn wechat_notify_request(tamper: bool, serial: &str) -> NotifyRequest {
     NotifyRequest::new(headers, Bytes::from(body))
 }
 
+/// A signed, encrypted `WeChat` refund callback. `event_type` is a parameter so
+/// a payment callback can be aimed at the refund route.
+fn wechat_refund_notify_request(event_type: &str, refund_status: &str) -> NotifyRequest {
+    let resource_plain = serde_json::json!({
+        "mchid": "m1",
+        "out_trade_no": "T-REFUND",
+        "transaction_id": "4200-T-REFUND",
+        "out_refund_no": "R-1",
+        "refund_id": "50000-R-1",
+        "refund_status": refund_status,
+        "amount": { "refund": 1234, "total": 1234 },
+    })
+    .to_string();
+    let nonce = *b"refundnonce1";
+    let ciphertext = aes_encrypt(&nonce, b"refund", resource_plain.as_bytes());
+    let body = serde_json::json!({
+        "id": "EV-REFUND",
+        "event_type": event_type,
+        "resource_type": "encrypt-resource",
+        "resource": {
+            "algorithm": "AEAD_AES_256_GCM",
+            "ciphertext": BASE64.encode(ciphertext),
+            "nonce": "refundnonce1",
+            "associated_data": "refund",
+        }
+    })
+    .to_string();
+
+    let timestamp = now().to_string();
+    let platform = load_key_pair(PLATFORM_KEY);
+    let mut message = Vec::new();
+    message.extend_from_slice(timestamp.as_bytes());
+    message.extend_from_slice(b"\nNONCE1\n");
+    message.extend_from_slice(body.as_bytes());
+    message.push(b'\n');
+    let signature = rsa_sign_base64(&platform, &message);
+
+    let mut headers = HeaderMap::new();
+    headers.insert("Wechatpay-Timestamp", timestamp.parse().expect("header"));
+    headers.insert("Wechatpay-Nonce", "NONCE1".parse().expect("header"));
+    headers.insert("Wechatpay-Signature", signature.parse().expect("header"));
+    headers.insert("Wechatpay-Serial", PLATFORM_SERIAL.parse().expect("header"));
+    NotifyRequest::new(headers, Bytes::from(body))
+}
+
+#[tokio::test]
+async fn wechat_refund_notify_verifies_decrypts_and_refuses_the_wrong_event() {
+    let provider = WechatNativeProvider::new(wechat_config(true));
+
+    let event = provider
+        .verify_refund_notify(&wechat_refund_notify_request("REFUND.SUCCESS", "SUCCESS"))
+        .await
+        .expect("refund notify");
+    assert_eq!(event.out_trade_no, "T-REFUND");
+    assert_eq!(event.out_refund_no, "R-1");
+    assert_eq!(event.refund_id.as_deref(), Some("50000-R-1"));
+    assert_eq!(event.amount, Amount::cny(1234));
+    assert_eq!(event.status, RefundStatus::Succeeded);
+
+    // `ABNORMAL` means the money did not go back and a human must act, so it
+    // is a failed refund rather than one left pending forever.
+    let abnormal = provider
+        .verify_refund_notify(&wechat_refund_notify_request("REFUND.ABNORMAL", "ABNORMAL"))
+        .await
+        .expect("refund notify");
+    assert_eq!(abnormal.status, RefundStatus::Failed);
+
+    // A payment callback delivered to the refund route must be refused: the
+    // two resources have different shapes and applying one as the other would
+    // corrupt a refund record.
+    let wrong = provider
+        .verify_refund_notify(&wechat_refund_notify_request(
+            "TRANSACTION.SUCCESS",
+            "SUCCESS",
+        ))
+        .await
+        .expect_err("a payment event is not a refund event");
+    assert!(
+        matches!(&wrong, PayError::InvalidNotify(message) if message.contains("REFUND")),
+        "unexpected error: {wrong:?}"
+    );
+}
+
+#[tokio::test]
+async fn wechat_refund_notify_rejects_an_unsigned_payload() {
+    let provider = WechatNativeProvider::new(wechat_config(true));
+    let unsigned =
+        NotifyRequest::from_body(serde_json::json!({ "event_type": "REFUND.SUCCESS" }).to_string());
+    assert!(matches!(
+        provider.verify_refund_notify(&unsigned).await,
+        Err(PayError::InvalidNotify(_))
+    ));
+}
+
 #[tokio::test]
 async fn wechat_notify_verifies_decrypts_and_rejects_tampering() {
     // platform_cert_path set: verification is fully offline.
@@ -653,6 +748,9 @@ async fn wechat_notify_with_downloaded_certificates() {
 struct AlipayGateway {
     response_key: RsaKeyPair,
     verified_requests: AtomicUsize,
+    /// Own origin, filled in once the listener has a port, so the bill
+    /// download URL points back at this fake server.
+    base_url: OnceLock<String>,
 }
 
 impl AlipayGateway {
@@ -793,7 +891,10 @@ impl AlipayGateway {
                 &method,
                 &serde_json::json!({
                     "code": "10000", "msg": "Success",
-                    "bill_download_url": "https://dwbillcenter.alipay.com/downloadBillFile.resource?bizType=trade",
+                    "bill_download_url": format!(
+                        "{}/billdownload?bizType=trade",
+                        self.base_url.get().map_or("", String::as_str)
+                    ),
                 }),
             ),
             _ => self.respond(
@@ -802,6 +903,77 @@ impl AlipayGateway {
             ),
         }
     }
+}
+
+/// A ZIP holding what Alipay actually serves: a **GBK** trade-detail CSV plus
+/// a summary member the parser must not mistake for it.
+///
+/// Built with the stored method so the fixture needs no compressor, and with
+/// the `#`-prefixed comment block the real export carries.
+fn alipay_bill_archive() -> Vec<u8> {
+    // 支付宝交易号,商户订单号,业务类型,订单金额（元）  — GBK
+    let mut detail: Vec<u8> = Vec::new();
+    detail.extend_from_slice("#支付宝交易明细查询\n#-----\n".as_bytes());
+    detail.extend_from_slice(
+        b"\xD6\xA7\xB8\xB6\xB1\xA6\xBD\xBB\xD2\xD7\xBA\xC5,          \xC9\xCC\xBB\xA7\xB6\xA9\xB5\xA5\xBA\xC5,          \xD2\xB5\xCE\xF1\xC0\xE0\xD0\xCD,          \xB6\xA9\xB5\xA5\xBD\xF0\xB6\xEE\xA3\xA8\xD4\xAA\xA3\xA9\n",
+    );
+    // 交易 (paid) and 退款 (refunded), both in GBK.
+    detail.extend_from_slice(b"2026T1,T-BILL-1,\xBD\xBB\xD2\xD7,12.34\n");
+    detail.extend_from_slice(b"2026T2,T-BILL-2,\xCD\xCB\xBF\xEE,0.05\n");
+    detail.extend_from_slice("#-----\n#汇总\n".as_bytes());
+
+    // The summary member has none of the columns we match on.
+    let mut summary: Vec<u8> = Vec::new();
+    summary.extend_from_slice("#支付宝业务汇总\n".as_bytes());
+    // 笔数,金额 — GBK
+    summary.extend_from_slice(b"\xB1\xCA\xCA\xFD,\xBD\xF0\xB6\xEE\n2,12.39\n");
+
+    stored_zip(&[("detail.csv", &detail), ("summary.csv", &summary)])
+}
+
+/// Build a ZIP whose members are stored uncompressed.
+fn stored_zip(members: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut directory: Vec<u8> = Vec::new();
+    for (name, data) in members {
+        let local_offset = u32::try_from(out.len()).expect("offset");
+        let size = u32::try_from(data.len()).expect("size");
+        let name_len = u16::try_from(name.len()).expect("name length");
+
+        out.extend_from_slice(&[0x50, 0x4B, 0x03, 0x04]);
+        out.extend_from_slice(&[20, 0, 0, 0, 0, 0]); // version, flags, method 0
+        out.extend_from_slice(&[0; 8]); // time, date, crc (unchecked)
+        out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(&size.to_le_bytes());
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(&0_u16.to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+
+        directory.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02]);
+        directory.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0]); // versions, flags, method 0
+        directory.extend_from_slice(&[0; 8]); // time, date, crc (unchecked)
+        directory.extend_from_slice(&size.to_le_bytes());
+        directory.extend_from_slice(&size.to_le_bytes());
+        directory.extend_from_slice(&name_len.to_le_bytes());
+        directory.extend_from_slice(&[0; 8]); // extra, comment, disk, attrs
+        directory.extend_from_slice(&[0; 4]); // external attributes
+        directory.extend_from_slice(&local_offset.to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+
+    let directory_offset = u32::try_from(out.len()).expect("offset");
+    let directory_len = u32::try_from(directory.len()).expect("length");
+    let count = u16::try_from(members.len()).expect("count");
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06]);
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
+    out.extend_from_slice(&directory_len.to_le_bytes());
+    out.extend_from_slice(&directory_offset.to_le_bytes());
+    out.extend_from_slice(&0_u16.to_le_bytes());
+    out
 }
 
 fn alipay_config(gateway_url: String) -> AlipayF2FConfig {
@@ -821,12 +993,21 @@ async fn spawn_alipay(response_key_pem: &str) -> (SocketAddr, Arc<AlipayGateway>
     let gateway = Arc::new(AlipayGateway {
         response_key: load_key_pair(response_key_pem),
         verified_requests: AtomicUsize::new(0),
+        base_url: OnceLock::new(),
     });
     let handler = Arc::clone(&gateway);
-    let address = spawn_gateway(Arc::new(move |_parts: &Parts, body: &Bytes| {
+    let address = spawn_gateway(Arc::new(move |parts: &Parts, body: &Bytes| {
+        if parts.uri.path() == "/billdownload" {
+            return Response::builder()
+                .status(200)
+                .header("content-type", "application/zip")
+                .body(Full::new(Bytes::from(alipay_bill_archive())))
+                .expect("response");
+        }
         handler.handle(body)
     }))
     .await;
+    let _ = gateway.base_url.set(format!("http://{address}"));
     (address, gateway)
 }
 
@@ -893,13 +1074,31 @@ async fn alipay_refund_query_and_bill_url_against_fake_gateway() {
         "an empty successful answer means the refund is unknown, not zero"
     );
 
-    // Alipay serves the bill as a ZIP, so only the signed URL is exposed.
+    // The raw signed URL stays available for archiving the original file.
     let url = provider.bill_url("2026-07-25").await.expect("bill url");
-    assert!(url.starts_with("https://dwbillcenter.alipay.com/"));
-    assert!(matches!(
-        provider.download_bill("2026-07-25").await,
-        Err(PayError::NotImplemented(_))
-    ));
+    assert!(url.contains("/billdownload"));
+}
+
+#[tokio::test]
+async fn alipay_bill_download_unzips_and_parses_the_gbk_detail_member() {
+    let (address, _gateway) = spawn_alipay(ALIPAY_PLATFORM_KEY).await;
+    let provider = AlipayF2FProvider::with_transport(
+        alipay_config(format!("http://{address}/gateway.do")),
+        Arc::new(HyperPayHttp::new()),
+    );
+
+    let bill = provider.download_bill("2026-07-25").await.expect("bill");
+    assert_eq!(bill.provider, "alipay_f2f");
+    assert_eq!(bill.date, "2026-07-25");
+    // The summary member must not win: it has none of the columns we match on.
+    assert_eq!(bill.entries.len(), 2);
+    assert_eq!(bill.entries[0].out_trade_no, "T-BILL-1");
+    assert_eq!(bill.entries[0].transaction_id.as_deref(), Some("2026T1"));
+    assert_eq!(bill.entries[0].amount, Amount::cny(1234));
+    assert_eq!(bill.entries[0].status, PaymentStatus::Paid);
+    // GBK 退款 in the 业务类型 column, matched without transcoding the file.
+    assert_eq!(bill.entries[1].status, PaymentStatus::Refunded);
+    assert_eq!(bill.net_total().expect("net"), Amount::cny(1234));
 }
 
 #[tokio::test]

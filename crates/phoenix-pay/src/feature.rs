@@ -6,7 +6,7 @@ use phoenix_plugin::{Capability, Plugin};
 use phoenix_routing::Routes;
 use serde_json::json;
 
-use crate::{NotifyOutcome, NotifyRequest, PayError, PayManager};
+use crate::{NotifyOutcome, NotifyRequest, PayError, PayManager, RefundNotifyOutcome};
 
 /// Ordered id of the `payments` table migration.
 pub const PAYMENTS_MIGRATION_ID: &str = "202607260001";
@@ -87,6 +87,8 @@ pub fn refunds_migration() -> Migration {
 /// | `pay.notify.wechat` | `POST /pay/notify/wechat` | `WeChat` asynchronous notify |
 /// | `pay.notify.alipay` | `POST /pay/notify/alipay` | Alipay asynchronous notify |
 /// | `pay.notify.mock` | `POST /pay/notify/mock` | Mock provider notify (dev/test) |
+/// | `pay.notify.wechat.refund` | `POST /pay/notify/wechat/refund` | `WeChat` refund notify |
+/// | `pay.notify.mock.refund` | `POST /pay/notify/mock/refund` | Mock refund notify (dev/test) |
 /// | `pay.orders.show` | `GET /pay/orders/{provider}/{out_trade_no}` | Stored order status |
 ///
 /// Webhooks are called by the payment platform, not a browser: install these
@@ -166,6 +168,34 @@ fn notify_handler(manager: Arc<PayManager>, provider_key: &'static str) -> impl 
     }
 }
 
+/// Webhook handler for asynchronous **refund** notifications.
+fn refund_notify_handler(manager: Arc<PayManager>, provider_key: &'static str) -> impl Handler {
+    move |request: Request| {
+        let manager = Arc::clone(&manager);
+        async move {
+            let notify = NotifyRequest::new(request.headers().clone(), request.body().clone());
+            match manager.handle_refund_notify(provider_key, notify).await {
+                Ok(RefundNotifyOutcome::Processed(event)) => refund_notify_response(&event, false),
+                Ok(RefundNotifyOutcome::AlreadyProcessed(event)) => {
+                    refund_notify_response(&event, true)
+                }
+                Err(error) => error_response(&error),
+            }
+        }
+    }
+}
+
+fn refund_notify_response(event: &crate::RefundNotifyEvent, duplicate: bool) -> Response {
+    Json(json!({
+        "code": "SUCCESS",
+        "out_trade_no": event.out_trade_no,
+        "out_refund_no": event.out_refund_no,
+        "status": event.status,
+        "duplicate": duplicate,
+    }))
+    .into_response()
+}
+
 async fn show_order(manager: Arc<PayManager>, request: Request) -> Response {
     let (Some(provider), Some(out_trade_no)) =
         (request.param("provider"), request.param("out_trade_no"))
@@ -220,6 +250,19 @@ impl Plugin for PayFeature {
                 notify_handler(Arc::clone(&manager), crate::MockProvider::KEY),
             )
             .name("notify.mock")
+            // Refunds get their own routes because WeChat takes a separate
+            // callback URL per refund request; a payment callback delivered
+            // here is rejected rather than misapplied.
+            .post(
+                "/pay/notify/wechat/refund",
+                refund_notify_handler(Arc::clone(&manager), crate::WechatNativeProvider::KEY),
+            )
+            .name("notify.wechat.refund")
+            .post(
+                "/pay/notify/mock/refund",
+                refund_notify_handler(Arc::clone(&manager), crate::MockProvider::KEY),
+            )
+            .name("notify.mock.refund")
             .get("/pay/orders/{provider}/{out_trade_no}", move |request| {
                 let manager = Arc::clone(&manager);
                 async move { show_order(manager, request).await }

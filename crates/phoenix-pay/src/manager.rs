@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 use crate::{
     Amount, Bill, CreateOrder, MemoryPaymentStore, NotifyEvent, NotifyRequest, PayError,
     PaymentIntent, PaymentProvider, PaymentRecord, PaymentStatus, PaymentStore, Reconciliation,
-    RefundOrder, RefundReceipt, RefundRecord, RefundStatus, reconcile,
+    RefundNotifyOutcome, RefundOrder, RefundReceipt, RefundRecord, RefundStatus, reconcile,
 };
 
 /// Outcome of processing one asynchronous notification.
@@ -398,6 +398,64 @@ impl PayManager {
         self.sync_order_refund_status(provider.key(), &stored.out_trade_no)
             .await?;
         Ok(updated)
+    }
+
+    /// Verify and apply one asynchronous **refund** notification, idempotently.
+    ///
+    /// `WeChat` delivers refund outcomes to their own callback URL, so this is
+    /// the refund counterpart of [`Self::handle_notify`] rather than a branch
+    /// inside it. A replay of an already-settled refund returns
+    /// [`RefundNotifyOutcome::AlreadyProcessed`] without touching state.
+    ///
+    /// The event's amount is checked against the stored refund before the
+    /// status is applied: a callback that disagrees about how much moved is a
+    /// mismatch to investigate, not something to record silently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PayError`] for unknown providers, verification failures,
+    /// unknown refunds, amount mismatches, and refund transitions the state
+    /// machine rejects.
+    pub async fn handle_refund_notify(
+        &self,
+        provider_key: &str,
+        notify: NotifyRequest,
+    ) -> Result<RefundNotifyOutcome, PayError> {
+        let provider = self.provider(provider_key)?;
+        let event = provider.verify_refund_notify(&notify).await?;
+        let stored = self
+            .store
+            .find_refund(provider.key(), &event.out_refund_no)
+            .await?
+            .ok_or_else(|| PayError::RefundNotFound {
+                provider: provider.key().to_owned(),
+                out_refund_no: event.out_refund_no.clone(),
+            })?;
+        if stored.amount != event.amount {
+            return Err(PayError::RefundExceedsOrder {
+                out_trade_no: stored.out_trade_no,
+                requested: event.amount,
+                refundable: stored.amount,
+            });
+        }
+        if stored.status == event.status {
+            return Ok(RefundNotifyOutcome::AlreadyProcessed(event));
+        }
+        // A callback that only repeats "still processing" is not a transition.
+        if event.status == RefundStatus::Processing {
+            return Ok(RefundNotifyOutcome::AlreadyProcessed(event));
+        }
+        self.store
+            .transition_refund(
+                provider.key(),
+                &event.out_refund_no,
+                event.status,
+                event.refund_id.clone(),
+            )
+            .await?;
+        self.sync_order_refund_status(provider.key(), &stored.out_trade_no)
+            .await?;
+        Ok(RefundNotifyOutcome::Processed(event))
     }
 
     /// Every refund recorded against one order, oldest first.
