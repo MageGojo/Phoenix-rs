@@ -1,0 +1,30 @@
+[package]
+name = "phoenix-notify"
+description = "Laravel-style notifications for Phoenix: mail and database channels"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", default-features = false }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-mail = { version = "0.1.1", path = "../phoenix-mail" }
+phoenix-plugin = { version = "0.1.1", path = "../phoenix-plugin", features = ["database"] }
+serde_json.workspace = true
+thiserror.workspace = true
+toasty.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# Tests exercise the Toasty-backed DbNotificationStore against SQLite, so the
+# driver feature is enabled for the test build only (the library itself is
+# backend-agnostic and links no driver).
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", features = ["sqlite"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
