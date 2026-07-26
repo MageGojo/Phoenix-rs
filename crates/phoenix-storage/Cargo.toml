@@ -11,12 +11,29 @@ repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hmac.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["http1", "tokio"] }
+percent-encoding.workspace = true
 rand.workspace = true
+rustls-native-certs.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "time"] }
+tokio-rustls.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+bytes.workspace = true
+hmac.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["http1", "server", "tokio"] }
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
 
 [lints]
 workspace = true

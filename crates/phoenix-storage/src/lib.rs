@@ -1,4 +1,8 @@
-//! Local disk and future object-storage drivers for Phoenix uploads.
+//! Local disk and S3-compatible object-storage drivers for Phoenix uploads.
+//!
+//! - [`LocalDisk`] — filesystem storage rooted at a directory.
+//! - [`S3Disk`] — Amazon S3 / `MinIO` / Alibaba Cloud OSS via self-implemented
+//!   AWS Signature V4, with presigned GET/PUT URLs.
 //!
 //! See `docs/TESTING_AND_STORAGE.md`.
 
@@ -14,6 +18,15 @@ use rand::Rng;
 use thiserror::Error;
 use tokio::fs;
 
+mod s3;
+mod secret;
+mod sigv4;
+mod transport;
+
+pub use s3::{Addressing, S3Config, S3Disk};
+pub use secret::Secret;
+pub use transport::{BoxFuture, HyperS3Http, S3Http, S3Request, S3Response};
+
 /// Errors produced by storage drivers.
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -26,6 +39,18 @@ pub enum StorageError {
     /// No object exists for the given key.
     #[error("object not found: {0}")]
     NotFound(String),
+    /// The storage backend (network, signing, or a non-2xx response) failed.
+    ///
+    /// Used by [`S3Disk`] for transport, TLS, and S3 error responses; carries
+    /// a human-readable description (never the secret key).
+    #[error("storage backend error: {0}")]
+    Backend(String),
+    /// The operation is not supported by this driver.
+    ///
+    /// Returned by [`S3Disk::path_for`], since an object store has no local
+    /// filesystem path — use a presigned URL instead.
+    #[error("operation not supported: {0}")]
+    Unsupported(String),
     /// Underlying filesystem failure.
     #[error(transparent)]
     Io(#[from] std::io::Error),
