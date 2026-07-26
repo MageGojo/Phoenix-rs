@@ -152,12 +152,38 @@ describe("Phoenix Vite plugin", () => {
     configuredPlugin(root);
     const source = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
 
+    expect(source).toContain('import { createRouteUrl, type RouteParamValue } from "@apizero/react";');
     expect(source).toContain('"members": {');
-    expect(source).toContain('"store": "members.store"');
-    expect(source).toContain('"dashboard": "admin.dashboard"');
+    expect(source).toContain('"store": createRouteUrl("members.store")');
+    expect(source).toContain('"show": createRouteUrl<{ "id": RouteParamValue }>("users.show")');
+    expect(source).toContain(
+      '"show": createRouteUrl<{ "post": RouteParamValue; "comment": RouteParamValue }>("admin.comments.show")',
+    );
     expect(source).toContain("export const members = routes[\"members\"];");
-    expect(source).toContain('export type PhoenixRouteName = "admin.dashboard" | "health" | "members.store";');
-    expect(source).not.toContain('"dashboard": "dashboard"');
+    expect(source).toContain(
+      'export type PhoenixRouteName = "admin.comments.show" | "health" | "members.store" | "users.show";',
+    );
+    expect(source).not.toContain('"show": "users.show"');
+  });
+
+  it("falls back to loosely typed URL builders when the path is not a literal", () => {
+    const root = fixture();
+    writeFileSync(join(root, "routes/web.rs"), [
+      'let member = "/notes/{note}";',
+      "Routes::new()",
+      '  .get("/notes", handler).name("notes.index")',
+      '  .get(member, handler).name("notes.show")',
+      '  .get(format!("{member}/edit"), handler).name("notes.edit")',
+    ].join("\n"));
+    configuredPlugin(root);
+    const source = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
+
+    expect(source).toContain('"index": createRouteUrl("notes.index")');
+    expect(source).toContain('"show": createRouteUrl<RouteParams>("notes.show")');
+    expect(source).toContain('"edit": createRouteUrl<RouteParams>("notes.edit")');
+    expect(source).toContain(
+      'import { createRouteUrl, type RouteParams } from "@apizero/react";',
+    );
   });
 
   it("rejects dynamic Rust route names that cannot produce TypeScript hints", () => {
@@ -209,7 +235,7 @@ describe("Phoenix Vite plugin", () => {
     const routes = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
     const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
 
-    expect(routes).toContain('import { createRustAction } from "@apizero/react";');
+    expect(routes).toContain('import { createRouteUrl, createRustAction } from "@apizero/react";');
     expect(routes).toContain("createRustAction<StoreMemberInput, MemberResource>(\"members.store\")");
     expect(contracts).toContain('"displayName": string;');
     expect(contracts).toContain('"note"?: string | null;');
@@ -304,6 +330,113 @@ describe("Phoenix Vite plugin", () => {
     ].join("\n"));
     expect(() => configuredPlugin(genericRoot)).toThrow("does not support generic contract");
   });
+
+  it("emits framework generics for paginated action outputs", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "routes/web.rs"), [
+      "Routes::new()",
+      '  .get("/members", handler).name("members.index")',
+      "  .action::<ListMembersInput, Paginated<MemberResource>>()",
+    ].join("\n"));
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "#[phoenix::contract(input)]",
+      "#[serde(rename_all = \"camelCase\")]",
+      "pub struct ListMembersInput {",
+      "  pub per_page: u32,",
+      "}",
+      "#[phoenix::contract(resource)]",
+      "#[serde(rename_all = \"camelCase\")]",
+      "pub struct MemberResource {",
+      "  pub member_id: u32,",
+      "}",
+    ].join("\n"));
+
+    configuredPlugin(root);
+    const routes = readFileSync(join(root, "views/generated/routes.ts"), "utf8");
+    const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
+
+    // The Resource is emitted concretely; only the wrapper stays generic.
+    expect(contracts).toContain('"memberId": number;');
+    expect(contracts).toContain("export interface PhoenixPaginated<T> {");
+    expect(contracts).toContain("readonly meta: PhoenixPageMeta;");
+    expect(contracts).toContain("export interface PhoenixPageMeta {");
+    expect(contracts).not.toContain("PhoenixCursorPaginated");
+
+    // The action signature and its imports carry the wrapper through.
+    expect(routes).toContain(
+      "createRustAction<ListMembersInput, PhoenixPaginated<MemberResource>>(\"members.index\")",
+    );
+    expect(routes).toContain(
+      'import type { ListMembersInput, MemberResource, PhoenixPaginated } from "./contracts.js";',
+    );
+  });
+
+  it("emits framework generics used as nested contract fields", () => {
+    const root = fixture();
+    mkdirSync(join(root, "app"), { recursive: true });
+    writeFileSync(join(root, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "#[serde(rename_all = \"camelCase\")]",
+      "pub struct MemberResource { pub member_id: u32 }",
+      "#[phoenix::contract(page, page = \"members/index\")]",
+      "pub struct MembersPageProps {",
+      "  pub members: CursorPaginated<MemberResource>,",
+      "}",
+    ].join("\n"));
+
+    configuredPlugin(root);
+    const contracts = readFileSync(join(root, "views/generated/contracts.ts"), "utf8");
+
+    expect(contracts).toContain('"members": PhoenixCursorPaginated<MemberResource>;');
+    expect(contracts).toContain("readonly nextCursor: string | null;");
+    expect(contracts).not.toContain("export interface PhoenixPaginated<T>");
+  });
+
+  it("keeps the contract hash unchanged for projects that never paginate", () => {
+    const withoutPagination = fixture();
+    mkdirSync(join(withoutPagination, "app"), { recursive: true });
+    writeFileSync(join(withoutPagination, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "pub struct MemberResource { pub name: String }",
+    ].join("\n"));
+    configuredPlugin(withoutPagination);
+    const contracts = readFileSync(
+      join(withoutPagination, "views/generated/contracts.ts"),
+      "utf8",
+    );
+
+    expect(contracts).not.toContain("Phoenix Paginated");
+    expect(contracts).not.toContain("PhoenixPageMeta");
+    expect(contracts).not.toContain("PhoenixCursorPageMeta");
+  });
+
+  it("rejects framework generics with the wrong arity and shadowed names", () => {
+    const arityRoot = fixture();
+    mkdirSync(join(arityRoot, "app"), { recursive: true });
+    writeFileSync(join(arityRoot, "routes/web.rs"), [
+      "Routes::new()",
+      '  .get("/members", handler).name("members.index")',
+      "  .action::<ListInput, Paginated<A, B>>()",
+    ].join("\n"));
+    writeFileSync(join(arityRoot, "app/contracts.rs"), [
+      "#[phoenix::contract(input)]",
+      "pub struct ListInput { pub page: u32 }",
+    ].join("\n"));
+    expect(() => configuredPlugin(arityRoot)).toThrow(
+      "Paginated takes exactly one type argument",
+    );
+
+    const shadowRoot = fixture();
+    mkdirSync(join(shadowRoot, "app"), { recursive: true });
+    writeFileSync(join(shadowRoot, "app/contracts.rs"), [
+      "#[phoenix::contract(resource)]",
+      "pub struct Paginated { pub total: u32 }",
+    ].join("\n"));
+    expect(() => configuredPlugin(shadowRoot)).toThrow(
+      "reserves the Rust contract type name Paginated",
+    );
+  });
 });
 
 function fixture(): string {
@@ -318,10 +451,11 @@ function fixture(): string {
   writeFileSync(join(root, "routes/web.rs"), [
     "Routes::new()",
     '  .get("/health", handler).name("health")',
+    '  .get("/users/{id}", handler).name("users.show")',
     '  .post("/members", handler).name("members.store")',
     "  .group(",
     '    RouteGroup::new().prefix("/admin").name("admin."),',
-    "    |routes| routes.get(\"/dashboard\", handler).name(\"dashboard\"),",
+    "    |routes| routes.get(\"/posts/{post}/comments/{comment}\", handler).name(\"comments.show\"),",
     "  )",
   ].join("\n"));
   return root;

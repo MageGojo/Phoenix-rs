@@ -76,6 +76,78 @@ interface EmittedField {
   type: string;
 }
 
+/**
+ * Framework-owned generic wrappers.
+ *
+ * Application contracts still may not be generic — a `Foo<T>` in app code has
+ * no single wire shape to emit. These few types are different: they are
+ * declared by Phoenix itself, their serialization is fixed by the framework,
+ * and they exist precisely to wrap an application Resource. So the generator
+ * knows their shape and emits `PhoenixPaginated<UserResource>` instead of
+ * forcing every app to hand-roll a concrete `PaginatedUsers` struct.
+ *
+ * The emitted shape mirrors `phoenix_database::{Paginated, CursorPaginated}`.
+ * `crates/phoenix-database/tests/pagination.rs` pins the serialized keys so a
+ * Rust-side change cannot silently drift away from what is emitted here.
+ */
+const FRAMEWORK_GENERICS: Record<string, { export: string; emit: string[] }> = {
+  Paginated: {
+    export: "PhoenixPaginated",
+    emit: [
+      "/**",
+      " * Page-number metadata (`phoenix_database::PageMeta`).",
+      " *",
+      " * The counts are `u64` in Rust and emitted as `number` here — unlike an",
+      " * arbitrary `u64` field, these are row counts and clamped page sizes, so",
+      " * they cannot reach the 2^53 range where the mapping would lose precision.",
+      " */",
+      "export interface PhoenixPageMeta {",
+      "  readonly currentPage: number;",
+      "  readonly perPage: number;",
+      "  readonly total: number;",
+      "  readonly lastPage: number;",
+      "}",
+      "",
+      "/** One page of `T` plus its metadata (`phoenix_database::Paginated<T>`). */",
+      "export interface PhoenixPaginated<T> {",
+      "  readonly data: readonly T[];",
+      "  readonly meta: PhoenixPageMeta;",
+      "}",
+    ],
+  },
+  CursorPaginated: {
+    export: "PhoenixCursorPaginated",
+    emit: [
+      "/**",
+      " * Cursor metadata (`phoenix_database::CursorPageMeta`). `nextCursor` is an",
+      " * opaque token to echo back unchanged; `null` means the set is exhausted.",
+      " */",
+      "export interface PhoenixCursorPageMeta {",
+      "  readonly perPage: number;",
+      "  readonly nextCursor: string | null;",
+      "}",
+      "",
+      "/** One cursor page of `T` (`phoenix_database::CursorPaginated<T>`). */",
+      "export interface PhoenixCursorPaginated<T> {",
+      "  readonly data: readonly T[];",
+      "  readonly meta: PhoenixCursorPageMeta;",
+      "}",
+    ],
+  },
+};
+
+/** Every TypeScript name the framework wrappers occupy in the generated module. */
+const RESERVED_EXPORTS = new Set([
+  "PhoenixCursorPageMeta",
+  "PhoenixCursorPaginated",
+  "PhoenixFieldDescriptor",
+  "PhoenixFieldMap",
+  "PhoenixPageMeta",
+  "PhoenixPageProps",
+  "PhoenixPaginated",
+  "PhoenixSharedProps",
+]);
+
 const IGNORED_DIRECTORIES = new Set([
   ".git", ".idea", "dist", "node_modules", "public", "storage", "target",
 ]);
@@ -102,8 +174,8 @@ export function generateContractTypes(
     });
   }
   for (const action of actionContracts) {
-    roots.push({ declaration: resolveDeclaration(action.input, byName), direction: "input" });
-    roots.push({ declaration: resolveDeclaration(action.output, byName), direction: "output" });
+    roots.push({ declaration: actionDeclaration(action.input, byName), direction: "input" });
+    roots.push({ declaration: actionDeclaration(action.output, byName), direction: "output" });
   }
 
   const directionsByDeclaration = new Map<RustDeclaration, Set<Direction>>();
@@ -137,16 +209,14 @@ export function generateContractTypes(
 
   const actionTypes = new Map<string, GeneratedActionContract>();
   for (const action of actionContracts) {
-    const input = resolveDeclaration(action.input, byName);
-    const output = resolveDeclaration(action.output, byName);
     actionTypes.set(action.route, {
-      input: requiredNeeded(needed, input, "input").typeRef,
-      output: requiredNeeded(needed, output, "output").typeRef,
+      input: actionTypeRef(action.input, needed, byName, "input"),
+      output: actionTypeRef(action.output, needed, byName, "output"),
     });
   }
 
   validateExportIdentities(needed.values());
-  const module = contractModule(needed, byName);
+  const module = contractModule(needed, byName, [...actionTypes.values()]);
   mkdirSync(dirname(outputFile), { recursive: true });
   if (!existsSync(outputFile) || readFileSync(outputFile, "utf8") !== module) {
     writeFileSync(outputFile, module);
@@ -155,9 +225,19 @@ export function generateContractTypes(
   return {
     actions: actionTypes,
     typeImports: [...new Set([...actionTypes.values()].flatMap(({ input, output }) => (
-      [input.split(".")[0], output.split(".")[0]]
+      [...importRoots(input), ...importRoots(output)]
     )))].sort(),
   };
+}
+
+/**
+ * The top-level names a generated type reference needs imported: the type
+ * itself, its namespace, and any framework wrapper around it. `Users.Profile`
+ * imports `Users`; `PhoenixPaginated<Users.Profile>` imports both.
+ */
+function importRoots(typeRef: string): string[] {
+  const identifiers = typeRef.match(/[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/g) ?? [];
+  return [...new Set(identifiers.map((identifier) => identifier.split(".")[0]))];
 }
 
 function discoverDeclarations(projectRoot: string): RustDeclaration[] {
@@ -353,6 +433,66 @@ function attributeString(tokens: RustToken[], name: string): string | undefined 
   return undefined;
 }
 
+/**
+ * Split `Paginated<UserResource>` into the framework wrapper and the inner type
+ * source, or return `undefined` when `type` is not a framework generic.
+ */
+function frameworkWrapper(
+  type: string,
+): { generic: { export: string; emit: string[] }; inner: string } | undefined {
+  const match = type.replace(/\s+/g, "").match(/^(?:\w+::)*(\w+)<(.+)>$/);
+  if (!match) return undefined;
+  const [, name, inner] = match;
+  const generic = FRAMEWORK_GENERICS[name];
+  if (!generic) return undefined;
+  if (splitTypeArgumentSources(inner).length !== 1) {
+    throw new Error(`Phoenix ${name} takes exactly one type argument (got ${type})`);
+  }
+  return { generic, inner };
+}
+
+/** Top-level comma split over a type-argument source string. */
+function splitTypeArgumentSources(source: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "<" || character === "(" || character === "[") depth += 1;
+    if (character === ">" || character === ")" || character === "]") depth -= 1;
+    if (character === "," && depth === 0) {
+      parts.push(source.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(source.slice(start));
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * The declaration an action's `Input` / `Output` type ultimately refers to —
+ * through a framework wrapper when there is one.
+ */
+function actionDeclaration(
+  type: string,
+  byName: Map<string, RustDeclaration[]>,
+): RustDeclaration {
+  const wrapped = frameworkWrapper(type);
+  return resolveDeclaration(wrapped ? wrapped.inner : type, byName);
+}
+
+/** The TypeScript type reference for an action's `Input` / `Output` type. */
+function actionTypeRef(
+  type: string,
+  needed: Map<string, NeededContract>,
+  byName: Map<string, RustDeclaration[]>,
+  direction: Direction,
+): string {
+  const inner = requiredNeeded(needed, actionDeclaration(type, byName), direction).typeRef;
+  const wrapped = frameworkWrapper(type);
+  return wrapped ? `${wrapped.generic.export}<${inner}>` : inner;
+}
+
 function resolveDeclaration(
   type: string,
   byName: Map<string, RustDeclaration[]>,
@@ -419,6 +559,18 @@ function requiredNeeded(
 function validateExportIdentities(contracts: Iterable<NeededContract>): void {
   const seen = new Map<string, NeededContract>();
   for (const contract of contracts) {
+    if (!contract.declaration.contract?.namespace && RESERVED_EXPORTS.has(contract.exportName)) {
+      throw new Error(
+        `Phoenix reserves the contract name ${contract.exportName} `
+        + `(${contract.declaration.file}); rename it or give it a namespace`,
+      );
+    }
+    if (FRAMEWORK_GENERICS[contract.declaration.name]) {
+      throw new Error(
+        `Phoenix reserves the Rust contract type name ${contract.declaration.name} for the `
+        + `framework generic (${contract.declaration.file})`,
+      );
+    }
     const previous = seen.get(contract.typeRef);
     if (previous && previous.declaration !== contract.declaration) {
       throw new Error(
@@ -433,6 +585,7 @@ function validateExportIdentities(contracts: Iterable<NeededContract>): void {
 function contractModule(
   needed: Map<string, NeededContract>,
   byName: Map<string, RustDeclaration[]>,
+  actionTypes: GeneratedActionContract[],
 ): string {
   const contracts = [...needed.values()].sort((left, right) => left.typeRef.localeCompare(right.typeRef));
   const plain = contracts.filter((contract) => !contract.declaration.contract?.namespace);
@@ -445,6 +598,37 @@ function contractModule(
     namespaces.set(namespace, values);
   }
 
+  const body: string[] = [];
+  for (const contract of plain) body.push("", ...emitContract(contract, needed, byName, ""));
+  for (const [namespace, values] of [...namespaces.entries()].sort()) {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(namespace)) {
+      throw new Error(`Phoenix contract namespace is not a TypeScript identifier: ${namespace}`);
+    }
+    body.push("", `export namespace ${namespace} {`);
+    for (const contract of values) {
+      body.push(...emitContract(contract, needed, byName, "  "));
+    }
+    body.push("}");
+  }
+
+  const pages = contracts.filter((contract) => contract.declaration.contract?.kind === "page");
+  const pageNames = new Set<string>();
+  body.push("", "export interface PhoenixPageProps {");
+  for (const page of pages) {
+    const name = page.declaration.contract?.page;
+    if (!name) throw new Error(`Phoenix page contract ${page.typeRef} requires page = \"...\"`);
+    if (pageNames.has(name)) throw new Error(`Phoenix page contract is duplicated: ${name}`);
+    pageNames.add(name);
+    body.push(`  ${JSON.stringify(name)}: ${page.typeRef};`);
+  }
+  body.push("}");
+
+  const shared = contracts.filter((contract) => contract.declaration.contract?.kind === "shared");
+  body.push(
+    "",
+    `export type PhoenixSharedProps = ${shared.length === 0 ? "Record<string, never>" : shared.map((item) => item.typeRef).join(" & ")};`,
+  );
+
   const lines = [
     "// This file is generated by @apizero/vite from Rust contracts. Do not edit.",
     "",
@@ -455,35 +639,15 @@ function contractModule(
     "};",
     "export type PhoenixFieldMap = Record<string, PhoenixFieldDescriptor>;",
   ];
-  for (const contract of plain) lines.push("", ...emitContract(contract, needed, byName, ""));
-  for (const [namespace, values] of [...namespaces.entries()].sort()) {
-    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(namespace)) {
-      throw new Error(`Phoenix contract namespace is not a TypeScript identifier: ${namespace}`);
-    }
-    lines.push("", `export namespace ${namespace} {`);
-    for (const contract of values) {
-      lines.push(...emitContract(contract, needed, byName, "  "));
-    }
-    lines.push("}");
+  // Only emit the framework wrappers a project actually uses, so adding the
+  // feature does not change the contract hash for projects that never paginate.
+  const referenced = [...body, ...actionTypes.flatMap(({ input, output }) => [input, output])]
+    .join("\n");
+  for (const generic of Object.values(FRAMEWORK_GENERICS)) {
+    if (referenced.includes(`${generic.export}<`)) lines.push("", ...generic.emit);
   }
+  lines.push(...body);
 
-  const pages = contracts.filter((contract) => contract.declaration.contract?.kind === "page");
-  const pageNames = new Set<string>();
-  lines.push("", "export interface PhoenixPageProps {");
-  for (const page of pages) {
-    const name = page.declaration.contract?.page;
-    if (!name) throw new Error(`Phoenix page contract ${page.typeRef} requires page = \"...\"`);
-    if (pageNames.has(name)) throw new Error(`Phoenix page contract is duplicated: ${name}`);
-    pageNames.add(name);
-    lines.push(`  ${JSON.stringify(name)}: ${page.typeRef};`);
-  }
-  lines.push("}");
-
-  const shared = contracts.filter((contract) => contract.declaration.contract?.kind === "shared");
-  lines.push(
-    "",
-    `export type PhoenixSharedProps = ${shared.length === 0 ? "Record<string, never>" : shared.map((item) => item.typeRef).join(" & ")};`,
-  );
   const content = `${lines.join("\n")}\n`;
   return `${content}\nexport const contractHash = ${JSON.stringify(fnv1a(content))} as const;\n`;
 }
@@ -684,6 +848,14 @@ function rustTypeToTs(
     const key = rustTypeToTs(args[0] ?? [], direction, needed, byName);
     if (key !== "string") throw new Error(`Phoenix TypeScript record keys must serialize as strings`);
     return `Record<string, ${rustTypeToTs(args[1] ?? [], direction, needed, byName)}>`;
+  }
+
+  const generic = FRAMEWORK_GENERICS[name];
+  if (generic) {
+    if (args.length !== 1) {
+      throw new Error(`Phoenix ${name} takes exactly one type argument`);
+    }
+    return `${generic.export}<${rustTypeToTs(args[0], direction, needed, byName)}>`;
   }
 
   const matches = byName.get(name) ?? [];

@@ -80,6 +80,7 @@ Rust Request / Props / Resource
 - 当前产物记录契约内容 hash；client manifest、renderer manifest 和常驻 renderer 握手会校验同一个 hash，不一致时启动或渲染失败。
 - 当前支持命名 struct、unit enum、嵌套契约、`Option`、`Vec`、字符串键 Map，以及 `rename`、`rename_all`、`default`、`flatten`、`alias`、方向性 `skip` 和 `skip_serializing_if`。输入 alias 用于兼容性与冲突检查，生成的新请求统一使用规范字段名。
 - 不支持的数据 enum、tuple/generic struct、不安全大整数，以及会改变 wire 形态但尚不能准确表达的 Serde 属性会明确中止构建，不会退化成 `any` 或猜测类型。
+- **例外：框架泛型**。`Paginated<T>` / `CursorPaginated<T>` 由框架声明、wire 形态固定，生成器直接发射 `PhoenixPaginated<T>` / `PhoenixCursorPaginated<T>`，可写在 action 签名与嵌套字段里；应用自己的泛型 struct 仍然报错。未使用时不发射，contract hash 不变。见 [DATABASE.md](DATABASE.md) 分页节。
 
 Rust 属性宏不向源码目录写文件；实际导出由 Vite 受控构建阶段完成。
 

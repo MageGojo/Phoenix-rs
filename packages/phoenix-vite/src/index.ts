@@ -296,6 +296,7 @@ interface RustGroup {
   bodyStart: number;
   prefix: string;
   prefixCall: number;
+  prefixPath: string;
 }
 
 interface RouteTreeNode {
@@ -306,6 +307,11 @@ interface RouteTreeNode {
 interface RustRouteDeclaration {
   action?: RustActionContract;
   name: string;
+  /**
+   * Path parameter names extracted from the route pattern, in order.
+   * `null` when the path is not a string literal, so parameters are unknown.
+   */
+  params: string[] | null;
 }
 
 export function generateRouteTypes(
@@ -356,22 +362,78 @@ function routesFromRust(source: string, file: string): RustRouteDeclaration[] {
   const groups = routeGroups(tokens, pairs, calls);
   const prefixCalls = new Set(groups.map((group) => group.prefixCall));
   const actions = actionCalls(tokens, file);
+  const paths = methodPathCalls(tokens, pairs);
 
   return calls
     .filter((call) => !prefixCalls.has(call.tokenIndex))
     .map((call) => {
-      const prefix = groups
+      const enclosing = groups
         .filter((group) => call.tokenIndex > group.bodyStart && call.tokenIndex < group.bodyEnd)
-        .sort((left, right) => right.bodyEnd - right.bodyStart - (left.bodyEnd - left.bodyStart))
-        .map((group) => group.prefix)
-        .join("");
+        .sort((left, right) => right.bodyEnd - right.bodyStart - (left.bodyEnd - left.bodyStart));
+      const prefix = enclosing.map((group) => group.prefix).join("");
       const name = `${prefix}${call.name}`;
       const action = actions.find((candidate) => candidate.nameTokenIndex === call.tokenIndex);
+      const path = [...paths].reverse()
+        .find((candidate) => candidate.tokenIndex < call.tokenIndex);
+      const params = path === undefined || path.path === null
+        ? null
+        : pathParams(enclosing.map((group) => group.prefixPath).join("") + path.path);
       return {
         name,
+        params,
         action: action ? { input: action.input, output: action.output, route: name } : undefined,
       };
     });
+}
+
+const ROUTE_METHOD_CALLS = new Set(["get", "post", "put", "patch", "delete", "route"]);
+
+/**
+ * Paths of `.get("/x", …)`-style declarations. `path` is null when the argument
+ * is not a string literal (variables, `format!`), so parameters stay unknown
+ * instead of binding to an earlier route's literal.
+ */
+function methodPathCalls(
+  tokens: RustToken[],
+  pairs: Map<number, number>,
+): Array<{ path: string | null; tokenIndex: number }> {
+  const calls: Array<{ path: string | null; tokenIndex: number }> = [];
+  for (let index = 1; index < tokens.length - 1; index += 1) {
+    if (tokens[index - 1].value !== "." || tokens[index].kind !== "identifier"
+      || !ROUTE_METHOD_CALLS.has(tokens[index].value) || tokens[index + 1].value !== "(") continue;
+    const end = pairs.get(index + 1);
+    if (end === undefined) continue;
+    if (tokens[index].value !== "route") {
+      const argument = tokens[index + 2];
+      calls.push({
+        path: argument?.kind === "string" ? argument.value : null,
+        tokenIndex: index,
+      });
+      continue;
+    }
+    // .route(Method::X, path, handler): the path is the first top-level string.
+    let path: string | null = null;
+    let cursor = index + 2;
+    while (cursor < end) {
+      const token = tokens[cursor];
+      if (token.kind === "string") {
+        path = token.value;
+        break;
+      }
+      const pair = pairs.get(cursor);
+      cursor = pair !== undefined && pair > cursor ? pair + 1 : cursor + 1;
+    }
+    calls.push({ path, tokenIndex: index });
+  }
+  return calls;
+}
+
+function pathParams(pattern: string): string[] {
+  const params: string[] = [];
+  for (const match of pattern.matchAll(/\{([^}]*)\}/g)) {
+    if (match[1].length > 0 && !params.includes(match[1])) params.push(match[1]);
+  }
+  return params;
 }
 
 function actionCalls(
@@ -460,9 +522,22 @@ function routeGroups(
       bodyStart,
       prefix: prefixCall.name,
       prefixCall: prefixCall.tokenIndex,
+      prefixPath: groupPrefixPath(tokens, index + 2, comma),
     });
   }
   return groups;
+}
+
+/** Last `.prefix("…")` literal inside a `.group(RouteGroup::new()…, …)` first argument. */
+function groupPrefixPath(tokens: RustToken[], start: number, end: number): string {
+  let prefix = "";
+  for (let index = start; index < end - 2; index += 1) {
+    if (tokens[index - 1]?.value === "." && tokens[index].value === "prefix"
+      && tokens[index + 1].value === "(" && tokens[index + 2].kind === "string") {
+      prefix = tokens[index + 2].value;
+    }
+  }
+  return prefix;
 }
 
 function firstTopLevelComma(
@@ -505,8 +580,17 @@ function routeTypesModule(
   const routeNameType = routes.length === 0
     ? "never"
     : routes.map((route) => JSON.stringify(route.name)).join(" | ");
-  const imports = actions.size === 0 ? [] : [
-    'import { createRustAction } from "@apizero/react";',
+  const urlRoutes = routes.filter((route) => !route.action);
+  const runtimeImports = [
+    "createRouteUrl",
+    ...(actions.size > 0 ? ["createRustAction"] : []),
+    ...(urlRoutes.some((route) => route.params === null) ? ["type RouteParams"] : []),
+    ...(urlRoutes.some((route) => route.params !== null && route.params.length > 0)
+      ? ["type RouteParamValue"]
+      : []),
+  ];
+  const imports = routes.length === 0 ? [] : [
+    `import { ${runtimeImports.join(", ")} } from "@apizero/react";`,
     ...(typeImports.length > 0
       ? [`import type { ${typeImports.join(", ")} } from "./contracts.js";`]
       : []),
@@ -555,9 +639,16 @@ function printRouteTree(
 ): string {
   if (node.route) {
     const action = actions.get(node.route.name);
-    return action
-      ? `createRustAction<${action.input}, ${action.output}>(${JSON.stringify(node.route.name)})`
-      : JSON.stringify(node.route.name);
+    if (action) {
+      return `createRustAction<${action.input}, ${action.output}>(${JSON.stringify(node.route.name)})`;
+    }
+    const name = JSON.stringify(node.route.name);
+    if (node.route.params === null) return `createRouteUrl<RouteParams>(${name})`;
+    if (node.route.params.length === 0) return `createRouteUrl(${name})`;
+    const params = node.route.params
+      .map((param) => `${JSON.stringify(param)}: RouteParamValue`)
+      .join("; ");
+    return `createRouteUrl<{ ${params} }>(${name})`;
   }
   if (node.children.size === 0) return "{}";
   const indent = "  ".repeat(depth);
