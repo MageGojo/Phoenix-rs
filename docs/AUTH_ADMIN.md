@@ -1,5 +1,20 @@
 # 管理后台 / Auth 完整链路设计（2026-07-24）
 
+## 快速开始：px make:auth
+
+在任何 `px new` 应用里运行 `px make:auth`，一键生成认证起步套件：
+
+- `routes/auth.rs`：`login.show/store`、`logout.store`、`register.show/store`、`password-reset.show/store` 命名路由，POST 接口带 `.action` 契约并叠加每 IP 2 req/s 的独立 `RateLimit`；
+- `AuthController` + `LoginInput` / `RegisterInput` / `PasswordResetInput`（`Validate`）+ `AuthSessionResource` / `AuthMessageResource`；
+- `views/pages/auth/{login,register,forgot-password}` React 表单页（`Form` + `form.field` + `FieldError`，中文文案）。
+
+生成后立即可注册→登录（演示用进程内用户存储，明文比较）；上线前按控制器注释替换为
+真实用户表（`px make:model User --all`）+ `password` feature（Argon2id），即本文的完整链路。
+图形验证码非零配置（`phoenix-captcha` 是独立 crate），默认以注释交付，启用步骤见
+`routes/auth.rs` 顶部与 [CAPTCHA.md](CAPTCHA.md)。已存在同名文件时拒绝覆盖，重建用 `--force`。
+
+---
+
 承接 `51f1284 feat(example): start admin auth journey` 的示例首版（固定演示账号 + token fixture），
 本设计把链路上升为**持久化用户模型 + Session 登录 + `px make:auth` 生成器**，作为 crates.io RC 前的最后一块功能拼图。
 

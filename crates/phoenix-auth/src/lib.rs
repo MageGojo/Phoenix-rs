@@ -1,4 +1,11 @@
-//! Default-deny RBAC and ABAC authorization for Phoenix applications.
+//! Default-deny RBAC and ABAC authorization for Phoenix applications, plus a
+//! storage-agnostic authentication layer ([`UserProvider`] / [`AuthGuard`]).
+
+mod identity;
+
+pub use identity::{
+    AuthError, AuthGuard, AuthSession, AuthUser, UserProvider, hash_password, verify_password,
+};
 
 #[cfg(feature = "jwt")]
 use std::marker::PhantomData;

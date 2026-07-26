@@ -14,8 +14,9 @@ default = ["jwt"]
 jwt = ["phoenix-crypto/jwt"]
 
 [dependencies]
-phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
+phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false, features = ["password"] }
 phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-features = false }
 serde_json.workspace = true
 thiserror.workspace = true
 

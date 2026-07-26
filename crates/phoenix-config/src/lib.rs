@@ -11,10 +11,12 @@ use std::{
 use zeroize::Zeroizing;
 
 mod builder;
+mod feature;
 mod files;
 mod validation;
 
 pub use builder::AppConfigBuilder;
+pub use feature::load_feature_config;
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:3000";
 const DEFAULT_DATABASE_URL: &str = "sqlite:storage/app.sqlite";
