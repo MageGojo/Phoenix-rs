@@ -62,6 +62,38 @@ mod tls;
 #[cfg(feature = "tls")]
 pub use tls::{TlsConfig, TlsConfigError};
 
+/// Secure-transport handle and configuration, re-exported for one-line wiring.
+pub use phoenix_crypto::{SecureTransport, SecureTransportConfig};
+
+/// Enable the one-tap encrypted transport on a route collection.
+///
+/// Mounts the ECDH handshake route (default `/__phoenix/secure/handshake`,
+/// named `phoenix.secure.handshake`) and installs the response-encrypting
+/// middleware over `routes`. Encryption stays off for every request that does
+/// not carry a valid `X-Phoenix-Secure` / `X-Phoenix-Key` pair, so first-paint
+/// HTML and legacy clients are unaffected.
+///
+/// Mount this on routes that are **not** wrapped in a CSRF group: the handshake
+/// runs before any session exists and must stay CSRF-exempt.
+///
+/// ```ignore
+/// use phoenix_runtime::{secure_transport, Application, SecureTransportConfig};
+///
+/// let routes = secure_transport(app_routes, SecureTransportConfig::default());
+/// let app = Application::new(routes)?;
+/// ```
+#[must_use]
+pub fn secure_transport(routes: Routes, config: SecureTransportConfig) -> Routes {
+    let transport = SecureTransport::new(config);
+    routes
+        .post(
+            transport.handshake_path().to_owned(),
+            transport.handshake_handler(),
+        )
+        .name("phoenix.secure.handshake")
+        .with_middleware(transport.layer())
+}
+
 #[derive(Clone)]
 pub struct Application {
     router: Router,
@@ -1648,5 +1680,145 @@ mod tests {
         assert!(closed.is_ok(), "oversized message should close the socket");
 
         server.shutdown().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod secure_transport_tests {
+    use super::{Application, SecureTransportConfig, secure_transport};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use phoenix_http::{
+        HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri, header,
+    };
+    use phoenix_routing::Routes;
+    use ring::agreement;
+    use ring::rand::SystemRandom;
+
+    struct HkdfLen;
+    impl ring::hkdf::KeyType for HkdfLen {
+        fn len(&self) -> usize {
+            32
+        }
+    }
+
+    const PAGE_MEDIA_TYPE: &str = "application/vnd.phoenix.page+json";
+    const PAGE_ENVELOPE: &[u8] = br#"{"page":"dashboard","props":{"secret":7}}"#;
+
+    async fn page_handler(_request: Request) -> Response {
+        let mut response = Response::new(StatusCode::OK, PAGE_ENVELOPE.to_vec());
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(PAGE_MEDIA_TYPE),
+        );
+        response
+            .headers_mut()
+            .insert("x-phoenix-encrypted", HeaderValue::from_static("0"));
+        response
+    }
+
+    #[tokio::test]
+    async fn one_line_switch_negotiates_and_encrypts_page_responses() {
+        let routes = secure_transport(
+            Routes::new().get("/dashboard", page_handler),
+            SecureTransportConfig::default(),
+        );
+        let app = Application::new(routes).unwrap();
+
+        // Client ECDH key pair (browser side).
+        let rng = SystemRandom::new();
+        let client_private =
+            agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng).unwrap();
+        let client_public = client_private
+            .compute_public_key()
+            .unwrap()
+            .as_ref()
+            .to_vec();
+
+        // Handshake.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "v": 1, "kex": "ECDH-P256", "hkdf": "HKDF-SHA256", "aead": "A256GCM",
+            "client_public_key": URL_SAFE_NO_PAD.encode(&client_public),
+        }))
+        .unwrap();
+        let handshake = app
+            .handle(Request::from_parts(
+                Method::POST,
+                "/__phoenix/secure/handshake".parse::<Uri>().unwrap(),
+                headers,
+                body.into(),
+            ))
+            .await;
+        assert_eq!(handshake.status(), StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_slice(handshake.body()).unwrap();
+        let key_id = payload["key_id"].as_str().unwrap().to_owned();
+        let server_public = URL_SAFE_NO_PAD
+            .decode(payload["server_public_key"].as_str().unwrap())
+            .unwrap();
+
+        // Client derives the shared session key exactly as secure.ts does.
+        let peer = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, &server_public);
+        let session_key = agreement::agree_ephemeral(client_private, &peer, |shared| {
+            let prk =
+                ring::hkdf::Salt::new(ring::hkdf::HKDF_SHA256, key_id.as_bytes()).extract(shared);
+            let okm = prk
+                .expand(&[b"phoenix.secure.session.v1"], HkdfLen)
+                .unwrap();
+            let mut out = [0_u8; 32];
+            okm.fill(&mut out).unwrap();
+            out
+        })
+        .unwrap();
+
+        // Secure page request -> binary frame that the client can open.
+        let mut secure_headers = HeaderMap::new();
+        secure_headers.insert("x-phoenix-secure", HeaderValue::from_static("1"));
+        secure_headers.insert("x-phoenix-key", HeaderValue::from_str(&key_id).unwrap());
+        let secure = app
+            .handle(Request::from_parts(
+                Method::GET,
+                "/dashboard".parse::<Uri>().unwrap(),
+                secure_headers,
+                Vec::new().into(),
+            ))
+            .await;
+        assert_eq!(
+            secure.headers()[header::CONTENT_TYPE],
+            "application/vnd.phoenix.secure"
+        );
+        assert_eq!(secure.headers()["x-phoenix-encrypted"], "1");
+        assert_eq!(&secure.body()[0..4], b"PHX1");
+
+        let opened = phoenix_crypto::open_frame(
+            &session_key,
+            key_id.as_bytes(),
+            secure.body(),
+            0,
+            phoenix_crypto::FrameDirection::Response,
+        )
+        .unwrap();
+        assert_eq!(opened, PAGE_ENVELOPE);
+    }
+
+    #[tokio::test]
+    async fn plain_request_is_byte_identical_without_secure_headers() {
+        let routes = secure_transport(
+            Routes::new().get("/dashboard", page_handler),
+            SecureTransportConfig::default(),
+        );
+        let app = Application::new(routes).unwrap();
+        let response = app
+            .handle(Request::new(
+                Method::GET,
+                "/dashboard".parse::<Uri>().unwrap(),
+            ))
+            .await;
+        assert_eq!(response.headers()[header::CONTENT_TYPE], PAGE_MEDIA_TYPE);
+        assert_eq!(response.headers()["x-phoenix-encrypted"], "0");
+        assert_eq!(response.body().as_ref(), PAGE_ENVELOPE);
     }
 }

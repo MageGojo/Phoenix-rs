@@ -6,6 +6,7 @@ mod encryption;
 mod jwt;
 #[cfg(feature = "password")]
 mod password;
+mod secure;
 #[cfg(feature = "jwt")]
 mod token;
 
@@ -15,6 +16,10 @@ pub use encryption::{Ciphertext, EncryptionError, EncryptionKey, Encryptor};
 pub use jwt::{Jwt, JwtAuth, JwtClaims, JwtConfig, JwtError, JwtKey, JwtManager, JwtRejection};
 #[cfg(feature = "password")]
 pub use password::{Password, PasswordError};
+pub use secure::{
+    FrameDirection, SecureError, SecureHandshakeHandler, SecureTransport, SecureTransportConfig,
+    SecureTransportLayer, open_frame, seal_frame, server_handshake,
+};
 #[cfg(feature = "jwt")]
 pub use token::{
     FileTokenStore, MemoryTokenStore, RefreshRecord, RotateRefresh, StatefulJwtAuth, TokenError,

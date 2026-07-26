@@ -23,6 +23,7 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+phoenix-crypto = { version = "0.1.1", path = "../phoenix-crypto", default-features = false }
 phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
 phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics", optional = true }
 phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
@@ -34,8 +35,11 @@ tokio-rustls = { workspace = true, optional = true }
 tracing.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 hyper = { workspace = true, features = ["client"] }
 phoenix-http = { version = "0.1.1", path = "../phoenix-http", features = ["websocket", "sse"] }
+ring.workspace = true
+serde_json.workspace = true
 phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics" }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 rustls = { workspace = true }

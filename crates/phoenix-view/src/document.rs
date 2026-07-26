@@ -257,7 +257,7 @@ pub(crate) fn document_prefix(
     let nonce_meta = nonce.map_or_else(String::new, |_| {
         format!("<meta property=\"csp-nonce\"{nonce_attribute}>")
     });
-    let html_attributes = render_attributes(&slots.html_attributes);
+    let html_attributes = render_html_attributes(envelope, slots);
     let body_attributes = render_attributes(&slots.body_attributes);
     let root_attributes = render_attributes(&slots.root_attributes);
     format!(
@@ -355,6 +355,21 @@ fn set_attribute(attributes: &mut Vec<(String, String)>, name: &str, value: Stri
     } else {
         attributes.push((name.to_owned(), value));
     }
+}
+
+/// Render the `<html>` attributes, injecting a `lang` from the negotiated
+/// envelope locale unless the template already set one explicitly.
+fn render_html_attributes(envelope: &PageEnvelope, slots: &DocumentSlots) -> String {
+    let mut output = String::new();
+    let has_lang = slots
+        .html_attributes
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("lang"));
+    if !has_lang && !envelope.locale.is_empty() {
+        let _ = write!(output, " lang=\"{}\"", html_attribute(&envelope.locale));
+    }
+    output.push_str(&render_attributes(&slots.html_attributes));
+    output
 }
 
 fn render_attributes(attributes: &[(String, String)]) -> String {

@@ -11,13 +11,14 @@ use phoenix_http::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 
 mod assets;
 mod document;
+pub mod i18n;
 mod renderer;
 mod static_files;
 
@@ -26,6 +27,10 @@ pub use assets::{
 };
 pub use document::{
     DocumentContext, DocumentSlots, DocumentTemplate, DocumentTemplateError, TrustedHtml,
+};
+pub use i18n::{
+    DEFAULT_LOCALE, Translations, negotiate_locale, negotiate_locale_from_headers,
+    register_translations, translate, translation_catalog,
 };
 pub use renderer::{
     NodeRenderer, RenderContext, RenderFrame, RenderResult, RendererConfig, RendererError,
@@ -185,8 +190,21 @@ pub struct PageEnvelope {
     pub head: PageHead,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csrf_token: Option<String>,
+    /// Negotiated document locale (BCP-47 style tag, default `"en"`). Drives the
+    /// `<html lang>` attribute and the SSR renderer context.
+    #[serde(default = "default_envelope_locale")]
+    pub locale: String,
+    /// Translation catalog for [`Self::locale`] (`key` -> template), shipped to
+    /// the browser so client code can resolve `{name}` placeholders. Empty when
+    /// no catalog is registered; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, String>,
     pub routes: HashMap<String, String>,
     pub islands: Vec<Island>,
+}
+
+fn default_envelope_locale() -> String {
+    i18n::DEFAULT_LOCALE.to_owned()
 }
 
 #[cfg(test)]
@@ -205,6 +223,8 @@ impl PageEnvelope {
             request_id: None,
             head: PageHead::default(),
             csrf_token: None,
+            locale: default_envelope_locale(),
+            translations: BTreeMap::new(),
             routes: HashMap::new(),
             islands: Vec::new(),
         }
@@ -237,6 +257,8 @@ impl Page {
                 request_id: None,
                 head: PageHead::default(),
                 csrf_token: None,
+                locale: default_envelope_locale(),
+                translations: BTreeMap::new(),
                 routes: HashMap::new(),
                 islands: Vec::new(),
             },
@@ -314,6 +336,32 @@ impl Page {
     pub fn csrf_token(mut self, csrf_token: impl Into<String>) -> Self {
         self.envelope.csrf_token = Some(csrf_token.into());
         self
+    }
+
+    /// Set the page locale and load its translation catalog into the envelope.
+    ///
+    /// The negotiated `locale` drives the `<html lang>` attribute and the SSR
+    /// renderer context, and [`PageEnvelope::translations`] is filled from the
+    /// registered catalog for `locale` (see [`crate::i18n`]). Pass a value from
+    /// [`i18n::negotiate_locale`], or use [`Self::negotiate_locale`] to read the
+    /// request's `Accept-Language` header directly.
+    #[must_use]
+    pub fn locale(mut self, locale: impl Into<String>) -> Self {
+        let locale = locale.into();
+        self.envelope.translations = i18n::translation_catalog(&locale);
+        self.envelope.locale = locale;
+        self
+    }
+
+    /// Negotiate the page locale from a request's `Accept-Language` header.
+    ///
+    /// Convenience wrapper over [`i18n::negotiate_locale_from_headers`] and
+    /// [`Self::locale`]: it picks the best match among `available`, falling back
+    /// to `default`, then loads that locale's catalog into the envelope.
+    #[must_use]
+    pub fn negotiate_locale(self, request: &Request, available: &[&str], default: &str) -> Self {
+        let locale = i18n::negotiate_locale_from_headers(request.headers(), available, default);
+        self.locale(locale)
     }
 
     #[must_use]
@@ -402,7 +450,7 @@ impl Page {
                 .respond_to(request, None)
                 .unwrap_or_else(PageResponseError::into_response);
         }
-        let context = render_context(request);
+        let context = render_context(request).locale(self.envelope.locale.clone());
         match renderer.render(self.envelope(), &context).await {
             Ok(result) => self
                 .rendered(result)
@@ -441,7 +489,7 @@ impl Page {
             Ok(slots) => slots,
             Err(error) => return PageResponseError::Document(error).into_response(),
         };
-        let context = render_context(request);
+        let context = render_context(request).locale(self.envelope.locale.clone());
         let Ok(mut frame_stream) = renderer.render_stream(&self.envelope, &context) else {
             return Response::text("SSR renderer unavailable")
                 .with_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -557,6 +605,44 @@ impl Page {
             return protocol_response(&self.envelope, codec);
         }
 
+        document_response(
+            &self.envelope,
+            self.server_html.as_deref(),
+            &self.script_src,
+            &self.stylesheets,
+            None,
+            &self.document_template,
+        )
+    }
+
+    /// Return a page-protocol response, choosing the encoding by request intent.
+    ///
+    /// This is the three-way branch for the secure transport: on a page request
+    /// it emits a binary `PHX1` frame when a [`SecureCodec`] is supplied, else a
+    /// JSON-encrypted body when a [`PayloadCodec`] is supplied, else plaintext.
+    /// Non-page (document) requests always return readable first-paint HTML —
+    /// the browser must render it, so it is never frame-encrypted.
+    ///
+    /// In the shipped runtime this branch is normally handled transparently by
+    /// `SecureTransport::layer()` (a response-phase middleware), so most call
+    /// sites keep using [`Self::respond_to`]. Use this method directly when a
+    /// handler wants to opt a single page into construction-time sealing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization or the selected codec fails.
+    pub fn respond_secure(
+        self,
+        page_request: bool,
+        secure: Option<&SecureCodec>,
+        codec: Option<&dyn PayloadCodec>,
+    ) -> Result<Response, PageResponseError> {
+        if page_request {
+            return match secure {
+                Some(secure) => secure_protocol_response(&self.envelope, secure),
+                None => protocol_response(&self.envelope, codec),
+            };
+        }
         document_response(
             &self.envelope,
             self.server_html.as_deref(),
@@ -756,6 +842,94 @@ pub struct EncryptedPayload {
     pub tag: String,
 }
 
+/// Binary-frame codec for the one-tap secure transport (`SecureCodec`).
+///
+/// This is the second, wire-efficient encryption path that lives alongside the
+/// JSON [`Aes256GcmCodec`] / [`EncryptedPayload`] path. It seals a page envelope
+/// into the compact `PHX1` frame that the TypeScript client decrypts, using a
+/// session key negotiated via ECDH (see `phoenix-crypto`'s secure transport).
+/// The frame layout, AAD, and expiry semantics are owned by `phoenix-crypto`;
+/// this type only binds a negotiated `key_id`/key/TTL for a given response.
+#[derive(Clone)]
+pub struct SecureCodec {
+    key_id: String,
+    key: [u8; 32],
+    ttl: Duration,
+}
+
+impl SecureCodec {
+    /// Bind a negotiated session key to a `key_id` for frame encoding.
+    #[must_use]
+    pub fn new(key_id: impl Into<String>, key: [u8; 32]) -> Self {
+        Self {
+            key_id: key_id.into(),
+            key,
+            ttl: Duration::from_mins(1),
+        }
+    }
+
+    /// Override the per-frame TTL (default 60s).
+    #[must_use]
+    pub const fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    /// The negotiated key id this codec seals under.
+    #[must_use]
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    /// Encode `plaintext` (a serialized page envelope) into a `PHX1` frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the system clock is invalid or sealing fails.
+    pub fn encode_frame(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        let issued_at = unix_timestamp()?;
+        phoenix_crypto::seal_frame(
+            &self.key,
+            self.key_id.as_bytes(),
+            plaintext,
+            issued_at,
+            self.ttl.as_secs(),
+            phoenix_crypto::FrameDirection::Response,
+        )
+        .map_err(EncryptionError::from)
+    }
+
+    /// Decode a `PHX1` frame back into the page-envelope plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed, expired, or unauthenticated frame.
+    pub fn decode_frame(&self, frame: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        let now = unix_timestamp()?;
+        phoenix_crypto::open_frame(
+            &self.key,
+            self.key_id.as_bytes(),
+            frame,
+            now,
+            phoenix_crypto::FrameDirection::Response,
+        )
+        .map_err(EncryptionError::from)
+    }
+}
+
+impl From<phoenix_crypto::SecureError> for EncryptionError {
+    fn from(error: phoenix_crypto::SecureError) -> Self {
+        use phoenix_crypto::SecureError;
+        match error {
+            SecureError::Expired => Self::Expired,
+            SecureError::AuthenticationFailed => Self::AuthenticationFailed,
+            SecureError::InvalidFrame | SecureError::InvalidPublicKey => Self::InvalidEnvelope,
+            SecureError::Clock => Self::InvalidClock,
+            SecureError::KeyAgreement | SecureError::SealFailed => Self::EncryptionFailed,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum EncryptionError {
     #[error("page payload encryption failed")]
@@ -825,6 +999,51 @@ fn protocol_response(
         "x-phoenix-encrypted",
         HeaderValue::from_static(if encrypted { "1" } else { "0" }),
     );
+    // Never let browsers cache page-protocol JSON under the same URL as HTML.
+    // Without this, Back/Forward can restore a soft-nav JSON response as a document.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::VARY,
+        HeaderValue::from_static("x-phoenix-page, accept"),
+    );
+    response.headers_mut().remove(header::ETAG);
+    response.headers_mut().remove(header::LAST_MODIFIED);
+    Ok(response)
+}
+
+/// Build a page-protocol response sealed into a binary `PHX1` secure frame.
+///
+/// This is the binary sibling of [`protocol_response`]: the body is the same
+/// page-envelope JSON, but sealed with [`SecureCodec`] and served as
+/// `application/vnd.phoenix.secure` with `x-phoenix-encrypted: 1`.
+fn secure_protocol_response(
+    envelope: &PageEnvelope,
+    secure: &SecureCodec,
+) -> Result<Response, PageResponseError> {
+    let plain = serde_json::to_vec(envelope)?;
+    let frame = secure.encode_frame(&plain)?;
+    let mut response = Response::new(StatusCode::OK, frame);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(phoenix_http::SECURE_CONTENT_TYPE),
+    );
+    response.headers_mut().insert(
+        phoenix_http::SECURE_ENCRYPTED_HEADER,
+        HeaderValue::from_static("1"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::VARY,
+        HeaderValue::from_static("x-phoenix-page, accept"),
+    );
+    response.headers_mut().remove(header::ETAG);
+    response.headers_mut().remove(header::LAST_MODIFIED);
     Ok(response)
 }
 
@@ -855,6 +1074,10 @@ fn document_response(
     response.headers_mut().insert(
         "x-phoenix-render-mode",
         HeaderValue::from_static(envelope.render_mode.as_str()),
+    );
+    response.headers_mut().insert(
+        header::VARY,
+        HeaderValue::from_static("x-phoenix-page, accept"),
     );
     if nonce.is_some() {
         response.headers_mut().insert(
@@ -1005,7 +1228,11 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CONTENT_TYPE], PAGE_MEDIA_TYPE);
-        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(response.headers()[header::VARY], "x-phoenix-page, accept");
         let envelope: PageEnvelope = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(envelope.props["id"], 7);
     }
@@ -1147,7 +1374,11 @@ mod tests {
             .insert(PAGE_REQUEST_HEADER, HeaderValue::from_static("1"));
         let response = router.handle(navigation).await;
         assert_eq!(response.headers()[header::CONTENT_TYPE], PAGE_MEDIA_TYPE);
-        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(response.headers()[header::VARY], "x-phoenix-page, accept");
         assert!(!String::from_utf8_lossy(response.body()).contains("csp_nonce"));
     }
 
@@ -1275,5 +1506,154 @@ mod tests {
                 .decode(&encrypted)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn secure_binary_frame_round_trips_and_marks_content_type() {
+        let secure = SecureCodec::new("kid-view", [5; 32]);
+        let response = Page::new("account/show", json!({ "balance": 99 }))
+            .respond_secure(true, Some(&secure), None)
+            .unwrap();
+
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            phoenix_http::SECURE_CONTENT_TYPE
+        );
+        assert_eq!(response.headers().get("x-phoenix-encrypted").unwrap(), "1");
+        assert_eq!(&response.body()[0..4], b"PHX1");
+
+        let plaintext = secure.decode_frame(response.body()).unwrap();
+        let envelope: PageEnvelope = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(envelope.props["balance"], 99);
+
+        // Wrong key fails authentication.
+        assert!(
+            SecureCodec::new("kid-view", [6; 32])
+                .decode_frame(response.body())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn secure_respond_falls_back_to_json_and_plaintext() {
+        // No secure codec, JSON codec present -> JSON-encrypted path.
+        let json_codec = Aes256GcmCodec::new("primary", [7; 32]);
+        let json_response = Page::new("x", json!({}))
+            .respond_secure(true, None, Some(&json_codec))
+            .unwrap();
+        assert_eq!(
+            json_response.headers().get("x-phoenix-encrypted").unwrap(),
+            "1"
+        );
+        assert_eq!(
+            json_response.headers().get(header::CONTENT_TYPE).unwrap(),
+            PAGE_MEDIA_TYPE
+        );
+
+        // Neither codec -> plaintext page protocol.
+        let plain = Page::new("x", json!({}))
+            .respond_secure(true, None, None)
+            .unwrap();
+        assert_eq!(plain.headers().get("x-phoenix-encrypted").unwrap(), "0");
+    }
+
+    #[test]
+    fn default_document_uses_the_envelope_locale_for_html_lang() {
+        let response = Page::new("dashboard/show", json!({})).into_response();
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(html.contains("<html lang=\"en\">"));
+    }
+
+    #[test]
+    fn explicit_document_language_overrides_the_envelope_locale() {
+        let template = DocumentTemplate::from_fn(|_| DocumentSlots::new().language("de"));
+        let response = Page::new("dashboard/show", json!({}))
+            .locale("zh-CN")
+            .document(template)
+            .into_response();
+        let html = String::from_utf8_lossy(response.body());
+
+        assert!(html.contains("<html lang=\"de\">"));
+        assert!(!html.contains("lang=\"zh-CN\""));
+    }
+
+    #[test]
+    fn locale_injects_the_catalog_and_html_lang_into_the_page() {
+        let _guard = i18n::test_guard();
+        i18n::reset_for_tests();
+        i18n::register_translations("en", [("greeting", "Hello, {name}!")]);
+        i18n::register_translations("zh-CN", [("greeting", "你好，{name}！")]);
+
+        let page = Page::new("dashboard/show", json!({})).locale("zh-CN");
+
+        // The document HTML carries the negotiated language.
+        let html = String::from_utf8_lossy(page.clone().into_response().body()).into_owned();
+        assert!(html.contains("<html lang=\"zh-CN\">"));
+
+        // The page-protocol envelope carries the locale and its catalog.
+        let protocol = page.respond(true, None).expect("protocol response");
+        let json = String::from_utf8_lossy(protocol.body()).into_owned();
+        let envelope: PageEnvelope = serde_json::from_slice(protocol.body()).expect("envelope");
+
+        assert_eq!(envelope.locale, "zh-CN");
+        assert_eq!(
+            envelope.translations.get("greeting").map(String::as_str),
+            Some("你好，{name}！")
+        );
+        assert!(json.contains("\"locale\":\"zh-CN\""));
+        assert!(json.contains("\"translations\""));
+        i18n::reset_for_tests();
+    }
+
+    #[test]
+    fn negotiate_locale_reads_the_accept_language_header() {
+        let _guard = i18n::test_guard();
+        i18n::reset_for_tests();
+        i18n::register_translations("zh-CN", [("greeting", "你好")]);
+
+        let mut request = Request::new(Method::GET, "/".parse().unwrap());
+        request.headers_mut().insert(
+            header::ACCEPT_LANGUAGE,
+            HeaderValue::from_static("zh-CN,en;q=0.7"),
+        );
+        let page = Page::new("dashboard/show", json!({})).negotiate_locale(
+            &request,
+            &["en", "zh-CN"],
+            "en",
+        );
+
+        assert_eq!(page.envelope().locale, "zh-CN");
+        assert_eq!(
+            page.envelope()
+                .translations
+                .get("greeting")
+                .map(String::as_str),
+            Some("你好")
+        );
+        i18n::reset_for_tests();
+    }
+
+    #[test]
+    fn legacy_envelope_without_i18n_fields_deserializes_with_defaults() {
+        // A pre-i18n envelope JSON must still deserialize (backward compatible).
+        let legacy = json!({
+            "protocol": 1,
+            "render_mode": "islands",
+            "page": "users/show",
+            "props": {},
+            "shared": {},
+            "errors": {},
+            "flash": {},
+            "contract_hash": null,
+            "asset_version": null,
+            "request_id": null,
+            "routes": {},
+            "islands": []
+        });
+        let envelope: PageEnvelope = serde_json::from_value(legacy).unwrap();
+
+        assert_eq!(envelope.locale, "en");
+        assert!(envelope.translations.is_empty());
     }
 }
