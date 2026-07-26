@@ -9,8 +9,13 @@ use thiserror::Error;
 use toasty::Db;
 
 mod migration;
+mod pagination;
 
 pub use migration::{Migration, MigrationError, MigrationPlan, MigrationRunner, MigrationStatus};
+pub use pagination::{
+    CursorPageMeta, CursorPaginated, DEFAULT_MAX_PER_PAGE, PageMeta, Paginated, PaginationError,
+    QueryPagination,
+};
 
 pub use toasty::{
     Deferred, Embed, Executor, Model, ModelSet, Statement, Transaction, TransactionBuilder, batch,
@@ -25,11 +30,30 @@ pub enum Backend {
     MySQL,
 }
 
+impl Backend {
+    /// Placeholder token for the `index`-th (1-based) bound parameter in raw
+    /// SQL.
+    ///
+    /// Toasty does not rewrite placeholders for [`toasty::sql`], so raw SQL has
+    /// to use the active driver's syntax: `?1` on `SQLite`, `$1` on
+    /// `PostgreSQL`, and a bare `?` on `MySQL` (positional, so `index` only
+    /// affects bind order).
+    #[must_use]
+    pub fn placeholder(self, index: usize) -> String {
+        match self {
+            Self::SQLite => format!("?{index}"),
+            Self::PostgreSQL => format!("${index}"),
+            Self::MySQL => "?".to_owned(),
+        }
+    }
+}
+
 /// A Toasty database handle with Phoenix deployment metadata.
 #[derive(Clone, Debug)]
 pub struct Database {
     inner: Db,
     backend: Backend,
+    table_prefix: String,
 }
 
 impl Database {
@@ -54,6 +78,22 @@ impl Database {
     #[must_use]
     pub const fn backend(&self) -> Backend {
         self.backend
+    }
+
+    /// The prefix Toasty prepends to every model table name (empty by default).
+    #[must_use]
+    pub fn table_prefix(&self) -> &str {
+        &self.table_prefix
+    }
+
+    /// The physical table name Toasty uses for a model's declared `#[table]`.
+    ///
+    /// Raw SQL ([`toasty::sql`]) bypasses the model schema, so statements that
+    /// name a table directly must go through this to stay correct under
+    /// [`DatabaseBuilder::table_prefix`].
+    #[must_use]
+    pub fn table_name(&self, model_table: &str) -> String {
+        format!("{}{model_table}", self.table_prefix)
     }
 
     /// Create all Toasty model tables in a new, empty database.
@@ -97,13 +137,17 @@ impl DerefMut for Database {
 /// Connection and pool configuration shared by SQL backends.
 pub struct DatabaseBuilder {
     inner: toasty::db::Builder,
+    table_prefix: String,
 }
 
 impl DatabaseBuilder {
     fn new(models: ModelSet) -> Self {
         let mut inner = Db::builder();
         inner.models(models);
-        Self { inner }
+        Self {
+            inner,
+            table_prefix: String::new(),
+        }
     }
 
     /// Set the maximum number of pooled connections.
@@ -117,6 +161,8 @@ impl DatabaseBuilder {
     #[must_use]
     pub fn table_prefix(mut self, prefix: &str) -> Self {
         self.inner.table_name_prefix(prefix);
+        self.table_prefix.clear();
+        self.table_prefix.push_str(prefix);
         self
     }
 
@@ -135,7 +181,11 @@ impl DatabaseBuilder {
             .connect(url)
             .await
             .map_err(DatabaseError::Toasty)?;
-        Ok(Database { inner, backend })
+        Ok(Database {
+            inner,
+            backend,
+            table_prefix: self.table_prefix,
+        })
     }
 
     /// Build an isolated in-memory `SQLite` database.
@@ -153,6 +203,7 @@ impl DatabaseBuilder {
         Ok(Database {
             inner,
             backend: Backend::SQLite,
+            table_prefix: self.table_prefix,
         })
     }
 }

@@ -17,11 +17,15 @@ postgresql = ["toasty/postgresql"]
 mysql = ["toasty/mysql"]
 
 [dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 toasty.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio.workspace = true
 
 [lints]

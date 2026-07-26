@@ -118,26 +118,98 @@ author.delete().exec(database.toasty_mut()).await?;
 
 `Database` 可以直接解引用为 Toasty `Db`，但业务代码优先显式使用 `toasty()`/`toasty_mut()`，让数据库边界在函数签名和审查中更清楚。
 
-## 4. 游标分页
+## 4. 分页
 
-当前分页使用 Toasty 游标页，不使用容易受并发插入影响的页码 offset：
+`phoenix-database` 在 Toasty 查询上提供两种分页，都返回可直接序列化进契约的值对象（字段名 camelCase，与 [CONTRACTS.md](./CONTRACTS.md) 的 Resource 约定一致）。入口是 `QueryPagination` trait，对 `Model::all()`、生成的查询 builder 和原生 `stmt::Query<List<M>>` 都可用：
+
+```rust
+use phoenix_database::QueryPagination;
+```
+
+两种分页的排序都通过 `order` 参数传入；传入的查询本身**不要**预先调用 `order_by` / `limit` / `offset`（计数语句需要在无 `ORDER BY` 的情况下执行，PostgreSQL / MySQL 会拒绝聚合查询携带 `ORDER BY`）。
+
+### 页码分页
+
+`page_paginate(executor, order, page, per_page)` 返回 `Paginated<T>`（`data` + `meta { current_page, per_page, total, last_page }`）。`page` 从 1 起，`0` 归一化为 `1`；`per_page` 归一化到 `1..=100`（上限可用 `page_paginate_with_max` 自定义）；越界页返回空 `data` 和准确 `meta`。计数与取数在同一 executor 上顺序执行：
+
+```rust
+let page = Author::all()
+    .page_paginate(database.toasty_mut(), Author::fields().id().asc(), 2, 20)
+    .await?;
+
+// 数据库模型不进契约：map 成 Resource 后再返回。
+let resources = page.map(AuthorResource::from);
+```
+
+命名说明：Toasty 生成的查询 builder 自带 `paginate(per_page)`（原生游标页），因此 Phoenix 的页码分页命名为 `page_paginate`，与 `cursor_paginate` 对称。
+
+### 游标分页
+
+`cursor_paginate(executor, order, cursor, per_page)` 返回 `CursorPaginated<T>`（`data` + `meta { per_page, next_cursor }`）。`cursor` 首页传 `None`，之后原样回传上一页的 `next_cursor`；它是不透明的 base64 令牌（内部为排序键值），客户端不得解析或拼造，被篡改的令牌会返回 `PaginationError::InvalidCursor`：
 
 ```rust
 let first = Author::all()
-    .order_by(Author::fields().id().asc())
-    .paginate(20)
-    .exec(database.toasty_mut())
+    .cursor_paginate(database.toasty_mut(), Author::fields().id().asc(), None, 20)
     .await?;
 
-if first.has_next() {
-    let second = first.next(database.toasty_mut()).await?;
-    if let Some(second) = second {
-        // 将 second 转成页面 Resource。
-    }
+let second = Author::all()
+    .cursor_paginate(
+        database.toasty_mut(),
+        Author::fields().id().asc(),
+        first.meta.next_cursor.clone(),
+        20,
+    )
+    .await?;
+```
+
+首版限制与语义：
+
+- 排序键必须单调且稳定（自增主键、ISO-8601 时间字符串等整数 / 字符串列）；浮点、UUID、字节列作为排序键会返回 `PaginationError::UnsupportedCursorKey`。
+- `next_cursor` 为 `None` 表示结果集已耗尽；总数恰好整页时，最后一个满页仍会带出一个游标，下一次请求返回空页并结束（这是 Toasty 游标页的语义）。
+- 游标页不返回 `total`，需要总数时用页码分页。
+
+### 进契约：直接写 `Paginated<T>`
+
+契约生成器**认识** `Paginated<T>` 和 `CursorPaginated<T>`——它们是框架自己的类型、wire 形态由框架固定，所以不需要应用侧再落一个具体 struct。直接写在 action 签名或页面 props 里即可：
+
+```rust
+// routes/web.rs
+Routes::new()
+    .get("/authors", authors::index).name("authors.index")
+    .action::<ListAuthorsInput, Paginated<AuthorResource>>()
+```
+
+```rust
+// 页面 props 里做字段也可以
+#[phoenix::contract(page, page = "authors/index")]
+#[derive(Serialize)]
+pub struct AuthorsPageProps {
+    pub authors: CursorPaginated<AuthorResource>,
 }
 ```
 
-分页前必须使用稳定且确定的排序字段。对外 API 应把 Toasty 的游标包装进应用自己的响应契约，不要暴露数据库内部结构。
+生成的 TypeScript：
+
+```ts
+export interface PhoenixPageMeta {
+  readonly currentPage: number; readonly perPage: number;
+  readonly total: number; readonly lastPage: number;
+}
+export interface PhoenixPaginated<T> { readonly data: readonly T[]; readonly meta: PhoenixPageMeta; }
+// action 签名：createRustAction<ListAuthorsInput, PhoenixPaginated<AuthorResource>>("authors.index")
+```
+
+控制器里 `page.map(AuthorResource::from)` 之后直接返回，不用逐字段搬运。要点与边界：
+
+- **只有这两个**框架泛型被特殊对待；应用自己的泛型 struct 仍然明确报错（一个 `Foo<T>` 没有唯一 wire 形态可发射）。
+- 恰好一个类型参数，多写少写都会中止构建；应用不能再声明叫 `Paginated` / `CursorPaginated` 的契约类型（会报名字冲突）。
+- 没用到分页的项目**不会**多出这些类型，contract hash 不变。
+- `PageMeta` 的计数在 Rust 里是 `u64`、在 TS 里发射为 `number`：它们是行数与被 clamp 的页大小，不可能到 2^53，这是对「不静默映射大整数」规则的一处明确豁免（写在生成代码的注释里）。
+- 两边形态由 `crates/phoenix-database/tests/pagination.rs` 的 `wrapper_wire_keys_match_the_typescript_generator` 钉死，Rust 侧改字段名会让该测试失败。
+
+React 侧用生成的类型与 named action 消费分页数据（列表页翻页、`nextCursor` 无限滚动），见 [REACT.md](./REACT.md)。
+
+需要 Toasty 原生游标页（`has_next()` / `next()` 往返）时仍可直接使用 `Author::all().order_by(...).paginate(20).exec(...)`；对外 API 应优先使用上述包装，不要暴露数据库内部结构。
 
 ## 5. 事务
 
