@@ -1,5 +1,7 @@
 # React DX · 表单与提交（P2）
 
+> 本文是实现期设计文档。**学用法请看 [REACT.md](REACT.md)**。
+
 本轮补齐 Inertia 风格页面表单、契约字段绑定、confirm、轻量乐观更新。  
 **不做**：Method spoofing Link（DELETE/PUT 继续走命名 action）；完整 Multipart 上传进度（后置）。
 

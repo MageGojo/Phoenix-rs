@@ -63,7 +63,7 @@ export function ProjectLinks() {
 await navigate("/projects/new", { preserveFocus: true });
 ```
 
-`Link` 和文档级委托只接管同源、无修饰键的主键点击。外链、`download`、非 `_self` target、`rel="external"` 和浏览器打开新标签操作保持原生行为；同源链接需要显式完整加载时使用 `<Link href="..." reloadDocument>`。Active 状态可用 `match="exact" | "prefix"` 与 `activeClassName`（详见 [REACT_DX_HOOKS.md](REACT_DX_HOOKS.md)）。**Islands hydrate** 时每个岛已注入 `PhoenixPageProvider` + `navigationContext`（与整页同一 navigator），岛内 `Link` 正常拦截；**若无 Provider**（裸渲染 `Link`），不 `preventDefault`，浏览器原生跳转（详见 [REACT_DX_PERF.md](REACT_DX_PERF.md) §9）。每次局部访问发送 `X-Phoenix-Page: 1`；新访问会取消旧请求，并用请求序号阻止不遵守 `AbortSignal` 的旧响应覆盖新页面。响应协议版本不一致，或当前页已知的 `asset_version` / `contract_hash` 在响应中缺失或发生变化，会在加载新组件前执行完整浏览器导航，避免旧 bundle 渲染新契约；当前页尚无 identity 时可以采用响应首次给出的值。
+`Link` 和文档级委托只接管同源、无修饰键的主键点击。外链、`download`、非 `_self` target、`rel="external"` 和浏览器打开新标签操作保持原生行为；同源链接需要显式完整加载时使用 `<Link href="..." reloadDocument>`。Active 状态可用 `match="exact" | "prefix"` 与 `activeClassName`（详见 [REACT_DX_HOOKS.md](REACT_DX_HOOKS.md)）。**Islands hydrate** 时每个岛已注入 `PhoenixPageProvider` + `navigationContext`（与整页同一 navigator），岛内 `Link` 正常拦截；**若无 Provider**（裸渲染 `Link`），不 `preventDefault`，浏览器原生跳转（详见 [REACT_DX_PERF.md](REACT_DX_PERF.md) §9）。每次局部访问发送 `X-Phoenix-Page: 1`；新访问会取消旧请求，并用请求序号阻止不遵守 `AbortSignal` 的旧响应覆盖新页面。响应协议版本不一致、目标页 `render_mode` 与当前页不同，或当前页已知的 `asset_version` / `contract_hash` 在响应中缺失或发生变化，会在加载新组件前执行完整浏览器导航，避免旧 bundle 或错误渲染模式渲染新契约；当前页尚无 identity 时可以采用响应首次给出的值。
 
 成功导航会同步更新 `#phoenix-page`、受控 `PageHead`、React 页面、History 和 URL。普通访问默认滚动到顶部并把焦点移到 `autofocus`、`main` 或主标题；hash、`preserveScroll` 和 `preserveFocus` 可以覆盖该行为。History 条目保存滚动坐标与带 `id`/`data-phoenix-focus-key` 的焦点位置，`popstate` 重取页面后恢复它们。`replace` 使用 `replaceState`，其余访问使用 `pushState`。
 
@@ -230,11 +230,15 @@ export default defineConfig({ plugins: [phoenix()] });
   "contract_hash": "...",
   "asset_version": "...",
   "request_id": "...",
+  "locale": "zh-CN",
+  "translations": { "greeting": "你好，{name}！" },
   "islands": []
 }
 ```
 
 `islands` 仅在 Islands renderer 输出时存在实际内容。页面业务 props 的 JSON 语义不因渲染模式变化。CSP nonce 是文档执行上下文，不属于业务协议，因此不会出现在该 JSON、共享 props 或 contract hash 中。
+
+`locale` 是按 `Accept-Language` 协商出的文档 locale（缺省 `"en"`，恒序列化，驱动 `<html lang>` 与 SSR renderer context）；`translations` 是该 locale 的 `key -> 模板` 子集（默认 locale 打底），供前端插值，**为空时不出现在 JSON**。两者都向后兼容（serde `default` / 空则跳过），不破坏旧信封与 `protocol.ts`。控制器用 `Page::negotiate_locale(request, &["en","zh-CN"], "en")` 或 `Page::locale(locale)` 注入，翻译目录与协商语义详见 [I18N.md](I18N.md)。
 
 ## 7. 构建产物
 

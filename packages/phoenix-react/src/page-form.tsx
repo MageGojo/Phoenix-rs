@@ -185,6 +185,8 @@ export function usePageForm<Input extends object>(
     errors,
     error: (field) => errors[field]?.[0]?.message,
     processing,
+    // Page forms submit JSON page requests; multipart upload progress does not apply.
+    progress: null,
     wasSuccessful,
     result,
     failure,

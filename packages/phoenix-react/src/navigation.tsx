@@ -52,6 +52,8 @@ import {
   type PageEnvelope,
 } from "./protocol.js";
 import { pathMatches, PhoenixPageProvider } from "./page-state.js";
+import { establishSecureChannel, type SecureSession } from "./secure.js";
+import { registerRouteManifest } from "./urls.js";
 import {
   componentRegistry,
   pageProps,
@@ -90,6 +92,15 @@ export interface PhoenixOptions {
   errorFallback?: ComponentType<ErrorFallbackProps>;
   pageLoadTimeoutMs?: number;
   pageLoadFallback?: ComponentType<PageLoadFallbackProps>;
+  /**
+   * One-click encrypted transport. `true` negotiates a per-session key via ECDH
+   * before the first navigation; a ready {@link SecureSession} reuses an
+   * existing negotiation. Handshake failure is reported to `onNavigationError`
+   * and navigation continues in plaintext (opt out with `secureRequired`).
+   */
+  secure?: boolean | SecureSession;
+  /** When true, a failed secure handshake aborts startup instead of falling back. */
+  secureRequired?: boolean;
 }
 
 interface PageLoadRetryContext {
@@ -263,6 +274,9 @@ class BrowserNavigator implements PhoenixNavigator {
   private readonly islands: ComponentSource;
   private readonly fetcher: typeof fetch;
   private readonly decrypt?: DecryptPage;
+  private readonly secureOption?: boolean | SecureSession;
+  private readonly secureRequired: boolean;
+  private secure?: SecureSession;
   private readonly onNavigationError?: (error: unknown) => void;
   private readonly hardNavigate: (url: string) => void;
   private readonly errorFallback?: ComponentType<ErrorFallbackProps>;
@@ -290,12 +304,16 @@ class BrowserNavigator implements PhoenixNavigator {
     this.islands = componentRegistry(options.islands);
     this.fetcher = options.fetcher ?? fetch;
     this.decrypt = options.decrypt;
+    this.secureOption = options.secure;
+    this.secureRequired = options.secureRequired ?? false;
+    this.secure = typeof options.secure === "object" ? options.secure : undefined;
     this.onNavigationError = options.onNavigationError;
     this.hardNavigate = options.hardNavigate ?? ((url) => this.windowRef.location.assign(url));
     this.errorFallback = options.errorFallback;
     this.pageLoadTimeoutMs = options.pageLoadTimeoutMs ?? DEFAULT_PAGE_LOAD_TIMEOUT_MS;
     this.pageLoadFallback = options.pageLoadFallback ?? DefaultPageLoadFallback;
     this.currentPage = envelope;
+    registerRouteManifest(envelope.routes);
   }
 
   get page(): PageEnvelope {
@@ -303,6 +321,7 @@ class BrowserNavigator implements PhoenixNavigator {
   }
 
   async start(): Promise<void> {
+    await this.negotiateSecureChannel();
     updatePageHead(this.documentRef, this.currentPage.head);
     if (this.currentPage.render_mode === "islands") {
       this.islandRoots = await hydrateIslands(
@@ -333,6 +352,16 @@ class BrowserNavigator implements PhoenixNavigator {
       }
     }
     this.installNavigation();
+  }
+
+  private async negotiateSecureChannel(): Promise<void> {
+    if (this.secure || !this.secureOption || typeof this.secureOption === "object") return;
+    try {
+      this.secure = await establishSecureChannel(this.fetcher);
+    } catch (error) {
+      if (this.secureRequired) throw error;
+      this.onNavigationError?.(error);
+    }
   }
 
   visit(url: string | URL, options: VisitOptions = {}): Promise<PageEnvelope> {
@@ -406,12 +435,14 @@ class BrowserNavigator implements PhoenixNavigator {
           signal: controller.signal,
           only: options.only,
           except: options.except,
+          secure: this.secure,
         })
         : await submitPage(target.href, {
           method,
           data: options.data,
           signal: controller.signal,
           decrypt: this.decrypt,
+          secure: this.secure,
           fetcher: this.fetcher,
           headers: csrfHeaders(this.currentPage),
           only: options.only,
@@ -508,6 +539,7 @@ class BrowserNavigator implements PhoenixNavigator {
 
   private renderPage(Page: ComponentType<any>, envelope: PageEnvelope): void {
     this.currentPage = envelope;
+    registerRouteManifest(envelope.routes);
     writePage(this.documentRef, envelope);
     updatePageHead(this.documentRef, envelope.head);
     this.ensureFullRoot();
@@ -582,12 +614,14 @@ class BrowserNavigator implements PhoenixNavigator {
   };
 
   private readonly handlePopState = (event: PopStateEvent) => {
-    void this.performVisit(
-      this.windowRef.location.href,
-      {},
-      "none",
-      historySnapshot(event.state),
-    ).catch(() => {});
+    const href = this.windowRef.location.href;
+    void this.performVisit(href, {}, "none", historySnapshot(event.state)).catch((error) => {
+      if (!isAbortError(error) && !this.disposed) {
+        // Soft back/forward failed — load a real HTML document instead of leaving
+        // a stale page-protocol JSON body on screen.
+        this.hardNavigate(href);
+      }
+    });
   };
 
   private dispatch(name: string, detail: Record<string, unknown>): void {
@@ -626,6 +660,7 @@ async function hydrateIslands(
 function requiresHardNavigation(current: PageEnvelope, next: PageEnvelope): boolean {
   return (
     current.protocol !== next.protocol ||
+    current.render_mode !== next.render_mode ||
     !compatibleIdentity(current.asset_version, next.asset_version) ||
     !compatibleIdentity(current.contract_hash, next.contract_hash)
   );

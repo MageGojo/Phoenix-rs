@@ -17,6 +17,7 @@ import {
   fieldErrorsFrom,
   type FieldErrors,
   type FieldName,
+  type RustAction,
   type RustCallOptions,
 } from "./actions.js";
 import { confirmAction } from "./confirm.js";
@@ -27,6 +28,7 @@ import {
   type FieldProps,
 } from "./fields.js";
 import { redirect } from "./redirect.js";
+import { hasFileValue, uploadRust } from "./uploads.js";
 import {
   clearRemembered,
   rememberKey,
@@ -50,6 +52,8 @@ export interface FormState<Input extends object, Output> {
   errors: FieldErrors<Input>;
   error(field: FieldName<Input>): string | undefined;
   processing: boolean;
+  /** Upload progress 0–1 while a multipart submission is in flight, else null. */
+  progress: number | null;
   wasSuccessful: boolean;
   result: Output | undefined;
   failure: unknown;
@@ -70,6 +74,7 @@ export function useForm<Input extends object, Output>(
   const [data, setData] = useState<Input>(initialValues);
   const [errors, setErrors] = useState<FieldErrors<Input>>({});
   const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
   const [wasSuccessful, setWasSuccessful] = useState(false);
   const [result, setResult] = useState<Output>();
   const [failure, setFailure] = useState<unknown>(null);
@@ -129,7 +134,24 @@ export function useForm<Input extends object, Output>(
     setErrors({});
 
     try {
-      const output = await action(data, { signal: controller.signal });
+      let output: Output;
+      if (hasFileValue(data)) {
+        const routeName = (action as Partial<RustAction<Input, Output>>).routeName;
+        if (!routeName) {
+          throw new Error(
+            "Phoenix multipart submissions require a generated named action (missing routeName)",
+          );
+        }
+        setProgress(0);
+        output = await uploadRust<Output>(routeName, data as Record<string, unknown>, {
+          signal: controller.signal,
+          onUploadProgress: (value) => {
+            if (submission === submissionRef.current) setProgress(value);
+          },
+        });
+      } else {
+        output = await action(data, { signal: controller.signal });
+      }
       if (submission !== submissionRef.current) throw abortError();
       setResult(output);
       setWasSuccessful(true);
@@ -144,6 +166,7 @@ export function useForm<Input extends object, Output>(
       if (submission === submissionRef.current) {
         controllerRef.current = null;
         setProcessing(false);
+        setProgress(null);
       }
     }
   }, [action, data]);
@@ -156,6 +179,7 @@ export function useForm<Input extends object, Output>(
     errors,
     error: (field) => errors[field]?.[0]?.message,
     processing,
+    progress,
     wasSuccessful,
     result,
     failure,

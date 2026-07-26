@@ -1,5 +1,7 @@
 # React DX Hooks（页面状态 / 导航 / Active Link / 进度条）
 
+> 本文是实现期设计文档。**学用法请看 [REACT.md](REACT.md)**。
+
 本轮交付：让业务组件不必手读 `#phoenix-page` 信封，并补齐日常导航 UX。
 
 ## 目标 API

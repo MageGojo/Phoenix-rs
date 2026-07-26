@@ -20,6 +20,8 @@ export function pageEnvelope<Props>(
     csrf_token: null,
     routes: {},
     islands: [],
+    locale: "en",
+    translations: {},
   };
 }
 

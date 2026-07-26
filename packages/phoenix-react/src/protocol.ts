@@ -38,6 +38,10 @@ export interface PageEnvelope<Props = unknown> {
   csrf_token?: string | null;
   routes: Record<string, string>;
   islands: IslandDescriptor[];
+  /** Negotiated BCP-47 locale for this page. Defaults to "en". */
+  locale?: string;
+  /** `key → template` for the negotiated locale; templates may hold `{name}` slots. */
+  translations?: Record<string, string>;
 }
 
 export interface EncryptedPayload {

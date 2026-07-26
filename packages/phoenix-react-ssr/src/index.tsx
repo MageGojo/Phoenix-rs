@@ -7,6 +7,7 @@ import { renderToPipeableStream, renderToString } from "react-dom/server";
 import {
   PhoenixRenderProvider,
   registerIsland,
+  registerRouteManifest,
   type ComponentRegistry,
   type IslandDescriptor,
   type PageEnvelope,
@@ -80,6 +81,9 @@ export async function streamPage(
 }
 
 function renderElement(envelope: PageEnvelope, pages: ComponentRegistry) {
+  // Route URLs resolve against the envelope being rendered. Pages render in
+  // the synchronous shell pass, so per-render registration is race-free.
+  registerRouteManifest(envelope.routes);
   const Page = pages[envelope.page] as ComponentType<any> | undefined;
   if (!Page) {
     throw new Error(`Phoenix page is not registered: ${envelope.page}`);

@@ -239,7 +239,10 @@ describe("Phoenix navigation", () => {
       '<article>Server article<div data-phoenix-island="counter-island"><button id="counter">3</button></div></article>',
     );
     vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-    const fetcher = vi.fn(async () => pageResponse(pageEnvelope("next", {})));
+    const fetcher = vi.fn(async () => pageResponse({
+      ...pageEnvelope("next", {}),
+      render_mode: "islands",
+    }));
     await act(async () => {
       await startPhoenix({
         pages: { next: NextPage },
@@ -315,6 +318,7 @@ describe("Phoenix navigation", () => {
 
   it.each([
     "protocol",
+    "render_mode",
     "asset_version",
     "asset_version_missing",
     "contract_hash",
@@ -336,6 +340,7 @@ describe("Phoenix navigation", () => {
       };
       const next = {
         ...pageEnvelope("next", {}),
+        render_mode: identity === "render_mode" ? "ssr" : "spa",
         asset_version: identity === "asset_version"
           ? "assets-b"
           : identity === "asset_version_missing" ? null : "assets-a",

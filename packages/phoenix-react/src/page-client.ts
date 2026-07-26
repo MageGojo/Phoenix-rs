@@ -1,6 +1,7 @@
 import { RustCallError } from "./actions.js";
 import { partialReloadHeaders } from "./partial.js";
 import { isRecord, type DecryptPage, type EncryptedPayload, type PageEnvelope } from "./protocol.js";
+import { isSecureResponse, type SecureSession } from "./secure.js";
 
 export interface FetchPageOptions {
   signal?: AbortSignal;
@@ -9,6 +10,7 @@ export interface FetchPageOptions {
   headers?: Record<string, string>;
   only?: string[];
   except?: string[];
+  secure?: SecureSession;
 }
 
 export interface SubmitPageOptions {
@@ -20,6 +22,7 @@ export interface SubmitPageOptions {
   fetcher?: typeof fetch;
   only?: string[];
   except?: string[];
+  secure?: SecureSession;
 }
 
 export async function fetchPage(
@@ -32,9 +35,10 @@ export async function fetchPage(
   const headers: Record<string, string> = {
     "X-Phoenix-Page": "1",
     ...partialReloadHeaders(options),
+    ...(options.secure ? options.secure.requestHeaders() : {}),
     ...options.headers,
   };
-  const request: RequestInit = { headers };
+  const request: RequestInit = { headers, cache: "no-store" };
   if (options.signal) request.signal = options.signal;
   if (method !== "GET") {
     request.method = method;
@@ -44,7 +48,7 @@ export async function fetchPage(
   if (!response.ok) {
     throw new Error(`Phoenix page request failed with ${response.status}`);
   }
-  return parsePageResponse(response, decrypt);
+  return parsePageResponse(response, decrypt, options.secure);
 }
 
 /**
@@ -60,6 +64,7 @@ export async function submitPage(
   const headers: Record<string, string> = {
     "X-Phoenix-Page": "1",
     ...partialReloadHeaders(options),
+    ...(options.secure ? options.secure.requestHeaders() : {}),
     ...options.headers,
   };
   let body: BodyInit | undefined;
@@ -67,6 +72,19 @@ export async function submitPage(
     body = JSON.stringify(options.data);
     if (!hasHeader(headers, "Content-Type")) {
       headers["Content-Type"] = "application/json";
+    }
+    if (options.secure) {
+      // Seal the request body too when a session is live. `sealRequest`
+      // returns null once the session expires; fall back to plaintext rather
+      // than send a frame the server can no longer open.
+      const sealed = await options.secure.sealRequest(
+        body,
+        headers["Content-Type"] ?? "application/json",
+      );
+      if (sealed) {
+        body = sealed.body;
+        Object.assign(headers, sealed.headers);
+      }
     }
   }
   const request: RequestInit = { method, headers };
@@ -84,13 +102,17 @@ export async function submitPage(
   if (!response.ok) {
     throw new Error(`Phoenix page request failed with ${response.status}`);
   }
-  return parsePageResponse(response, options.decrypt);
+  return parsePageResponse(response, options.decrypt, options.secure);
 }
 
 async function parsePageResponse(
   response: Response,
   decrypt?: DecryptPage,
+  secure?: SecureSession,
 ): Promise<PageEnvelope> {
+  if (secure && isSecureResponse(response)) {
+    return secure.decryptFrame(await response.arrayBuffer());
+  }
   if (response.headers.get("x-phoenix-encrypted") === "1") {
     if (!decrypt) {
       throw new Error("Encrypted Phoenix page response requires a decrypt callback");
