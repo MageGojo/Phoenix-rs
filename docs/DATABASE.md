@@ -4,35 +4,139 @@
 
 ## 1. 定义模型与关系
 
-从 `phoenix::prelude` 或 `phoenix::database` 导入数据库类型。关系字段使用 Toasty 的 `Deferred<T>`：
+用 `#[phoenix::model]`。约定负责重复的部分，你只写这个模型**独有**的东西：
 
 ```rust
-use phoenix::database::{Deferred, Model};
+use phoenix::model;
+use phoenix::database::Deferred;
 
-#[derive(Debug, Model)]
-pub struct Author {
-    #[key]
-    #[auto]
-    pub id: u64,
-    pub name: String,
-    #[has_many]
-    pub posts: Deferred<Vec<Post>>,
-}
+use crate::models::User;
 
-#[derive(Debug, Model)]
+#[model]
 pub struct Post {
-    #[key]
-    #[auto]
-    pub id: u64,
-    #[index]
-    pub author_id: u64,
-    #[belongs_to]
-    pub author: Deferred<Author>,
     pub title: String,
+    pub body: String,
+    #[belongs_to]                 // ← 只说「属于 User」
+    pub user: Deferred<User>,
 }
 ```
 
-`models!(Author)` 会形成供连接和 schema 初始化使用的 `ModelSet`；相关模型会通过关系被包含。数据库模型不要直接作为浏览器响应，公开字段应转换成 Resource。
+这和下面这段是**同一个模型**——差别只是上面那段不用你写：
+
+```rust
+#[derive(Debug, Model)]
+#[table = "posts"]
+pub struct Post {
+    #[key]
+    #[auto]
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub user_id: i64,
+    #[belongs_to(key = user_id, references = id)]
+    pub user: Deferred<User>,
+}
+```
+
+### 自动填的四件事
+
+| 你没写 | 自动补 |
+| --- | --- |
+| `#[table = "..."]` | 类型名 → snake_case → 复数（`BlogPost` → `blog_posts`） |
+| 主键 | `#[key] #[auto] pub id: i64` |
+| derive | `#[derive(Debug, Model)]` |
+| `#[belongs_to]` 的外键 | `key = <字段名>_id`、`references = id`，并生成 `<字段名>_id: i64` 字段 |
+
+### 手动覆盖：写出来就是你的
+
+**默认全自动，但每一条都能单独接管**——写了哪一部分，宏就不碰哪一部分：
+
+```rust
+#[model]
+#[table = "post_comments"]        // ← 表名我自己定
+pub struct Comment {
+    #[key]                        // ← 主键我自己定（不再生成 id）
+    pub uuid: String,
+    pub body: String,
+
+    #[belongs_to(key = post_id)]  // ← 外键换名字，references 仍默认 id
+    pub post: Deferred<Post>,
+
+    #[belongs_to]                 // ← 可空关系 ⇒ 外键自动是 Option<i64>
+    pub author: Deferred<Option<User>>,
+}
+```
+
+### 三种关系
+
+| 写法 | 含义 | 外键在哪 |
+| --- | --- | --- |
+| `#[belongs_to] pub user: Deferred<User>` | 属于一个 | **本模型**（自动生成 `user_id`） |
+| `#[has_many] pub posts: Deferred<Vec<Post>>` | 拥有多个 | 对方模型 |
+| `#[has_one] pub profile: Deferred<Option<Profile>>` | 拥有一个 | 对方模型 |
+
+`has_many` / `has_one` **原样透传**给 Toasty：配对关系由对方的 `#[belongs_to]` 推断，这里没有约定可加。单向关联完全可以——`Post` 写 `#[belongs_to]`，`User` 什么都不写。
+
+用命令行生成更省事，**选类型 + 选模型**两件事：
+
+```bash
+px make:model User --has-many=Post --migration --factory
+px make:model Post --belongs-to=User --migration --factory
+```
+
+### 边界（写在前面，省得踩）
+
+- 自动生成的主键与外键都是 **`i64`**。用别的键类型时，**自己声明外键字段**——宏看不到对方模型的键类型，猜错会变成 Toasty derive 内部一个难懂的类型错误。
+- 复数化是常规英文规则（`-y → -ies`、`s/x/z/ch/sh → -es`），不规则名词写 `#[table = "..."]`。
+- 展开结果就是普通 Toasty 模型，没有暗门：Toasty 能表达的（复合外键、`pair = ...`、`via = ...`）照写不误。
+
+`models!(User, Post)` 会形成供连接和 schema 初始化使用的 `ModelSet`。数据库模型不要直接作为浏览器响应，公开字段应转换成 Resource。
+
+## 1.5 批量造数据（仅限开发 / 测试）
+
+Laravel 的 factory + seeder，两道闸门保证它到不了生产：
+
+1. **Cargo feature `factory`**——不开就根本不编译进去；
+2. **运行时拒绝**——`Seeder::new` 在 `PHOENIX_ENV` / `APP_ENV` / `RUST_ENV` 是 `production` / `prod` / `staging` 时直接报错。
+
+只有一道都不够：feature 可能被 `--all-features` 顺手打开，运行时检查又已经编进二进制。所以两道都要。
+
+```rust
+use phoenix::database::factory::{Locale, Seeder};
+
+phoenix::factory! {
+    User, |f| User::create()
+        .name(f.name())
+        .email(f.unique_email()),
+}
+
+// 带一个参数的工厂：接父模型的外键
+phoenix::factory! {
+    Post, |f, user_id: i64| Post::create()
+        .title(f.sentence(6))
+        .body(f.paragraph(3))
+        .user_id(user_id),
+}
+
+let mut seeder = Seeder::new(&mut database)?;      // ← 生产环境在这一行就拒绝
+let users = seeder.create::<User>(10).await?;
+for user in &users {
+    seeder.create_with::<Post, _>(5, user.id).await?;
+}
+```
+
+`px make:model Post --belongs-to=User --factory` 会连工厂一起生成，并且**自动带上父模型的外键参数**。
+
+### Faker
+
+`f.name()` / `first_name` / `last_name` / `username` / `email` / **`unique_email`** / `unique(prefix)` / `word` / `sentence(n)` / `paragraph(n)` / `int_between(lo, hi)` / `boolean` / `pick(&[..])` / `url` / `phone_cn` / `recent_datetime(days)`。
+
+要点：
+
+- **唯一列用 `unique_email` / `unique`**：它们靠单调计数器，不靠随机。随机局部名几千行就会撞，报出来是一个莫名其妙的唯一约束错误。
+- **可复现**：`Seeder::seeded(2026)` 固定种子，同一份数据可以重放——测试挂了要复现时就靠它。
+- **中文**：`Seeder::locale(Locale::ZhCn)` 生成中文姓名（姓在前、无空格）；用户名与邮箱**始终是 ASCII**，因为那些列通常是。
+- **生成的联系方式打不通**：邮箱只落在 `example.com` / `example.org` / `example.net` / `test.local`，手机号固定在 `1380013xxxx` 文档段。这是刻意的——测试数据不该能触达真人。
 
 ## 2. 连接 SQLite、PostgreSQL 或 MySQL
 

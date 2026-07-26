@@ -44,6 +44,8 @@ Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按
 - **类型安全全链路**：Rust Request / Resource / Page Props 契约自动生成 TypeScript 与可调用 action；命名路由 URL 构造器；`Paginated<T>` 泛型直通
 - **React 一等公民**：Islands（默认）、SPA、SSR；页面协议局部导航；表单 / 文件上传进度 / prefetch / partial reload / 分页组件
 - **安全默认开启**：Session、CSRF、CSP nonce、Host allowlist、限流、JWT + RBAC/ABAC；Argon2id 密码哈希；一键加密传输（ECDH + AES-256-GCM，请求与响应双向）
+- **模型极简写法**：`#[phoenix::model]` 自动补表名 / 主键 / derive；关系只写「关联哪个模型」（`#[belongs_to]` 自动生成外键与映射），每一条都可手动接管
+- **批量造数据**：工厂 + Faker + Seeder，`px make:model --factory` 一并生成；**仅开发/测试**（Cargo feature + 运行时双闸门）
 - **数据与运维**：Toasty（SQLite / PostgreSQL / MySQL）+ 迁移 + 分页、Prometheus 指标、Redis / 队列 / 邮件 / 本地与 S3 存储、cron 调度
 - **业务型 Feature**：图形验证码、通知（邮件 + 站内信）、支付（微信 Native / 支付宝当面付，含退款与对账）
 - **实时**：WebSocket Hub（频道、在线状态、背压策略）+ Redis pub/sub 跨实例广播

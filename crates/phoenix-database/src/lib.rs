@@ -8,6 +8,8 @@ use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 use toasty::Db;
 
+#[cfg(feature = "factory")]
+pub mod factory;
 mod migration;
 mod pagination;
 

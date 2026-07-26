@@ -1882,6 +1882,11 @@ dependencies = [
 [[package]]
 name = "phoenix-macros"
 version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "phoenix-mail"
@@ -2185,6 +2190,8 @@ dependencies = [
  "phoenix-testing",
  "phoenix-validation",
  "phoenix-view",
+ "toasty",
+ "tokio",
 ]
 
 [[package]]

@@ -744,3 +744,32 @@
 - JS 159 项全绿
 - 真实 Redis：广播 4 项 + 跨进程加密会话 3 项全绿
 - 状态：完成（待用户 push）；后续：邮件真实 SMTP、队列生产驱动、服务端 partial props 求值、正式安全评审
+
+## 2026-07-26：模型写法极简化 + 批量造数据
+
+### `#[phoenix::model]`：关系只写「关联哪个模型」
+- Toasty 能表达一切关系，但要求把外键字段、`key = …`、`references = …` 全写出来。95% 的情况永远是「这行属于那行，按 `<名>_id` 关联」，这个属性就补这 95%
+- 自动补：表名（类型名 → snake_case → 复数）、`#[key] #[auto] pub id: i64`、`#[derive(Debug, Model)]`、`#[belongs_to]` 的外键字段与映射
+- **每一条都能单独接管**：写了 `#[table]` / 自己的 `#[key]` / `#[belongs_to(key = …)]` / 外键字段本身，宏就不碰那一部分；可空关系（`Deferred<Option<T>>`）自动给可空外键
+- `has_many` / `has_one` **原样透传**：配对由对方的 `belongs_to` 推断，没有约定可加。单向关联天然支持
+- 展开就是普通 Toasty 模型，没有暗门——复合外键 / `pair` / `via` 照写不误
+- 边界写在文档最前：自动键类型是 `i64`，用别的键类型必须自己声明外键——宏看不到对方模型的键类型，猜错会变成 Toasty derive 内部一个难懂的类型错误
+
+### CLI：选类型 + 选模型
+- `px make:model Post --belongs-to=User --has-many=Comment --migration --factory`
+- 三种关系是枚举（`RelationKind`），不是自由文本；`--belongs-to` 不给模型名直接报错并给出用法
+
+### 批量造数据（仅开发/测试）
+- `phoenix::factory!` 宏 + `Factory` / `FactoryWith<A>` trait + `Seeder`；闭包返回 Toasty create builder，宏负责执行——**这样 builder 的生成类型永远不用被命名**
+- `create_with` 接一个参数（通常是父模型主键），`px make:model --belongs-to=X --factory` 生成的工厂自动带上这个参数
+- Faker 自研、无新依赖：可 seed（`Seeder::seeded(2026)` 让失败的 fixture 可重放）、`unique_email` / `unique` **靠单调计数器而不是随机**（随机局部名几千行就撞，报出来是莫名其妙的唯一约束错误）、支持 zh-CN 姓名（姓在前无空格）而用户名邮箱始终 ASCII
+- **生成的联系方式打不通**：邮箱只落 example.* / test.local，手机号固定 `1380013xxxx` 文档段——测试数据不该能触达真人
+- **两道闸门**，因为任何一道单独都不够：Cargo feature `factory`（不开就不编译）+ `Seeder::new` 运行时拒绝 production/prod/staging（feature 可能被 `--all-features` 顺手打开）。环境判定抽成纯函数——2024 edition 改环境变量是 `unsafe`，本工作区 forbid
+
+### 验证
+- 宏 9 项单测（约定 / 覆盖 / 可空 / 透传 / 错误参数）
+- 门面 6 项集成测试：真实 SQLite 上跑通关系、可空外键、父子播种、固定种子可复现、locale
+- CLI 生成的项目**真的 cargo check**：开 / 不开 `factory` 两种组合都编译通过
+
+### 全量门禁
+- `cargo test --workspace` 88 个测试二进制全绿；clippy 零告警；fmt 干净

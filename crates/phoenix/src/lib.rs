@@ -8,11 +8,15 @@ pub use phoenix_console::commands;
 pub use phoenix_crypto as crypto;
 #[cfg(feature = "database")]
 pub use phoenix_database as database;
+/// Declare a factory for a model. Development and test only — see the
+/// `factory` Cargo feature and `docs/DATABASE.md`.
+#[cfg(feature = "factory")]
+pub use phoenix_database::factory;
 pub use phoenix_dx as dx;
 pub use phoenix_dx::mount_routes;
 pub use phoenix_http as http;
 pub use phoenix_logging as logging;
-pub use phoenix_macros::contract;
+pub use phoenix_macros::{contract, model};
 #[cfg(feature = "metrics")]
 pub use phoenix_metrics as metrics;
 pub use phoenix_plugin as plugin;

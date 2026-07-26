@@ -55,6 +55,31 @@ px dev
 - 带 CSRF 的 POST `/notes` `{"name":"first"}` → 201  
 - 刷新列表可见新行  
 
+## 讲解：关系只写「关联哪个模型」
+
+模型用 `#[phoenix::model]`，重复的部分由约定补齐，你只写这个模型独有的东西：
+
+```rust
+#[model]
+pub struct Post {
+    pub title: String,
+    #[belongs_to]                 // ← 只说「属于 User」
+    pub user: Deferred<User>,
+}
+```
+
+`posts` 表名、`id` 主键、`user_id` 外键、`key = user_id, references = id` 的映射，四样都不用写。命令行更直接——**选类型 + 选模型**：
+
+```bash
+px make:model Post --belongs-to=User --migration --factory
+```
+
+三种关系：`--belongs-to`（外键在自己身上）、`--has-many`、`--has-one`（外键在对方身上）。**单向关联完全可以**：`Post` 写 `#[belongs_to]`，`User` 什么都不写。
+
+**默认全自动，每一条都能单独接管**：写了 `#[table = "..."]`、自己的 `#[key]` 字段、`#[belongs_to(key = author_id)]`、或外键字段本身，宏就不碰那一部分。展开结果就是普通 Toasty 模型，没有暗门。
+
+一条边界：自动生成的主键与外键是 `i64`。用别的键类型时自己声明外键字段——宏看不到对方模型的键类型。
+
 ## 讲解
 
 ```text

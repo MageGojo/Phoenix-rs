@@ -9,8 +9,8 @@ use std::{
 use phoenix_cli::{
     ControllerOptions, DependencySource, DevConfig, DevSupervisor, GenerateOptions, ModelOptions,
     NewProjectOptions, ProjectDatabase, ProjectFeature, ProjectFrontend, ProjectGenerator,
-    ProjectRenderMode, UpdateProjectOptions, parse_feature_list, release_build, release_install,
-    release_rollback, release_status, scaffold_project,
+    ProjectRenderMode, Relation, RelationKind, UpdateProjectOptions, parse_feature_list,
+    release_build, release_install, release_rollback, release_status, scaffold_project,
 };
 
 const HELP: &str = r"Phoenix-rs application CLI (px)
@@ -33,7 +33,8 @@ Usage:
   px seed
   px make:auth [--force]
   px make:controller <name> [--resource] [--route] [--force]
-  px make:model <name> [--all] [--migration] [--controller] [--resource]
+  px make:model <name> [--all] [--migration] [--controller] [--resource] [--factory]
+                       [--belongs-to=Model] [--has-many=Model] [--has-one=Model]
                             [--request] [--api-resource] [--page] [--force]
   px make:migration <name> [--force]
   px make:request <name> [--force]
@@ -61,6 +62,7 @@ Examples:
   px rollback --step 2
   px fresh --seed
   px make:model Post --all
+  px make:model Post --belongs-to=User --migration --factory
   px make:auth
   px make:controller Admin/ReportController --resource
   px make:page posts/index
@@ -904,12 +906,40 @@ fn make_controller(arguments: Vec<String>) -> Result<(), String> {
     finish_generation(&generator, &written)
 }
 
+/// Parse `--belongs-to=User` / `--has-many=Post` / `--has-one=Profile`.
+///
+/// Returns `Ok(None)` when the flag is not a relation at all, so the caller can
+/// report it as an unknown option with its own wording.
+fn parse_relation_flag(flag: &str) -> Result<Option<Relation>, String> {
+    const KINDS: [RelationKind; 3] = [
+        RelationKind::BelongsTo,
+        RelationKind::HasMany,
+        RelationKind::HasOne,
+    ];
+    for kind in KINDS {
+        let name = kind.flag();
+        let Some(rest) = flag.strip_prefix(name) else {
+            continue;
+        };
+        let target = rest.strip_prefix('=').unwrap_or("");
+        if target.is_empty() {
+            return Err(format!("{name} needs a model, for example `{name}=User`"));
+        }
+        return Ok(Some(Relation {
+            kind,
+            target: target.to_owned(),
+        }));
+    }
+    Ok(None)
+}
+
 fn make_model(arguments: Vec<String>) -> Result<(), String> {
     let (name, flags) = required_name(arguments)?;
     let mut options = ModelOptions::default();
     for flag in flags {
         match flag.as_str() {
             "--all" | "-a" => options.all = true,
+            "--factory" => options.factory = true,
             "--migration" | "-m" => options.migration = true,
             "--controller" | "-c" => options.controller = true,
             "--resource" | "-r" => {
@@ -920,7 +950,15 @@ fn make_model(arguments: Vec<String>) -> Result<(), String> {
             "--api-resource" => options.api_resource = true,
             "--page" => options.page = true,
             "--force" | "-f" => options.force = true,
-            _ => return Err(format!("unknown model option `{flag}`")),
+            other => {
+                // `--belongs-to User`, `--has-many Post`, `--has-one Profile`:
+                // pick the kind and the target, and the conventions do the rest.
+                if let Some(relation) = parse_relation_flag(other)? {
+                    options.relations.push(relation);
+                } else {
+                    return Err(format!("unknown model option `{flag}`"));
+                }
+            }
         }
     }
     let generator = current_generator()?;

@@ -388,17 +388,64 @@ pub struct ControllerOptions {
     pub route: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ModelOptions {
     pub all: bool,
     pub api_resource: bool,
     pub controller: bool,
+    pub factory: bool,
     pub force: bool,
     pub migration: bool,
     pub page: bool,
+    pub relations: Vec<Relation>,
     pub request: bool,
     pub resource_controller: bool,
+}
+
+/// How a generated model relates to another one.
+///
+/// The whole point of naming these is that picking the *kind* and the *target*
+/// is all the information a relation needs — the foreign key, the column it
+/// maps to, and the pairing are conventions `#[phoenix::model]` fills in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelationKind {
+    /// This model holds the foreign key (`Post` → `User`).
+    BelongsTo,
+    /// The other model holds the foreign key, and there are many (`User` → `Post`).
+    HasMany,
+    /// The other model holds the foreign key, and there is at most one.
+    HasOne,
+}
+
+impl RelationKind {
+    /// The attribute this kind writes.
+    const fn attribute(self) -> &'static str {
+        match self {
+            Self::BelongsTo => "belongs_to",
+            Self::HasMany => "has_many",
+            Self::HasOne => "has_one",
+        }
+    }
+
+    /// The CLI flag that selects it.
+    #[must_use]
+    pub const fn flag(self) -> &'static str {
+        match self {
+            Self::BelongsTo => "--belongs-to",
+            Self::HasMany => "--has-many",
+            Self::HasOne => "--has-one",
+        }
+    }
+}
+
+/// One relation declared on the command line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Relation {
+    /// Which side of the foreign key this model is on.
+    pub kind: RelationKind,
+    /// The model being related to, exactly as typed (`User`, `blog::Post`).
+    pub target: String,
 }
 
 #[derive(Debug, Error)]
@@ -561,6 +608,7 @@ impl ProjectGenerator {
         mut options: ModelOptions,
     ) -> Result<Vec<PathBuf>, ScaffoldError> {
         if options.all {
+            options.factory = true;
             options.migration = true;
             options.request = true;
             options.api_resource = true;
@@ -580,7 +628,10 @@ impl ProjectGenerator {
             && options.resource_controller
             && options.page;
         let mut editor = ProjectEditor::new(&self.root, options.force);
-        add_model(&mut editor, &model)?;
+        add_model(&mut editor, &model, &options.relations)?;
+        if options.factory {
+            add_factory(&mut editor, &model, &options.relations)?;
+        }
         if options.migration {
             add_model_migration(&mut editor, &model)?;
         }
@@ -1264,6 +1315,7 @@ fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
         ("queue =", "queue = [\"phoenix/queue\"]"),
         ("mail =", "mail = [\"phoenix/mail\"]"),
         ("testing =", "testing = [\"phoenix/testing\"]"),
+        ("factory =", "factory = [\"phoenix/factory\"]"),
     ];
     let mut missing = Vec::new();
     for (prefix, line) in required_features {
@@ -1452,7 +1504,7 @@ fn project_files(
         },
     );
     let cargo_toml = format!(
-        "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Database support is omitted unless selected during `px new`.\n{database_features}tls = [\"phoenix/tls\"]\nwebsocket = [\"phoenix/websocket\"]\nsse = [\"phoenix/sse\"]\nauth = [\"phoenix/auth\"]\njwt = [\"phoenix/jwt\"]\npassword = [\"phoenix/password\"]\nmetrics = [\"phoenix/metrics\"]\nredis = [\"phoenix/redis\"]\nstorage = [\"phoenix/storage\"]\nqueue = [\"phoenix/queue\"]\nmail = [\"phoenix/mail\"]\ntesting = [\"phoenix/testing\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n{toasty_dependency}tokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
+        "[package]\nname = {package}\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.95\"\npublish = false\ndefault-run = {package}\n\n[features]\n# Database support is omitted unless selected during `px new`.\n{database_features}tls = [\"phoenix/tls\"]\nwebsocket = [\"phoenix/websocket\"]\nsse = [\"phoenix/sse\"]\nauth = [\"phoenix/auth\"]\njwt = [\"phoenix/jwt\"]\npassword = [\"phoenix/password\"]\nmetrics = [\"phoenix/metrics\"]\nredis = [\"phoenix/redis\"]\nstorage = [\"phoenix/storage\"]\nqueue = [\"phoenix/queue\"]\nmail = [\"phoenix/mail\"]\ntesting = [\"phoenix/testing\"]\n# Batch test data. Development and test only; never enable in a release build.\nfactory = [\"phoenix/factory\"]\n\n[dependencies]\n{rust_dependency}\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n{toasty_dependency}tokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"signal\"] }}\n\n[profile.release]\ncodegen-units = 1\nlto = true\nopt-level = \"z\"\npanic = \"unwind\"\nstrip = \"symbols\"\n\n[workspace]\n",
         package = json_string(package),
         database_features = database_features,
         rust_dependency = rust_dependency,
@@ -1808,20 +1860,28 @@ fn input_error(message: impl Into<String>) -> io::Error {
 }
 
 fn seeder_template() -> String {
-    r"use std::error::Error;
+    format!(
+        r"use std::error::Error;
 
 use phoenix::database::Database;
 
+{MODULES_START}
+{MODULES_END}
+
 /// Insert repeatable development or test data.
+///
+/// Factories generated by `px make:model --factory` land in this directory and
+/// are registered above. They compile only with the `factory` feature, so none
+/// of this reaches a release build.
 ///
 /// # Errors
 ///
 /// Returns the first application or database error raised by a seeder.
-pub async fn run(_database: &mut Database) -> Result<(), Box<dyn Error>> {
+pub async fn run(_database: &mut Database) -> Result<(), Box<dyn Error>> {{
     Ok(())
-}
+}}
 "
-    .to_owned()
+    )
 }
 
 fn empty_model_registry() -> String {
@@ -2746,8 +2806,96 @@ fn add_command(editor: &mut ProjectEditor, name: &QualifiedName) -> Result<(), S
     Ok(())
 }
 
-fn add_model(editor: &mut ProjectEditor, model: &QualifiedName) -> Result<(), ScaffoldError> {
-    add_rust_item(editor, "app/models", model, &model_template(&model.class))?;
+/// A factory for `model`, wired to whichever parent it belongs to.
+///
+/// Development and test only: the file is compiled behind the `factory`
+/// feature, so it never reaches a release build.
+fn factory_template(model: &QualifiedName, relations: &[Relation]) -> String {
+    let class = &model.class;
+    let parent = relations
+        .iter()
+        .find(|relation| relation.kind == RelationKind::BelongsTo);
+
+    let (signature, extra) = parent.map_or_else(
+        || (String::from("|f|"), String::new()),
+        |relation| {
+            let leaf = relation
+                .target
+                .rsplit("::")
+                .next()
+                .unwrap_or(&relation.target);
+            let key = format!("{}_id", snake_case(leaf));
+            (
+                format!("|f, {key}: i64|"),
+                format!("\n        .{key}({key})"),
+            )
+        },
+    );
+    let usage = parent.map_or_else(
+        || format!("seeder.create::<{class}>(10).await?"),
+        |relation| {
+            let leaf = relation
+                .target
+                .rsplit("::")
+                .next()
+                .unwrap_or(&relation.target);
+            format!(
+                "seeder.create_with::<{class}, _>(5, {}.id).await?",
+                snake_case(leaf)
+            )
+        },
+    );
+
+    format!(
+        r#"//! Generated rows for `{class}`. **Development and test only** — the
+//! whole file disappears without the `factory` feature.
+//!
+//! Seed with: `{usage}`
+#![cfg(feature = "factory")]
+
+use crate::models::{class};
+
+phoenix::factory! {{
+    {class}, {signature} {class}::create()
+        .name(f.name()){extra},
+}}
+"#
+    )
+}
+
+/// Write a factory and register its module.
+///
+/// Not `add_rust_item`: that also re-exports a type named after the file, and a
+/// factory file declares no type — it only implements a trait for the model.
+fn add_factory(
+    editor: &mut ProjectEditor,
+    model: &QualifiedName,
+    relations: &[Relation],
+) -> Result<(), ScaffoldError> {
+    let module = format!("{}_factory", snake_case(&model.class));
+    editor.create(
+        PathBuf::from("database/seeders").join(format!("{module}.rs")),
+        factory_template(model, relations),
+    )?;
+    editor.update_managed_lines(
+        Path::new("database/seeders/mod.rs"),
+        MODULES_START,
+        MODULES_END,
+        &[format!("pub mod {module};")],
+    )
+}
+
+fn add_model(
+    editor: &mut ProjectEditor,
+    model: &QualifiedName,
+    relations: &[Relation],
+) -> Result<(), ScaffoldError> {
+    add_rust_item(
+        editor,
+        "app/models",
+        model,
+        &model_template(&model.class, relations),
+    )?;
     let path = if model.modules.is_empty() {
         model.class.clone()
     } else {
@@ -3013,17 +3161,53 @@ fn add_auth_page(
     editor.create(path, content)
 }
 
-fn model_template(name: &str) -> String {
-    format!(
-        r"use phoenix::database::Model;
+/// A model written the short way: conventions filled in by `#[phoenix::model]`,
+/// relations expressed as one line each.
+fn model_template(name: &str, relations: &[Relation]) -> String {
+    use std::fmt::Write as _;
 
-#[derive(Debug, Model)]
+    let mut imports = String::from("use phoenix::model;\n");
+    if !relations.is_empty() {
+        imports.push_str("use phoenix::database::Deferred;\n\n");
+        // Related models are reachable through the registry's re-exports, so a
+        // relation never needs the target's module path spelled out.
+        let mut targets: Vec<&str> = relations
+            .iter()
+            .map(|relation| {
+                let target = relation.target.as_str();
+                target.rsplit("::").next().unwrap_or(target)
+            })
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        let _ = writeln!(imports, "use crate::models::{{{}}};", targets.join(", "));
+    }
+
+    let mut fields = String::from("    pub name: String,\n");
+    for relation in relations {
+        let attribute = relation.kind.attribute();
+        let target = &relation.target;
+        let leaf = target.rsplit("::").next().unwrap_or(target);
+        let field = snake_case(leaf);
+        let (field, ty) = match relation.kind {
+            // `#[belongs_to] user: Deferred<User>` — the foreign key and the
+            // column it maps to are conventions, so neither is written here.
+            RelationKind::BelongsTo | RelationKind::HasOne => {
+                (field, format!("Deferred<{target}>"))
+            }
+            RelationKind::HasMany => (pluralize(&field), format!("Deferred<Vec<{target}>>")),
+        };
+        let _ = write!(fields, "    #[{attribute}]\n    pub {field}: {ty},\n");
+    }
+
+    format!(
+        "{imports}
+/// `#[phoenix::model]` fills in the table name, an auto-increment `id`, the
+/// derives, and every relation's foreign key. Write any of them yourself to
+/// take that part back.
+#[model]
 pub struct {name} {{
-    #[key]
-    #[auto]
-    pub id: u64,
-    pub name: String,
-}}
+{fields}}}
 "
     )
 }
@@ -5019,6 +5203,99 @@ mod tests {
         assert!(models.contains("Comment"));
         let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
         assert!(migrations.contains("pub fn all()"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn relations_and_factories_generate_a_compiling_slice() {
+        let root = temporary_directory("relations");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
+                .initialize_git(false)
+                .install_dependencies(false),
+        )
+        .unwrap();
+        let generator = ProjectGenerator::discover(&root).unwrap();
+
+        // The parent side: one line to say "a user has many posts".
+        generator
+            .model(
+                "User",
+                ModelOptions {
+                    migration: true,
+                    factory: true,
+                    relations: vec![Relation {
+                        kind: RelationKind::HasMany,
+                        target: "Post".to_owned(),
+                    }],
+                    ..ModelOptions::default()
+                },
+            )
+            .unwrap();
+        // The child side: one line to say "a post belongs to a user". No
+        // foreign key, no key mapping, no table name.
+        generator
+            .model(
+                "Post",
+                ModelOptions {
+                    migration: true,
+                    factory: true,
+                    relations: vec![Relation {
+                        kind: RelationKind::BelongsTo,
+                        target: "User".to_owned(),
+                    }],
+                    ..ModelOptions::default()
+                },
+            )
+            .unwrap();
+
+        let post = fs::read_to_string(root.join("app/models/post.rs")).unwrap();
+        assert!(post.contains("#[model]"), "{post}");
+        assert!(post.contains("#[belongs_to]"), "{post}");
+        assert!(post.contains("pub user: Deferred<User>"), "{post}");
+        assert!(
+            !post.contains("user_id"),
+            "the foreign key is a convention, not something to write: {post}"
+        );
+        assert!(
+            !post.contains("#[key]") && !post.contains("#[table"),
+            "neither is the key or the table name: {post}"
+        );
+
+        let user = fs::read_to_string(root.join("app/models/user.rs")).unwrap();
+        assert!(user.contains("#[has_many]"), "{user}");
+        assert!(user.contains("pub posts: Deferred<Vec<Post>>"), "{user}");
+
+        // The child factory takes its parent's key; the parent factory does not.
+        let factory = fs::read_to_string(root.join("database/seeders/post_factory.rs")).unwrap();
+        assert!(factory.contains("|f, user_id: i64|"), "{factory}");
+        assert!(factory.contains(".user_id(user_id)"), "{factory}");
+        assert!(
+            factory.contains(r#"#![cfg(feature = "factory")]"#),
+            "a factory never reaches a release build: {factory}"
+        );
+        let factory = fs::read_to_string(root.join("database/seeders/user_factory.rs")).unwrap();
+        assert!(factory.contains("|f|"), "{factory}");
+
+        let seeders = fs::read_to_string(root.join("database/seeders/mod.rs")).unwrap();
+        assert!(seeders.contains("pub mod post_factory;"), "{seeders}");
+        assert!(seeders.contains("pub mod user_factory;"), "{seeders}");
+
+        // The real assertion: all of it compiles, with factories on and off.
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        for features in [None, Some("factory")] {
+            let mut command = Command::new(&cargo);
+            command.args(["check", "--quiet"]).current_dir(&root);
+            if let Some(features) = features {
+                command.args(["--features", features]);
+            }
+            assert!(
+                command.status().unwrap().success(),
+                "generated project must compile with features {features:?}"
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

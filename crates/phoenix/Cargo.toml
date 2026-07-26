@@ -45,6 +45,8 @@ testing = ["dep:phoenix-testing"]
 queue = ["dep:phoenix-queue"]
 schedule = ["dep:phoenix-schedule", "queue"]
 mail = ["dep:phoenix-mail"]
+# Batch test-data generation. Development and test only — see docs/DATABASE.md.
+factory = ["database", "phoenix-database/factory"]
 
 [dependencies]
 phoenix-auth = { version = "0.1.1", path = "../phoenix-auth", default-features = false, optional = true }
@@ -72,6 +74,13 @@ phoenix-storage = { version = "0.1.1", path = "../phoenix-storage", optional = t
 phoenix-testing = { version = "0.1.1", path = "../phoenix-testing", optional = true }
 phoenix-validation = { version = "0.1.1", path = "../phoenix-validation" }
 phoenix-view = { version = "0.1.4", path = "../phoenix-view", default-features = false }
+
+[dev-dependencies]
+# The Toasty derive expands to absolute `toasty::` paths, so any crate that
+# declares a model needs it in scope. Generated projects already get it from
+# `px new`; the facade's own tests need it here.
+toasty.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

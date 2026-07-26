@@ -15,6 +15,9 @@ sqlite = ["toasty/sqlite"]
 pgsql = ["postgresql"]
 postgresql = ["toasty/postgresql"]
 mysql = ["toasty/mysql"]
+# Batch test-data generation (factories, faker, seeding). Development and test
+# only: nothing under `factory` should be compiled into a production build.
+factory = []
 
 [dependencies]
 base64.workspace = true
