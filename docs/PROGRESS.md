@@ -599,3 +599,116 @@
 - GitHub Release：[v0.1.10](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.10)
 - 未上传：`.env` / 证书与 sqlite / `dist/` / Docker 卷；未重发无变更 crate / npm
 - 状态：已完成@57637b0
+
+## 2026-07-26：系统教程 docs/tutorial
+
+- 新增按序教材：`docs/tutorial/README.md`（学习路径）+ `00` + 初级 01–07 + 中级 08–14 + 高级 15–20
+- 约定：先路径后章节、一章一事、验收不过不进下一级；深挖仍指向专章 docs / Skill
+- 入口：根 `README.md`「系统教程」；`docs/工具与约定.md` 互链
+- 验收：目录齐全；章节含上一章/下一章链接与必做/验收块
+- 产物：`docs/tutorial/**`
+- 状态：进行中（文档已写，待用户 commit / push）
+
+## 2026-07-26：React 体验文档收敛 docs/REACT.md
+
+- 新增用户向教学文档 `docs/REACT.md`：速查表 + 启动/页面/导航/hooks/表单两条路/局部更新/全局点缀/乐观更新，一页覆盖日常 90% API
+- 三份 `REACT_DX_*.md` 顶部标注为实现期设计文档并指向 REACT.md
+- 教程同步：06 前端调用改为 `Form` + 生成 action 示例（curl 降为对照）；04/README 增补 REACT.md 链接；05 讲解补「路由连写非强制」（分段赋值 / merge / group）
+- `render_mode` 硬导航语义定稿：跨渲染模式跳转执行完整浏览器导航（与 protocol / asset_version / contract_hash 同列），`navigation.test.tsx` 硬导航用例表新增 render_mode 项，islands 托管根用例改为同模式导航；REACT.md / RENDERING.md 已同步
+- 状态：完成（待用户 commit / push）
+
+## 2026-07-26：命名路由 URL helper + 示例迁移 + captcha / pay Feature
+
+- **前端命名路由闭环**：`@apizero/react` 新增 `urlFor` / `createRouteUrl` / `registerRouteManifest`（`{param}` 插值 + percent-encode，语义镜像 Rust `Router::url`；缺参抛错；`query` 选项拼查询串）。导航器与 SSR 渲染器自动注册当前信封的路由表，SSR/Islands/SPA 全场景可用
+- `@apizero/vite` 生成器：非 action 路由改生成可调用 URL 构造器，路径参数带类型（`routes.users.show({ id })`）；`.get(变量,…)` / `format!` 等非字面量路径降级为宽松参数类型，杜绝错绑前一条路由
+- 示例迁移 DX：blog `member-creator` 改用 `Form`/`FieldError`/契约字段表；members 页改 `Link` + `members.index()`；blog 依赖从 registry 0.1.0 改为 `file:` 工作区链接（消除 node_modules 嵌套旧包遮蔽）
+- `render_mode` 硬导航语义定稿：跨渲染模式跳转执行完整浏览器导航（与 protocol / asset_version / contract_hash 同列），测试用例表新增 render_mode 项；REACT.md / RENDERING.md 同步
+- **phoenix-captcha**（新 crate）：纯 Rust SVG 验证码，session 存 SHA-256 哈希、一次一用、大小写不敏感、常数时间比较；`CaptchaFeature`（路由 `captcha.image`）+ `CaptchaProtected` 提取器 + `captcha_format` 规则；React 侧 `CaptchaImage` / `useCaptcha`；docs/CAPTCHA.md
+- **phoenix-pay**（新 crate，MVP）：`Amount` 整数分、`PaymentProvider` trait、订单状态机 + `(provider, out_trade_no)` 幂等、`MemoryPaymentStore`、`PayFeature`（notify/查询路由 + payments 迁移）、Mock 全流程；微信 Native / 支付宝当面付配置结构（密钥 Debug 脱敏），网关签名明确 `NotImplemented` 留接缝；docs/PAYMENTS.md；FEATURES.md 增两行
+- 测试：`@apizero/react` 101、`react-ssr` 7、`vite` 14、blog 示例 6 全绿；`cargo test -p phoenix-captcha -p phoenix-pay` 全绿；`cargo check --workspace` 干净
+- 状态：完成（待用户 commit / push）
+
+## 2026-07-26：地基七件套（上传 / auth 脚手架 / 调度 / 分页 / i18n / 通知 / 支付网关）
+
+- **文件上传全链路**：`@apizero/react` 新增 `uploadRust` / `toFormData`；`Form`/`useForm` 检测到 `File` 自动切 multipart（XHR，`form.progress` 0–1），CSRF/422 回填/防重复提交与 JSON action 一致；教程新增 `tutorial/intermediate/番外-文件上传.md`（Multipart<T> + LocalDisk 落盘 + 进度条）
+- **`px make:auth`**：Breeze 等价脚手架——routes/auth.rs（命名路由 + `.action` 契约 + POST 组 RateLimit）、控制器（session.regenerate、防枚举重置）、三张 React 页面（Form/field/FieldError，中文文案）、CaptchaImage 注释块 + 四步启用说明；端到端验证含真实 routes 生成与 tsc
+- **phoenix-schedule**（新 crate）：自研五段 cron（Vixie 语义、闰年/2100 规则）+ `every_*`/`daily_at` DSL、`schedule:run`/`schedule:work` 命令（px 转发）、进程内防重叠；phoenix-queue 增 `dispatch_in` 延迟任务；docs/SCHEDULE.md
+- **分页**：phoenix-database `page_paginate`/`cursor_paginate`（归一化、越界空页、base64 游标；`paginate` 名与 Toasty 固有方法冲突故命名 `page_paginate`）；React `<Pagination>` 窗口页码组件 + `PaginatedData`/`CursorPageMeta` 类型；DATABASE.md/REACT.md 更新。注：契约生成器不支持泛型，`Paginated<T>` 需应用侧落具体 Resource（文档已示例）
+- **校验消息本地化**：内置 en/zh-CN 目录 + `set_locale`/`register_locale`/单条覆盖/字段显示名；422 形状与 rule 零变化，独立进程测试保证默认输出逐字节兼容；docs/VALIDATION.md
+- **phoenix-notify**（新 crate）：`Notification`/`Notifiable`/`Notifier`，mail + database 双通道（fail closed）、notifications 迁移（202607260002）+ `NotifyFeature`；docs/NOTIFICATIONS.md
+- **支付真网关**：微信 APIv3（RSA-SHA256 签名/验签、平台证书自举+缓存、AES-256-GCM 回调解密、native 下单/查询/关单、±300s 重放窗口）与支付宝当面付（RSA2 拼串签名/验签、precreate/query/close、app_id 校验）；`PayHttp` 可插拔传输（hyper+rustls 默认）；假网关集成测试含「坏签名必须拒绝」负例；零新第三方依赖（ring/rustls-native-certs/x509-parser 均为 lock 既有）；docs/PAYMENTS.md 更新
+- 测试：JS 四套 111/7/14/6 全绿；Rust 新增/相关 crate 180 项全绿（pay 47、schedule 42、cli 20、database 27、captcha 11、queue 11、validation 10、notify 10 等）；`cargo check --workspace` 干净；各 crate clippy(-D warnings, pedantic) 干净
+- 状态：完成（待用户 commit / push）；后续清单：退款/对账、DB 版通知与订单 store、captcha 进 phoenixrs 门面、Paginated 泛型契约
+
+## 2026-07-26：一键加密传输 + px new 体验翻新
+
+### 加密传输（TLS 之上纵深防御，非端到端）
+- 客户端 `@apizero/react`：`startPhoenix({ secure: true })` 一键；启动做 ECDH-P256 握手协商每会话密钥，页面响应走 AES-256-GCM 二进制帧（`application/vnd.phoenix.secure`），按响应头自动识别解密；会话密钥经 Web Crypto 派生为**不可导出**、不入 bundle；握手失败默认回退明文（`secureRequired` 可强制）。新增 `secure.ts` + 5 测
+- 服务端 phoenix-crypto/view/runtime：`server_handshake`/`seal_frame`/`open_frame`、`SecureTransport`/`SecureCodec`、`secure_transport(routes, cfg)` 一键中间件（默认关）；帧 `PHX1|ver|issued|expires|nonce|ct+tag`，AAD=帧头++key_id，HKDF salt=key_id/info="phoenix.secure.session.v1"；密码学负例（篡改密文/AAD/nonce/错 key/过期）全测、独立客户端互操作、握手→加密页面端到端、无 secure 头逐字节回退明文
+- 门面：`phoenix::secure_transport` / `phoenix::crypto::*` / `phoenix::view::SecureCodec` 可达
+- 硬化附带：页面协议 JSON 响应加 `Cache-Control: private, no-store` + `Vary: x-phoenix-page, accept`，防 bfcache/共享缓存把软导航 JSON 当文档还原（blog 测试同步更新）
+- 诚实边界（写在 SECURE_TRANSPORT.md 最前 + REACT.md）：浏览器为渲染必须能解密，无法对终端用户隐藏内容；本轮只加密响应体，请求体方向列 phase 2
+- 文档：docs/SECURE_TRANSPORT.md（新）+ REACT.md §6.5
+
+### px new 体验翻新
+- **镜像修复**：npm 依赖从 registry.npmjs.org tarball 直链改语义化版本（走用户镜像），Cargo 同理；清查确认产物无其它外链
+- 中文分步向导（渲染模式/数据库/Tailwind/Feature 多选/git → 汇总 → 分组进度 → 下一步），NO_COLOR/非 TTY 降级；npm install 失败给镜像提示不 panic
+- 三渲染模式各一极小 demo：home（Link 导航）+ demo/spa（计数器）+ demo/ssr（首屏含数据）+ demo/islands（counter 岛），每页 ≤40 行
+- 配置收敛：删 config/app.toml、database.toml、schema、taplo.toml；启动/前端/数据库进 .env（分组注释）；config/ 只放 Feature TOML；数据库探测改读 .phoenix / .env DATABASE_URL；新增 `phoenix_config::load_feature_config`（读 config/<name>.toml + ${VAR} 环境占位）
+- Feature 可选装配：phoenixrs 门面加 captcha/pay/notify feature；`px new --feature captcha,pay,notify` 或交互多选 → 依赖 features + FeatureSet 装配代码 + config/*.toml
+- 瘦身：默认产物 41→37 文件
+- 端到端验收：全 feature / --no-features 两组合 cargo check + tsc + 路由生成通过
+
+### 全量门禁
+- `cargo test --workspace` 无失败；`cargo clippy --workspace --all-targets -D warnings` 干净
+- JS：@apizero/react 116、react-ssr 7、vite 14、blog 示例 6 全绿
+- 状态：完成（待用户 commit / push）；后续：请求体方向加密（phase 2）、退款/对账、captcha DB store、registry 发布含新 feature 的 phoenixrs
+
+## 2026-07-26：后续清单收口（S3 修复 + captcha DB store + Paginated 泛型 + 退款对账 + 请求体加密 + Redis 广播）
+
+把此前几条记录末尾的「后续清单」全部做完。**动手前先跑基线，发现工作区其实编译不过**：`phoenix-storage/src/s3.rs` 调用了不存在的 `self.sanitized(key)`（5 个错误），先补上 `sanitized_key()`（`PathBuf` → 始终 `/` 分隔的对象键，不用平台分隔符）才有可验证的起点。
+
+### captcha DB store
+- 新增 `CaptchaStore` trait（`insert` / `take` / `purge_expired`）+ `MemoryCaptchaStore` + `DbCaptchaStore`（Toasty，`CaptchaRow` + `captchas` 迁移 `202607260003`）
+- **一次一用是原子 claim**：DB 版先读行，再用 `DELETE … WHERE id = ?` 认领并检查影响行数——影响 0 行说明别人先拿走了。读完就无条件相信读到的行会让重复提交花掉同一个挑战两次
+- session 流原样保留；`CaptchaFeature::with_store` 才注册 `captcha.challenge`（JSON `{id, svg, expires_in}`）与迁移，不用 store 的项目零变化
+- `CaptchaConfig::ttl`（默认 5 分钟，1 秒–1 天）；挑战 id = 128 位 CSPRNG 十六进制
+- React：`useStoredCaptcha` / `StoredCaptchaImage`，SVG 以 `data:` URL 内联（服务端字符串**从不**作为 HTML 注入 DOM）
+- 顺带：`phoenix_database::Backend::placeholder(n)` 与 `Database::table_name()`（裸 SQL 与 ORM 的表前缀站同一侧）
+
+### Paginated<T> 泛型契约
+- 契约生成器认识**框架自己的**泛型 `Paginated<T>` / `CursorPaginated<T>`，发射 `PhoenixPaginated<T>` / `PhoenixCursorPaginated<T>`；可写在 `.action::<_, Paginated<R>>()` 与嵌套字段里。应用自己的泛型 struct 仍然明确报错
+- 未使用时不发射，contract hash 不变；应用不能再叫 `Paginated`（名字冲突直接报错）；元数据计数 `u64 → number` 是一处**明确豁免**（行数与被 clamp 的页大小，不可能到 2^53），写在生成注释里
+- 两边形态由 `phoenix-database` 的 `wrapper_wire_keys_match_the_typescript_generator` 钉死
+
+### 支付退款 / 对账
+- `RefundOrder` / `RefundStatus`（独立状态机）/ `RefundReceipt` / `RefundRecord`；`payment_refunds` 表（`202607260004`），`(provider, out_refund_no)` 幂等
+- `PayManager::refund` **先落库再调网关**：网关成功却在返回路上崩溃的场景有据可查。可退额 = 订单金额 − 所有「未失败」退款（在途也占额，杜绝重复提交超退）；网关报错标记 `Failed` 释放额度，行仍保留
+- 订单状态机退款臂改为双向：全部退款失败则 `Refunding → Paid`（钱没动，订单确实还是已付）
+- 微信 APIv3 退款 / 退款查询；支付宝 `alipay.trade.refund` / `fastpay.refund.query`（「成功但空体」= 该退款不存在，映射 `RefundNotFound`，**不是**零元退款）
+- 对账：`Bill` / `BillEntry` / `Discrepancy` / `Reconciliation` + 纯函数 `reconcile`；`PaymentRecord.paid_at`（**只打一次戳**）+ `PaymentStore::paid_within` 提供本地侧。**双向**比对（账单有我们没有 / 我们有账单没有 / 金额或状态不符）
+- 微信账单：签名票据 → 签名 GET 取 CSV，**先校验票据公布的 SHA1 摘要再解析**；支付宝账单是 ZIP，只暴露 `bill_url()`，`download_bill` 保持 `NotImplemented`（不为一个字段引入解压依赖）
+- `parse_bill_csv` 认中英文表头、剥微信反引号；**未知状态值报错而不是当成已付**——那正是对账要抓的错
+- 时区不在本 crate：`day_start` 由调用方给
+
+### 请求体方向加密（原 phase 2）
+- `PHX1` 帧新增**方向绑定**：`AAD = 帧头 ++ key_id ++ ("req"|"res")`。没有它，同一会话密钥下请求帧与响应帧是可互换的密文，抓到的响应能原样回放成请求体并通过认证；Rust 与 TS 两侧各有一条跨方向回放必败的用例
+- 中间件在 **handler 之前**解帧、还原 `Content-Type`（随 `X-Phoenix-Content-Type` 上行）、清掉帧标记，`Json<T>` / `Validated<T>` 无感
+- **失败一律关闭**：篡改 / 错密钥 / 跨方向 / 截断 / 过期 / 无会话一律 400，超 `max_request_frame` 在解密前 413；未标记加密的请求逐字节原样通过
+- 客户端 `sealRequest` 在会话过期时返回 `null`，调用方回退明文而不是发一个服务端注定打不开的帧
+
+### 跨实例广播 RedisBroadcaster（原 phase 2）
+- `phoenix-redis::RedisBroadcaster`：`publish` = Redis `PUBLISH`（I/O detach，不阻塞 Hub），`subscribe` = `SUBSCRIBE` 流（断线 1s 退避重订阅）
+- `PeerFrame` 目标改为 `PeerTarget::{Channel, Key}`，新增 `Hub::send_to_key`。**定向发送按身份不按连接 id**：`ConnectionId` 是每个 Hub 自己的句柄，在另一节点上没有含义，而一个用户常在多台实例上有多条连接
+- `HubId` 不再是裸自增（混入进程启动时间与 pid）：两个进程都从 `1` 开始会让彼此的帧被当成自己的回声丢掉
+- 线上 JSON 格式显式写死、不跟随内存类型重构；控制帧不跨实例转发；诚实标注 pub/sub 是 fire-and-forget，本地送达从不依赖 Redis
+
+### 顺带修好的既有缺陷
+- `phoenix-storage` 编译失败（见开头）+ 全仓 `duration_suboptimal_units` 等 clippy 违规
+- 两处**过时的测试期望**：`make:auth` 的迁移计数（一条迁移在注册表里出现 3 次：标记注释 / `pub mod` / `all()` 条目，断言写的 2）、命令面测试的迁移条数（`make:auth` 后是 3 条）。改成断言真正的不变量（只注册一个模块、只有一个迁移文件）而不是数子串
+
+### 全量门禁
+- `cargo test --workspace` 86 个测试二进制全绿；`cargo clippy --workspace --all-targets` 零告警；`cargo fmt --all --check` 干净
+- JS：@apizero/react 128、react-ssr 7、vite 18、blog 6 全绿；`npm run ci:node`（含 typecheck + client/SSR 生产构建）通过
+- 真实 Redis：`PHOENIX_TEST_REDIS_URL=… cargo test -p phoenix-redis --test broadcast_contracts` 4 项全绿
+- 状态：完成（待用户 push）；后续：退款异步通知（微信独立 notify URL）、支付宝账单 ZIP 解压、Hub 会话表跨进程共享
