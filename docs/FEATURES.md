@@ -40,6 +40,11 @@ Phoenix-rs 支持第三方以 **Cargo crate** 形式发布 Feature（插件）�
 | 能力声明 + 应用侧 allowlist（拒绝未知能力） | ✅ |
 | 插件名 / 命令名 / 迁移 ID 冲突诊断 | ✅ |
 | 示例插件 `phoenix-plugin-greeter` | ✅ |
+| 官方 Feature：图形验证码 `phoenix-captcha`（见 [CAPTCHA.md](CAPTCHA.md)） | ✅ |
+| 官方 Feature：支付 `phoenix-pay`（微信 Native / 支付宝当面付 + Mock，见 [PAYMENTS.md](PAYMENTS.md)） | ✅（退款/对账后续） |
+| 官方 Feature：通知 `phoenix-notify`（mail + database 双通道，见 [NOTIFICATIONS.md](NOTIFICATIONS.md)） | ✅ |
+
+三个官方 Feature 均可在 `px new` 时可选装配（交互多选或 `--feature captcha,pay,notify`）：脚手架会启用 `phoenixrs` 门面的同名 Cargo feature（`phoenix::captcha` / `phoenix::pay` / `phoenix::notify` 模块导出）、在 `src/lib.rs` 生成 `FeatureSet` 装配代码，并生成对应 `config/<feature>.toml`。
 | 前端页面 / Island 跨 crate 自动发现 | ❌ 后续（插件可另发 npm 包，应用自行挂载） |
 | 运行时动态加载 | ❌ 不做 |
 

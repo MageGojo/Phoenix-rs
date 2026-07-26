@@ -1736,6 +1736,7 @@ dependencies = [
  "phoenix-crypto",
  "phoenix-http",
  "phoenix-routing",
+ "phoenix-security",
  "serde",
  "serde_json",
  "thiserror",
@@ -1754,6 +1755,25 @@ dependencies = [
  "toasty",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "phoenix-captcha"
+version = "0.1.1"
+dependencies = [
+ "phoenix-database",
+ "phoenix-http",
+ "phoenix-plugin",
+ "phoenix-routing",
+ "phoenix-security",
+ "phoenix-validation",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "toasty",
+ "tokio",
 ]
 
 [[package]]
@@ -1788,6 +1808,7 @@ dependencies = [
  "phoenix-http",
  "phoenix-routing",
  "rand 0.10.2",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1800,6 +1821,9 @@ dependencies = [
 name = "phoenix-database"
 version = "0.1.1"
 dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror",
  "toasty",
@@ -1887,6 +1911,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "phoenix-notify"
+version = "0.1.1"
+dependencies = [
+ "phoenix-database",
+ "phoenix-http",
+ "phoenix-mail",
+ "phoenix-plugin",
+ "serde_json",
+ "thiserror",
+ "toasty",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "phoenix-pay"
+version = "0.1.1"
+dependencies = [
+ "aes-gcm",
+ "base64",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "phoenix-database",
+ "phoenix-http",
+ "phoenix-plugin",
+ "phoenix-routing",
+ "ring",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "thiserror",
+ "toasty",
+ "tokio",
+ "tokio-rustls",
+ "toml 0.9.12+spec-1.1.0",
+ "x509-parser",
+ "zeroize",
+]
+
+[[package]]
 name = "phoenix-plugin"
 version = "0.1.1"
 dependencies = [
@@ -1922,14 +1989,19 @@ dependencies = [
 name = "phoenix-redis"
 version = "0.1.1"
 dependencies = [
+ "futures-util",
  "phoenix-crypto",
  "phoenix-http",
+ "phoenix-queue",
+ "phoenix-schedule",
  "phoenix-security",
  "redis",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1963,22 +2035,37 @@ dependencies = [
 name = "phoenix-runtime"
 version = "0.1.1"
 dependencies = [
+ "base64",
  "bytes",
  "futures-util",
  "http",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "phoenix-crypto",
  "phoenix-http",
  "phoenix-metrics",
  "phoenix-routing",
  "rcgen",
+ "ring",
  "rustls",
  "rustls-pemfile",
+ "serde_json",
  "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
+name = "phoenix-schedule"
+version = "0.1.1"
+dependencies = [
+ "phoenix-console",
+ "phoenix-queue",
+ "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -2002,9 +2089,19 @@ name = "phoenix-storage"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "hmac",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "percent-encoding",
  "rand 0.10.2",
+ "rustls-native-certs",
+ "sha2 0.11.0",
  "thiserror",
  "tokio",
+ "tokio-rustls",
+ "zeroize",
 ]
 
 [[package]]
@@ -2044,6 +2141,7 @@ dependencies = [
  "aes-gcm",
  "base64",
  "futures-util",
+ "phoenix-crypto",
  "phoenix-http",
  "phoenix-metrics",
  "phoenix-routing",
@@ -2059,6 +2157,7 @@ name = "phoenixrs"
 version = "0.1.4"
 dependencies = [
  "phoenix-auth",
+ "phoenix-captcha",
  "phoenix-config",
  "phoenix-console",
  "phoenix-crypto",
@@ -2069,11 +2168,14 @@ dependencies = [
  "phoenix-macros",
  "phoenix-mail",
  "phoenix-metrics",
+ "phoenix-notify",
+ "phoenix-pay",
  "phoenix-plugin",
  "phoenix-queue",
  "phoenix-redis",
  "phoenix-routing",
  "phoenix-runtime",
+ "phoenix-schedule",
  "phoenix-security",
  "phoenix-storage",
  "phoenix-testing",

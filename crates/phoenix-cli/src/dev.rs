@@ -167,8 +167,8 @@ impl DevSupervisor {
                     result = rust.wait() => Event::Rust(result.map_err(DevError::Wait)?),
                     result = vite.wait() => Event::Vite(result.map_err(DevError::Wait)?),
                     result = &mut shutdown => Event::Shutdown(result),
-                    changed = recv_change(&mut changes) => {
-                        changed?;
+                    notified = recv_change(&mut changes) => {
+                        notified?;
                         Event::RustChanged
                     }
                 };
@@ -189,7 +189,6 @@ impl DevSupervisor {
                         eprintln!("px dev: source change detected — rebuilding client, renderer, and backend…");
                         terminate(&mut rust).await?;
                         drain_changes(&mut changes, Duration::from_millis(400)).await;
-                        continue;
                     }
                     Event::Rust(status) => {
                         if !self.config.watch_rust {
@@ -204,8 +203,8 @@ impl DevSupervisor {
                         let wait = tokio::select! {
                             result = vite.wait() => WaitWhileDown::Vite(result.map_err(DevError::Wait)?),
                             result = &mut shutdown => WaitWhileDown::Shutdown(result),
-                            changed = recv_change(&mut changes) => {
-                                changed?;
+                            notified = recv_change(&mut changes) => {
+                                notified?;
                                 WaitWhileDown::Changed
                             }
                         };
@@ -219,7 +218,6 @@ impl DevSupervisor {
                             }
                             WaitWhileDown::Changed => {
                                 drain_changes(&mut changes, Duration::from_millis(400)).await;
-                                continue;
                             }
                         }
                     }
@@ -306,6 +304,8 @@ fn start_rust_watcher(cwd: &Path) -> Result<RustWatcher, DevError> {
     })
 }
 
+// Owned arguments are required: this loop runs on its own thread.
+#[allow(clippy::needless_pass_by_value)]
 fn watch_loop(
     cwd: PathBuf,
     notify_rx: mpsc::Receiver<Result<notify::Event, notify::Error>>,
@@ -387,7 +387,7 @@ async fn drain_changes(changes: &mut Option<RustWatcher>, window: Duration) {
             break;
         }
         match tokio::time::timeout(remaining, watcher.rx.recv()).await {
-            Ok(Some(())) => continue,
+            Ok(Some(())) => {}
             _ => break,
         }
     }

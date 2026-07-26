@@ -10,35 +10,31 @@ app/
   controllers/
   middleware/
   models/
+  props/
   requests/
   resources/
 config/
-  app.toml
-  database.toml
-  schemas/           # JSON Schema（Taplo / Even Better TOML）
-  mod.rs
+  mod.rs           # AppConfig::load() 入口
+  <feature>.toml   # 仅 Feature 配置（captcha/pay/notify…）；运行时配置在 .env
 database/
   migrations/
   seeders/
-deploy/
-  restart.sh.example # 发版切换后重启钩子
 routes/
-  api.rs
   web.rs
 views/
-  components/
   generated/       # 自动生成，不手写、不提交
-  islands/
-  layouts/
-  pages/
+  islands/         # counter.tsx：Islands 演示岛
+  pages/           # home + demo/{spa,ssr,islands} 三种渲染模式演示页
 public/
 storage/
 dist/              # px release 制品（gitignore）
-taplo.toml
+.env.example       # 应用 / 前端 / 数据库 / 日志 / 限流（复制为 .env）
 tests/
   feature/
   unit/
 ```
+
+需要发版自动重启时自行创建 `deploy/restart.sh`（`px release:install` / `px release:rollback` 会调用，见 [RELEASE_PIPELINE.md](RELEASE_PIPELINE.md)）。
 
 配置优先级与选库说明见 [CONFIG.md](CONFIG.md)。
 
@@ -179,7 +175,13 @@ px dev
 
 `px` 是 crates.io 包名与二进制名。`px new` 在无本地框架检出时依赖门面包 `phoenixrs`（应用仍 `use phoenix::`）。详见根 README「命名」一节。
 
-`px new` uses an English, developer-oriented interactive menu for Islands (default) / SPA / SSR, no database (default) or SQLite/PostgreSQL/MySQL/all drivers, Tailwind CSS, Git initialization (off by default), and TSX (default) / JSX. Each option includes a key, a practical consequence, and a `← default` marker; pressing Enter accepts the default. The same choices are available through `--render-mode`, `--database`, `--tailwind`, `--git`, and `--frontend`. When no database is selected, Phoenix omits Toasty dependencies, database configuration, and migration directories. The application entry point is `phoenix-console`: `cargo run -- serve` starts HTTP, and `px make:command Update` generates and registers a custom command. `px update` refreshes framework-owned core files only (`src/lib.rs` / `src/main.rs`, Vite/TS configuration, config schemas, dependency pins, and optional `phoenix-manage`) without touching business code (controllers / routes / pages). `px dev` sets an explicit Vite-dev lifecycle flag, builds the client and SSR renderer, then rebuilds them and restarts the backend after backend, React, or relevant Vite/package configuration changes; development uses the Vite client for HMR while a packaged binary serves the hashed manifest assets even when its config uses development defaults. Development and `npm run build` use the same manifest and renderer output.
+`px new` 是一个中文分步向导（TTY 下自动启用；`NO_COLOR` 或非 TTY / CI 自动降级为纯文本、跳过提问只用参数与默认值）：项目名 → 渲染模式（默认 Islands）→ 数据库（默认无）→ Tailwind → 官方 Feature 多选（captcha / pay / notify，逗号分隔编号，回车全跳过）→ Git（默认关）→ 配置汇总面板 → 确认创建。创建过程按组显示进度（生成骨架含文件数、`npm install`、生成契约类型、`git init`），npm 失败时给出 npmmirror 镜像切换与重试命令而不是直接报错退出；结尾输出「下一步」面板（`cd <app> && px dev`、演示页地址、各 Feature 的 `config/*.toml` 路径）。所有选择同样可用参数表达：`--render-mode`、`--database`、`--tailwind`、`--git`、`--frontend tsx|jsx`、`--feature captcha,pay,notify`、`--no-features`。未选数据库时不生成 Toasty 依赖与迁移目录；运行时配置（含 `DATABASE_URL`）统一收敛在 `.env`，`config/` 只放 Feature TOML（见 [CONFIG.md](CONFIG.md)）。
+
+新项目自带三种渲染模式的最小演示：首页用 `<Link>` 链接 `/demo/spa`（useState 计数器）、`/demo/ssr`（服务端时间戳，查看源代码可见）、`/demo/islands`（`views/islands/counter` + `client:load`），对应命名路由 `demo.spa/demo.ssr/demo.islands`，并入 `HomeController`，确认理解后可整组删除；`px new` 选定的渲染模式仍决定首页与后续 `make:page` 的默认。
+
+选中 Feature 时脚手架同时完成装配：应用 `Cargo.toml` 的 `phoenix` 依赖追加对应 feature、`src/lib.rs` 生成 `features()`（`FeatureSet` 安装 `CaptchaFeature` / `PayFeature` / `NotifyFeature`，支付回调路由留在 Session/CSRF 之外）、按需生成 `config/<feature>.toml`（密钥经 `.env` 的 `${VAR}` 注入）、数据库项目的 `phoenix-manage` 自动合并 Feature 迁移。注意：registry 版 `phoenixrs` 尚未发布含这些 feature 的版本，发布前请配合 `--framework-path` 使用。
+
+The application entry point is `phoenix-console`: `cargo run -- serve` starts HTTP, and `px make:command Update` generates and registers a custom command. `px update` refreshes framework-owned core files only (`src/lib.rs` / `src/main.rs`, Vite/TS configuration, dependency pins, and optional `phoenix-manage`) without touching business code (controllers / routes / pages). `px dev` sets an explicit Vite-dev lifecycle flag, builds the client and SSR renderer, then rebuilds them and restarts the backend after backend, React, or relevant Vite/package configuration changes; development uses the Vite client for HMR while a packaged binary serves the hashed manifest assets even when its config uses development defaults. Development and `npm run build` use the same manifest and renderer output.
 
 默认 Web 栈按请求顺序装配可信代理、request ID、访问日志、Host allowlist、限流、nonce CSP、安全 Session、CSRF 与强类型 `AppConfig` State。开发环境使用内存 Session/限流后端；多实例生产部署需要替换为共享后端。默认执行 `npm install` 和刷新 `views/generated`，Git 初始化需在交互菜单中选择或传递 `--git`；可用 `--no-install`。在框架源码之外开发时，可用 `--framework-path <path>` 显式绑定本地 Phoenix-rs。
 
@@ -207,6 +209,7 @@ px release:status
 业务生成命令：
 
 ```bash
+px make:auth
 px make:controller ReportController --route
 px make:controller Admin/PostController --resource
 px make:model Post --migration
@@ -223,6 +226,8 @@ px make:command Update
 `make:model Post --all` 生成并连接一条可编译的业务切片：Toasty 模型、迁移、验证 Request、公开 Resource、控制器、七条命名 resource 路由、类型化 `store` action、Rust Page Props 和 React index 页面。生成后会自动刷新 Rust→TypeScript contracts/routes；浏览器可以直接调用生成的 `posts.store({ name })`。
 
 `make:command Update` 生成 `app/commands/update.rs` 中的 `async fn update`，并写入 `commands!` 托管区块。运行：`cargo run -- update`。
+
+`make:auth` 生成认证起步套件（Laravel Breeze 定位）：`routes/auth.rs`（`login.show/store`、`logout.store`、`register.show/store`、`password-reset.show/store` 命名路由 + `.action` 契约，提交接口叠加每 IP 2 req/s 的独立 `RateLimit`）、`AuthController`（会话登录/注册/登出/密码重置，含 OWASP 会话轮换）、带 `Validate` 的 `LoginInput` / `RegisterInput` / `PasswordResetInput`、`AuthSessionResource` / `AuthMessageResource`、页面 Props 契约与 `views/pages/auth/{login,register,forgot-password}` React 表单页（`Form` + `form.field` + `FieldError`）。生成即可注册→登录跑通（演示用进程内用户存储），上线前按注释替换为真实用户表 + Argon2id（见 [AUTH_ADMIN.md](AUTH_ADMIN.md)）。图形验证码因 `phoenix-captcha` 未随 `phoenix` 门面分发、非零配置能力，默认以注释交付，按 `routes/auth.rs` 顶部说明与 [CAPTCHA.md](CAPTCHA.md) 启用。
 
 生成器自动维护 `mod.rs`、模型 `ModelSet`、迁移 `all()` 和 `routes/*.rs`。嵌套名称支持 `/` 或 `::`，例如 `Admin/Post`。托管内容位于明确的 `<phoenix:...>` 标记内，标记外业务代码不改动；同名目标默认拒绝覆盖，确需重建时显式使用 `--force`。迁移中的 SQL 是安全可编译的基础骨架，提交前仍应按真实 schema 调整。
 

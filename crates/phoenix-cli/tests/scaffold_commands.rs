@@ -59,8 +59,9 @@ fn command_surface_generates_and_registers_every_artifact() {
     run(&project, &["make:resource", "PostSummary"]);
     run(&project, &["make:middleware", "RequireLogin"]);
     run(&project, &["make:page", "reports/index"]);
-    run(&project, &["make:island", "Counter"]);
+    run(&project, &["make:island", "LikeButton"]);
     run(&project, &["make:command", "Update"]);
+    run(&project, &["make:auth"]);
 
     for path in [
         "app/controllers/report_controller.rs",
@@ -72,18 +73,45 @@ fn command_surface_generates_and_registers_every_artifact() {
         "routes/reports.rs",
         "views/pages/reports/index.tsx",
         "views/islands/counter.tsx",
+        "views/islands/like-button.tsx",
+        "views/pages/demo/spa.tsx",
+        "views/pages/demo/ssr.tsx",
+        "views/pages/demo/islands.tsx",
+        "routes/auth.rs",
+        "app/controllers/auth_controller.rs",
+        "app/requests/login_input.rs",
+        "views/pages/auth/login.tsx",
+        "views/pages/auth/register.tsx",
+        "views/pages/auth/forgot-password.tsx",
     ] {
         assert!(project.join(path).is_file(), "missing {path}");
     }
+    let auth_routes = fs::read_to_string(project.join("routes/auth.rs")).expect("auth routes");
+    assert!(auth_routes.contains(".name(\"login.store\")"));
+    assert!(auth_routes.contains(".action::<LoginInput, AuthSessionResource>()"));
     let commands = fs::read_to_string(project.join("app/commands/mod.rs")).expect("commands");
     assert!(commands.contains("pub mod update;"));
     assert!(commands.contains("update,"));
     let main = fs::read_to_string(project.join("src/main.rs")).expect("main");
     assert!(main.contains("Console::new"));
     assert!(main.contains("commands::registry()"));
+    // Three migrations are registered by this command surface: the model's own
+    // table, the standalone `make:migration`, and the users table `make:auth`
+    // brings with it.
     let migrations =
         fs::read_to_string(project.join("database/migrations/mod.rs")).expect("migration registry");
-    assert_eq!(migrations.matches("phoenix:migration:").count(), 2);
+    assert_eq!(
+        migrations.matches("phoenix:migration:").count(),
+        3,
+        "registry:\n{migrations}"
+    );
+    for expected in [
+        "create_posts_table",
+        "add_status_to_posts",
+        "create_users_table",
+    ] {
+        assert!(migrations.contains(expected), "{expected} is registered");
+    }
     fs::remove_dir_all(root).expect("remove temporary project");
 }
 

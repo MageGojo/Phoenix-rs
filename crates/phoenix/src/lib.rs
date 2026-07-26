@@ -1,5 +1,7 @@
 #[cfg(feature = "auth")]
 pub use phoenix_auth as auth;
+#[cfg(feature = "captcha")]
+pub use phoenix_captcha as captcha;
 pub use phoenix_config as config;
 pub use phoenix_console as console;
 pub use phoenix_console::commands;
@@ -18,16 +20,24 @@ pub use phoenix_routing as routing;
 pub use phoenix_routing::routes;
 pub use phoenix_runtime as core;
 pub use phoenix_runtime::applications;
+// One-tap secure transport: `phoenix::secure_transport(routes, config)`.
+pub use phoenix_runtime::{SecureTransport, SecureTransportConfig, secure_transport};
 pub use phoenix_security as security;
 pub use phoenix_validation as validation;
 pub use phoenix_view as view;
 
 #[cfg(feature = "mail")]
 pub use phoenix_mail as mail;
+#[cfg(feature = "notify")]
+pub use phoenix_notify as notify;
+#[cfg(feature = "pay")]
+pub use phoenix_pay as pay;
 #[cfg(feature = "queue")]
 pub use phoenix_queue as queue;
 #[cfg(feature = "redis")]
 pub use phoenix_redis as redis;
+#[cfg(feature = "schedule")]
+pub use phoenix_schedule as schedule;
 #[cfg(feature = "storage")]
 pub use phoenix_storage as storage;
 #[cfg(feature = "testing")]
@@ -140,6 +150,12 @@ pub mod prelude {
     #[cfg(feature = "redis")]
     pub use phoenix_redis::{
         RedisBackends, RedisConnectError, RedisRateLimitBackend, RedisSessionBackend, RedisStores,
+    };
+    #[cfg(feature = "schedule")]
+    pub use phoenix_schedule::{
+        RunSummary, Schedule, ScheduleError, ScheduledTask, Spec, TaskOutcome, TaskResult,
+        console_commands as schedule_commands, cron, daily_at, every_hours, every_minutes,
+        every_seconds, next_run, next_run_with_offset, try_cron, try_daily_at,
     };
     #[cfg(feature = "storage")]
     pub use phoenix_storage::{LocalDisk, Storage, StorageError, sanitize_key};

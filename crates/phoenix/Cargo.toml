@@ -18,7 +18,10 @@ path = "src/lib.rs"
 
 [features]
 default = []
+captcha = ["dep:phoenix-captcha"]
 database = ["dep:phoenix-database", "phoenix-plugin/database"]
+notify = ["dep:phoenix-notify", "mail"]
+pay = ["dep:phoenix-pay"]
 sqlite = ["database", "phoenix-database/sqlite"]
 pgsql = ["database", "phoenix-database/pgsql"]
 postgresql = ["pgsql"]
@@ -40,10 +43,12 @@ redis = ["dep:phoenix-redis"]
 storage = ["dep:phoenix-storage"]
 testing = ["dep:phoenix-testing"]
 queue = ["dep:phoenix-queue"]
+schedule = ["dep:phoenix-schedule", "queue"]
 mail = ["dep:phoenix-mail"]
 
 [dependencies]
 phoenix-auth = { version = "0.1.1", path = "../phoenix-auth", default-features = false, optional = true }
+phoenix-captcha = { version = "0.1.1", path = "../phoenix-captcha", optional = true }
 phoenix-config = { version = "0.1.1", path = "../phoenix-config" }
 phoenix-console = { version = "0.1.2", path = "../phoenix-console" }
 phoenix-runtime = { version = "0.1.1", path = "../phoenix-runtime", default-features = false }
@@ -55,9 +60,12 @@ phoenix-logging = { version = "0.1.1", path = "../phoenix-logging" }
 phoenix-macros = { version = "0.1.1", path = "../phoenix-macros" }
 phoenix-mail = { version = "0.1.1", path = "../phoenix-mail", optional = true }
 phoenix-metrics = { version = "0.1.1", path = "../phoenix-metrics", optional = true }
+phoenix-notify = { version = "0.1.1", path = "../phoenix-notify", optional = true }
+phoenix-pay = { version = "0.1.1", path = "../phoenix-pay", optional = true }
 phoenix-plugin = { version = "0.1.1", path = "../phoenix-plugin" }
 phoenix-queue = { version = "0.1.1", path = "../phoenix-queue", default-features = false, optional = true }
 phoenix-redis = { version = "0.1.1", path = "../phoenix-redis", default-features = false, optional = true }
+phoenix-schedule = { version = "0.1.1", path = "../phoenix-schedule", optional = true }
 phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
 phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-features = false }
 phoenix-storage = { version = "0.1.1", path = "../phoenix-storage", optional = true }

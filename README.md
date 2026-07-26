@@ -85,6 +85,12 @@ px dev
 
 启动成功后访问 **http://127.0.0.1:3000**。切换到 PostgreSQL / MySQL 见 [docs/CONFIG.md](docs/CONFIG.md)。
 
+### 系统教程（按序学习）
+
+从零到发版的分阶教材（初级 → 中级 → 高级，含验收）：
+
+**[docs/tutorial/README.md](docs/tutorial/README.md)**
+
 生成完整 CRUD 骨架：
 
 ```bash

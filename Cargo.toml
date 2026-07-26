@@ -2,6 +2,10 @@
 members = [
     "crates/phoenix",
     "crates/phoenix-auth",
+    "crates/phoenix-captcha",
+    "crates/phoenix-notify",
+    "crates/phoenix-pay",
+    "crates/phoenix-schedule",
     "crates/phoenix-runtime",
     "crates/phoenix-crypto",
     "crates/phoenix-cli",
@@ -58,7 +62,9 @@ mime = "0.3"
 percent-encoding = "2"
 rand = "0.10"
 redis = { version = "0.32", features = ["aio", "connection-manager", "tokio-comp"] }
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 rustls-pemfile = "2.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -72,6 +78,7 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toasty = { version = "0.8", default-features = false, features = ["migration", "serde"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde"] }
+x509-parser = "0.18"
 notify = "7"
 
 [workspace.lints.rust]

@@ -79,6 +79,81 @@ struct StoredProjectOptions {
     database: Option<ProjectDatabase>,
     render_mode: ProjectRenderMode,
     tailwind: bool,
+    features: Vec<ProjectFeature>,
+}
+
+/// One optional official Feature selected during `px new --feature ...`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProjectFeature {
+    Captcha,
+    Pay,
+    Notify,
+}
+
+impl ProjectFeature {
+    pub const ALL: [Self; 3] = [Self::Captcha, Self::Pay, Self::Notify];
+
+    /// Cargo feature name on the `phoenixrs` facade and `config/<key>.toml` stem.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Captcha => "captcha",
+            Self::Pay => "pay",
+            Self::Notify => "notify",
+        }
+    }
+
+    /// One-line Chinese description used by the interactive wizard.
+    #[must_use]
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::Captcha => "图形验证码（SVG、一次一用，GET /captcha）",
+            Self::Pay => "聚合支付（微信 Native / 支付宝当面付 / Mock）",
+            Self::Notify => "通知（邮件 + 数据库双通道）",
+        }
+    }
+
+    /// Whether this Feature registers database migrations through its plugin.
+    #[must_use]
+    pub const fn has_migrations(self) -> bool {
+        matches!(self, Self::Pay | Self::Notify)
+    }
+}
+
+impl FromStr for ProjectFeature {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "captcha" => Ok(Self::Captcha),
+            "pay" | "payment" | "payments" => Ok(Self::Pay),
+            "notify" | "notification" | "notifications" => Ok(Self::Notify),
+            _ => Err(format!(
+                "unknown feature `{value}`; expected captcha, pay, or notify"
+            )),
+        }
+    }
+}
+
+/// Parse a comma-separated `--feature` list; deduplicates and keeps a stable order.
+///
+/// # Errors
+///
+/// Returns an error naming the first unknown feature.
+pub fn parse_feature_list(value: &str) -> Result<Vec<ProjectFeature>, String> {
+    let mut features = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let feature = part.parse::<ProjectFeature>()?;
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
+    }
+    features.sort_unstable();
+    Ok(features)
 }
 
 /// Initial React rendering mode selected by `px new`.
@@ -233,6 +308,7 @@ pub struct NewProjectOptions {
     pub database: Option<ProjectDatabase>,
     pub frontend: ProjectFrontend,
     pub tailwind: bool,
+    pub features: Vec<ProjectFeature>,
 }
 
 impl NewProjectOptions {
@@ -247,6 +323,7 @@ impl NewProjectOptions {
             database: None,
             frontend: ProjectFrontend::default(),
             tailwind: false,
+            features: Vec::new(),
         }
     }
 
@@ -289,6 +366,12 @@ impl NewProjectOptions {
     #[must_use]
     pub const fn tailwind(mut self, tailwind: bool) -> Self {
         self.tailwind = tailwind;
+        self
+    }
+
+    #[must_use]
+    pub fn features(mut self, features: Vec<ProjectFeature>) -> Self {
+        self.features = features;
         self
     }
 }
@@ -341,15 +424,22 @@ pub enum ScaffoldError {
     CommandFailed { program: &'static str },
     #[error("the current time is before the Unix epoch")]
     InvalidClock,
+    #[error(
+        "make:auth needs a database for the persistent User model; recreate with \
+         `px new <app> --database sqlite` (or pgsql/mysql) and try again"
+    )]
+    AuthRequiresDatabase,
 }
 
-/// Create a complete Phoenix application that can immediately run `px dev`.
+/// Write the project skeleton only (no `git init`, no `npm install`).
+///
+/// Returns the number of files written so callers can report progress.
 ///
 /// # Errors
 ///
-/// Returns an error for invalid names, non-empty targets, invalid local framework
-/// paths, file-system failures, or dependency/bootstrap command failures.
-pub fn create_project(options: &NewProjectOptions) -> Result<(), ScaffoldError> {
+/// Returns an error for invalid names, non-empty targets, invalid local
+/// framework paths, or file-system failures.
+pub fn scaffold_project(options: &NewProjectOptions) -> Result<usize, ScaffoldError> {
     let target = absolute_path(&options.target)?;
     ensure_empty_target(&target)?;
     let directory_name = target
@@ -367,8 +457,18 @@ pub fn create_project(options: &NewProjectOptions) -> Result<(), ScaffoldError> 
     for (path, content) in project_files(&package, options)? {
         editor.create(path, content)?;
     }
-    editor.commit()?;
+    Ok(editor.commit()?.len())
+}
 
+/// Create a complete Phoenix application that can immediately run `px dev`.
+///
+/// # Errors
+///
+/// Returns an error for invalid names, non-empty targets, invalid local framework
+/// paths, file-system failures, or dependency/bootstrap command failures.
+pub fn create_project(options: &NewProjectOptions) -> Result<(), ScaffoldError> {
+    scaffold_project(options)?;
+    let target = absolute_path(&options.target)?;
     if options.initialize_git {
         run_optional("git", &["init", "--quiet"], &target)?;
     }
@@ -650,6 +750,97 @@ impl ProjectGenerator {
         editor.commit()
     }
 
+    /// Generate the authentication starter kit (`px make:auth`).
+    ///
+    /// Creates named login / logout / register / password-reset routes with a
+    /// stricter rate limit, an `AuthController`, validated request contracts,
+    /// browser-safe resources, page props, and React form pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for conflicts or malformed managed files.
+    pub fn auth(&self, options: GenerateOptions) -> Result<Vec<PathBuf>, ScaffoldError> {
+        // The generated slice authenticates against a persistent `users` table,
+        // so a database driver must have been selected at `px new`.
+        if self.stored_options().database.is_none() {
+            return Err(ScaffoldError::AuthRequiresDatabase);
+        }
+        let frontend = self.frontend();
+        let mut editor = ProjectEditor::new(&self.root, options.force);
+        // Persistent User model + migration; registered like `px make:model`.
+        add_rust_item(
+            &mut editor,
+            "app/models",
+            &QualifiedName {
+                modules: Vec::new(),
+                class: "User".to_owned(),
+            },
+            &auth_user_model_template(),
+        )?;
+        editor.update_registry(
+            "app/models/mod.rs",
+            MODELS_START,
+            MODELS_END,
+            "model",
+            "User",
+            render_model_registry,
+        )?;
+        add_auth_user_migration(&mut editor)?;
+        // Credentials use Argon2id (`password`) and the guard lives in the
+        // `phoenix-auth` crate (`auth`); enable both facade features.
+        enable_project_features(&mut editor, &["password", "auth"])?;
+        for (class, content) in [
+            ("LoginInput", login_input_template()),
+            ("RegisterInput", register_input_template()),
+            ("PasswordResetInput", password_reset_input_template()),
+        ] {
+            add_rust_item(
+                &mut editor,
+                "app/requests",
+                &QualifiedName {
+                    modules: Vec::new(),
+                    class: class.to_owned(),
+                },
+                &content,
+            )?;
+        }
+        for (class, content) in [
+            ("AuthSessionResource", auth_session_resource_template()),
+            ("AuthMessageResource", auth_message_resource_template()),
+        ] {
+            add_rust_item(
+                &mut editor,
+                "app/resources",
+                &QualifiedName {
+                    modules: Vec::new(),
+                    class: class.to_owned(),
+                },
+                &content,
+            )?;
+        }
+        add_rust_item(
+            &mut editor,
+            "app/controllers",
+            &QualifiedName {
+                modules: Vec::new(),
+                class: "AuthController".to_owned(),
+            },
+            &auth_controller_template(),
+        )?;
+        for (page, content) in [
+            ("auth/login", auth_login_page_template(frontend)),
+            ("auth/register", auth_register_page_template(frontend)),
+            (
+                "auth/forgot-password",
+                auth_forgot_password_page_template(frontend),
+            ),
+        ] {
+            add_auth_page(&mut editor, page, content, frontend)?;
+        }
+        editor.create("routes/auth.rs", auth_routes_template())?;
+        editor.commit()
+    }
+
     fn rust_contract(
         &self,
         name: &str,
@@ -696,17 +887,15 @@ impl ProjectGenerator {
         let stored = self.stored_options();
         let has_database = stored.database.is_some();
         let (rust_dependency, react, react_ssr, vite) =
-            framework_dependency_pins(&options.dependencies)?;
+            framework_dependency_pins(&options.dependencies, &stored.features)?;
 
         let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();
         planned.insert("src/main.rs".into(), main_template(&crate_name));
-        planned.insert("src/lib.rs".into(), lib_template(has_database));
-        planned.insert("config/mod.rs".into(), config_template(has_database));
         planned.insert(
-            "config/schemas/phoenix-config-app.schema.json".into(),
-            include_str!("../schemas/phoenix-config-app.schema.json").to_owned(),
+            "src/lib.rs".into(),
+            lib_template(has_database, &stored.features),
         );
-        planned.insert("taplo.toml".into(), app_taplo_template(has_database));
+        planned.insert("config/mod.rs".into(), config_template(has_database));
         planned.insert(
             "vite.config.ts".into(),
             vite_template(false, stored.tailwind),
@@ -716,21 +905,22 @@ impl ProjectGenerator {
             vite_template(true, stored.tailwind),
         );
         planned.insert("tsconfig.json".into(), tsconfig_template());
-        planned.insert("deploy/restart.sh.example".into(), deploy_restart_example());
         planned.insert(
             ".gitignore".into(),
             "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned(),
         );
         planned.insert(PROJECT_OPTIONS_FILE.into(), format_stored_options(&stored));
 
-        if let Some(database) = stored.database {
+        if stored.database.is_some() {
             planned.insert(
                 "src/bin/phoenix-manage.rs".into(),
-                management_template(&crate_name),
-            );
-            planned.insert(
-                "config/schemas/phoenix-config-database.schema.json".into(),
-                include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
+                management_template(
+                    &crate_name,
+                    stored
+                        .features
+                        .iter()
+                        .any(|feature| feature.has_migrations()),
+                ),
             );
             // Ensure empty registries exist when upgrading a no-db project that later
             // recorded a database in `.phoenix` — do not overwrite populated registries.
@@ -743,11 +933,13 @@ impl ProjectGenerator {
                     planned.insert(path.into(), content);
                 }
             }
-            if !self.root.join("config/database.toml").is_file() {
-                planned.insert(
-                    "config/database.toml".into(),
-                    database_toml_template(database),
-                );
+        }
+
+        // Feature config files carry user values: create only when missing.
+        for feature in &stored.features {
+            let path = format!("config/{}.toml", feature.key());
+            if !self.root.join(&path).is_file() {
+                planned.insert(path.into(), feature_config_template(*feature));
             }
         }
 
@@ -827,25 +1019,36 @@ fn is_project_root(path: &Path) -> bool {
 
 fn framework_dependency_pins(
     source: &DependencySource,
+    features: &[ProjectFeature],
 ) -> Result<(String, String, String, String), ScaffoldError> {
+    // Comma-separated `"captcha", "pay"` fragment for the phoenix dependency line.
+    let feature_list = features
+        .iter()
+        .map(|feature| format!("\"{}\"", feature.key()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let feature_suffix = if feature_list.is_empty() {
+        String::new()
+    } else {
+        format!(", features = [{feature_list}]")
+    };
     match source {
+        // Plain semver ranges: the user's own npm registry (npmmirror and
+        // friends included) resolves them. Never emit registry.npmjs.org
+        // tarball URLs — they bypass configured mirrors.
         DependencySource::Registry => Ok((
             format!(
-                "phoenix = {{ package = \"phoenixrs\", version = \"{PHOENIXRS_VERSION}\", default-features = false }}"
+                "phoenix = {{ package = \"phoenixrs\", version = \"{PHOENIXRS_VERSION}\", default-features = false{feature_suffix} }}"
             ),
-            format!(
-                "https://registry.npmjs.org/@apizero/react/-/react-{APIZERO_REACT_VERSION}.tgz"
-            ),
-            format!(
-                "https://registry.npmjs.org/@apizero/react-ssr/-/react-ssr-{APIZERO_REACT_SSR_VERSION}.tgz"
-            ),
-            format!("https://registry.npmjs.org/@apizero/vite/-/vite-{APIZERO_VITE_VERSION}.tgz"),
+            format!("^{APIZERO_REACT_VERSION}"),
+            format!("^{APIZERO_REACT_SSR_VERSION}"),
+            format!("^{APIZERO_VITE_VERSION}"),
         )),
         DependencySource::Local(root) => {
             let root = absolute_path(root)?;
             Ok((
                 format!(
-                    "phoenix = {{ package = \"phoenixrs\", path = {}, default-features = false }}",
+                    "phoenix = {{ package = \"phoenixrs\", path = {}, default-features = false{feature_suffix} }}",
                     json_string(&root.join("crates/phoenix").to_string_lossy())
                 ),
                 format!("file:{}", root.join("packages/phoenix-react").display()),
@@ -863,8 +1066,14 @@ fn format_stored_options(options: &StoredProjectOptions) -> String {
         ProjectRenderMode::Ssr => "ssr",
         ProjectRenderMode::Islands => "islands",
     };
+    let features = options
+        .features
+        .iter()
+        .map(|feature| feature.key())
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "frontend={}\nrender_mode={render_mode}\ndatabase={database}\ntailwind={}\n",
+        "frontend={}\nrender_mode={render_mode}\ndatabase={database}\ntailwind={}\nfeatures={features}\n",
         options.frontend.extension(),
         if options.tailwind { "true" } else { "false" },
     )
@@ -885,7 +1094,9 @@ fn read_stored_options(root: &Path) -> StoredProjectOptions {
         database: None,
         render_mode: ProjectRenderMode::default(),
         tailwind: false,
+        features: Vec::new(),
     };
+    let mut render_mode_recorded = false;
 
     if let Ok(source) = fs::read_to_string(root.join(PROJECT_OPTIONS_FILE)) {
         for line in source.lines() {
@@ -896,6 +1107,7 @@ fn read_stored_options(root: &Path) -> StoredProjectOptions {
             } else if let Some(value) = line.strip_prefix("render_mode=") {
                 if let Ok(render_mode) = value.parse() {
                     options.render_mode = render_mode;
+                    render_mode_recorded = true;
                 }
             } else if let Some(value) = line.strip_prefix("database=") {
                 options.database = match value.trim() {
@@ -904,15 +1116,16 @@ fn read_stored_options(root: &Path) -> StoredProjectOptions {
                 };
             } else if let Some(value) = line.strip_prefix("tailwind=") {
                 options.tailwind = matches!(value.trim(), "1" | "true" | "yes");
+            } else if let Some(value) = line.strip_prefix("features=")
+                && let Ok(features) = parse_feature_list(value)
+            {
+                options.features = features;
             }
         }
     }
 
-    if options.database.is_none()
-        && (root.join("src/bin/phoenix-manage.rs").is_file()
-            || root.join("config/database.toml").is_file())
-    {
-        options.database = infer_database(root);
+    if options.database.is_none() && root.join("src/bin/phoenix-manage.rs").is_file() {
+        options.database = Some(infer_database(root));
     }
     if !options.tailwind
         && fs::read_to_string(root.join("package.json"))
@@ -921,17 +1134,11 @@ fn read_stored_options(root: &Path) -> StoredProjectOptions {
     {
         options.tailwind = true;
     }
-    if options.render_mode == ProjectRenderMode::default() {
-        if let Ok(controller) = fs::read_to_string(root.join("app/controllers/home_controller.rs"))
-        {
-            if controller.contains(".spa()") {
-                options.render_mode = ProjectRenderMode::Spa;
-            } else if controller.contains(".ssr()") {
-                options.render_mode = ProjectRenderMode::Ssr;
-            } else if controller.contains(".islands()") {
-                options.render_mode = ProjectRenderMode::Islands;
-            }
-        }
+    if !render_mode_recorded
+        && let Ok(controller) = fs::read_to_string(root.join("app/controllers/home_controller.rs"))
+        && let Some(render_mode) = sniff_home_render_mode(&controller)
+    {
+        options.render_mode = render_mode;
     }
     if options.frontend == ProjectFrontend::default()
         && root.join("views/pages/home.jsx").is_file()
@@ -942,30 +1149,60 @@ fn read_stored_options(root: &Path) -> StoredProjectOptions {
     options
 }
 
-fn infer_database(root: &Path) -> Option<ProjectDatabase> {
+/// Legacy fallback for projects without `render_mode=` in `.phoenix`: the mode
+/// marker closest after `Page::new("home"` wins, so the demo-page methods in
+/// the same controller do not confuse the detection.
+fn sniff_home_render_mode(controller: &str) -> Option<ProjectRenderMode> {
+    let start = controller.find("\"home\"").unwrap_or(0);
+    let tail = &controller[start..];
+    [
+        (".spa()", ProjectRenderMode::Spa),
+        (".ssr()", ProjectRenderMode::Ssr),
+        (".islands()", ProjectRenderMode::Islands),
+    ]
+    .into_iter()
+    .filter_map(|(marker, mode)| tail.find(marker).map(|index| (index, mode)))
+    .min_by_key(|(index, _)| *index)
+    .map(|(_, mode)| mode)
+}
+
+/// Infer the driver for legacy projects (no `database=` line in `.phoenix`)
+/// from the Cargo feature default, falling back to the `.env` `DATABASE_URL`.
+fn infer_database(root: &Path) -> ProjectDatabase {
     if let Ok(cargo) = fs::read_to_string(root.join("Cargo.toml")) {
         if cargo.contains("default = [\"all-databases\"]") || cargo.contains("all-databases =") {
-            return Some(ProjectDatabase::All);
+            return ProjectDatabase::All;
         }
         if cargo.contains("default = [\"mysql\"]") {
-            return Some(ProjectDatabase::Mysql);
+            return ProjectDatabase::Mysql;
         }
         if cargo.contains("default = [\"pgsql\"]") {
-            return Some(ProjectDatabase::Pgsql);
+            return ProjectDatabase::Pgsql;
         }
         if cargo.contains("default = [\"sqlite\"]") {
-            return Some(ProjectDatabase::Sqlite);
+            return ProjectDatabase::Sqlite;
         }
     }
-    if let Ok(database) = fs::read_to_string(root.join("config/database.toml")) {
-        for line in database.lines() {
-            if let Some(value) = line.trim().strip_prefix("default = ") {
-                let value = value.trim().trim_matches('"');
-                return value.parse().ok();
+    for env_file in [".env", ".env.example"] {
+        if let Ok(env) = fs::read_to_string(root.join(env_file)) {
+            for line in env.lines() {
+                let Some(url) = line.trim().strip_prefix("DATABASE_URL=") else {
+                    continue;
+                };
+                let url = url.trim();
+                if url.starts_with("sqlite:") {
+                    return ProjectDatabase::Sqlite;
+                }
+                if url.starts_with("postgres") {
+                    return ProjectDatabase::Pgsql;
+                }
+                if url.starts_with("mysql:") {
+                    return ProjectDatabase::Mysql;
+                }
             }
         }
     }
-    Some(ProjectDatabase::Sqlite)
+    ProjectDatabase::Sqlite
 }
 
 fn read_package_name(root: &Path) -> Result<String, ScaffoldError> {
@@ -997,7 +1234,7 @@ fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
     for line in &mut lines {
         let trimmed = line.trim_start();
         if trimmed.starts_with("phoenix =") || trimmed.starts_with("phoenixrs =") {
-            *line = phoenix_dependency.to_owned();
+            phoenix_dependency.clone_into(line);
             replaced = true;
         }
     }
@@ -1146,12 +1383,14 @@ fn patch_package_json_core(
     Ok(rendered)
 }
 
+// The body is the flat scaffold file list; the length is data, not logic.
+#[allow(clippy::too_many_lines)]
 fn project_files(
     package: &str,
     options: &NewProjectOptions,
 ) -> Result<Vec<(PathBuf, String)>, ScaffoldError> {
     let (rust_dependency, react, react_ssr, vite) =
-        framework_dependency_pins(&options.dependencies)?;
+        framework_dependency_pins(&options.dependencies, &options.features)?;
     let crate_name = package.replace('-', "_");
     let tailwind = if options.tailwind {
         ",\n    \"@tailwindcss/vite\": \"^4.3.0\",\n    \"tailwindcss\": \"^4.3.0\""
@@ -1225,7 +1464,9 @@ fn project_files(
         database: options.database,
         render_mode: options.render_mode,
         tailwind: options.tailwind,
+        features: options.features.clone(),
     };
+    let extension = options.frontend.extension();
 
     let mut files = vec![
         ("Cargo.toml".into(), cargo_toml),
@@ -1235,27 +1476,45 @@ fn project_files(
         ),
         ("package.json".into(), package_json),
         (".gitignore".into(), "/target\n/node_modules\n/public/assets\n/public/ssr\n/views/generated/*.ts\n/dist\n/storage/*.sqlite\n/storage/*.sqlite-*\n.env\n.DS_Store\n".to_owned()),
-        (".env.example".into(), env_example_template(options.database.is_some())),
+        (".env.example".into(), env_example_template(options.database, &options.features)),
         ("README.md".into(), project_readme(package, options)),
         ("src/main.rs".into(), main_template(&crate_name)),
-        ("src/lib.rs".into(), lib_template(options.database.is_some())),
+        ("src/lib.rs".into(), lib_template(options.database.is_some(), &options.features)),
         ("config/mod.rs".into(), config_template(options.database.is_some())),
-        ("config/app.toml".into(), app_toml_template(package)),
-        ("config/schemas/phoenix-config-app.schema.json".into(), include_str!("../schemas/phoenix-config-app.schema.json").to_owned()),
-        ("taplo.toml".into(), app_taplo_template(options.database.is_some())),
-        ("deploy/restart.sh.example".into(), deploy_restart_example()),
         ("app/controllers/mod.rs".into(), managed_modules(&["pub mod home_controller;", "pub use home_controller::HomeController;"])),
         ("app/controllers/home_controller.rs".into(), home_controller_template(options.render_mode)),
-        ("app/props/mod.rs".into(), managed_modules(&["pub mod home_props;", "pub use home_props::HomeProps;"])),
+        ("app/props/mod.rs".into(), managed_modules(&[
+            "pub mod demo_ssr_props;",
+            "pub mod home_props;",
+            "pub use demo_ssr_props::DemoSsrProps;",
+            "pub use home_props::HomeProps;",
+        ])),
         ("app/props/home_props.rs".into(), home_props_template()),
+        ("app/props/demo_ssr_props.rs".into(), demo_ssr_props_template()),
         ("app/requests/mod.rs".into(), managed_modules(&[])),
         ("app/resources/mod.rs".into(), managed_modules(&[])),
         ("app/middleware/mod.rs".into(), managed_modules(&[])),
         ("app/commands/mod.rs".into(), commands_mod_template()),
         ("routes/web.rs".into(), home_route_template()),
         (
-            format!("views/pages/home.{}", options.frontend.extension()).into(),
+            format!("views/pages/home.{extension}").into(),
             home_page_template(options.frontend),
+        ),
+        (
+            format!("views/pages/demo/spa.{extension}").into(),
+            demo_spa_page_template(),
+        ),
+        (
+            format!("views/pages/demo/ssr.{extension}").into(),
+            demo_ssr_page_template(options.frontend),
+        ),
+        (
+            format!("views/pages/demo/islands.{extension}").into(),
+            demo_islands_page_template(),
+        ),
+        (
+            format!("views/islands/counter.{extension}").into(),
+            island_template("Counter", options.frontend),
         ),
         ("views/styles.css".into(), styles_template(options.tailwind)),
         ("views/generated/contracts.ts".into(), generated_contracts_template()),
@@ -1266,20 +1525,9 @@ fn project_files(
         ("public/.gitkeep".into(), String::new()),
         ("storage/cache/.gitkeep".into(), String::new()),
         ("storage/logs/.gitkeep".into(), String::new()),
-        ("views/components/.gitkeep".into(), String::new()),
-        ("views/islands/.gitkeep".into(), String::new()),
-        ("views/layouts/.gitkeep".into(), String::new()),
     ];
     if options.database.is_some() {
         files.extend([
-            (
-                "config/database.toml".into(),
-                database_toml_template(options.database.expect("database selected")),
-            ),
-            (
-                "config/schemas/phoenix-config-database.schema.json".into(),
-                include_str!("../schemas/phoenix-config-database.schema.json").to_owned(),
-            ),
             ("app/models/mod.rs".into(), empty_model_registry()),
             (
                 "database/migrations/mod.rs".into(),
@@ -1288,121 +1536,151 @@ fn project_files(
             ("database/seeders/mod.rs".into(), seeder_template()),
             (
                 "src/bin/phoenix-manage.rs".into(),
-                management_template(&crate_name),
+                management_template(
+                    &crate_name,
+                    options
+                        .features
+                        .iter()
+                        .any(|feature| feature.has_migrations()),
+                ),
             ),
         ]);
+    }
+    for feature in &options.features {
+        files.push((
+            format!("config/{}.toml", feature.key()).into(),
+            feature_config_template(*feature),
+        ));
     }
     Ok(files)
 }
 
-fn env_example_template(database: bool) -> String {
-    let database = if database {
-        "\n# Database overrides for the driver selected during `px new`.\n# DB_PASSWORD=secret\n# DATABASE_URL=...\n"
+// One grouped template literal per section; the length is the generated file.
+#[allow(clippy::too_many_lines)]
+fn env_example_template(database: Option<ProjectDatabase>, features: &[ProjectFeature]) -> String {
+    let database_block = match database {
+        None => {
+            "# ── 数据库（创建时未启用）────────────────────────────\n# 需要时用 `px new --database sqlite|pgsql|mysql` 重新创建，\n# 或按 docs/CONFIG.md 手动启用驱动 feature 后设置：\n# DATABASE_URL=sqlite:storage/app.sqlite\n".to_owned()
+        }
+        Some(driver) => {
+            let (active, hints) = match driver {
+                ProjectDatabase::Sqlite => (
+                    "DATABASE_URL=sqlite:storage/app.sqlite",
+                    "# DATABASE_URL=postgresql://phoenix:secret@127.0.0.1:5432/phoenix\n# DATABASE_URL=mysql://phoenix:secret@127.0.0.1:3306/phoenix\n",
+                ),
+                ProjectDatabase::Pgsql => (
+                    "DATABASE_URL=postgresql://phoenix:secret@127.0.0.1:5432/phoenix",
+                    "# DATABASE_URL=sqlite:storage/app.sqlite\n",
+                ),
+                ProjectDatabase::Mysql => (
+                    "DATABASE_URL=mysql://phoenix:secret@127.0.0.1:3306/phoenix",
+                    "# DATABASE_URL=sqlite:storage/app.sqlite\n",
+                ),
+                ProjectDatabase::All => (
+                    "DATABASE_URL=sqlite:storage/app.sqlite",
+                    "# 已编译全部驱动，改 URL 即可换库：\n# DATABASE_URL=postgresql://phoenix:secret@127.0.0.1:5432/phoenix\n# DATABASE_URL=mysql://phoenix:secret@127.0.0.1:3306/phoenix\n",
+                ),
+            };
+            format!("# ── 数据库 ──────────────────────────────────────────\n{active}\n{hints}")
+        }
+    };
+    let feature_block = if features.is_empty() {
+        String::new()
     } else {
-        ""
+        let mut block =
+            String::from("\n# ── Feature 密钥（config/*.toml 里以 ${VAR} 引用）─────\n");
+        if features.contains(&ProjectFeature::Pay) {
+            block.push_str(
+                "# PAY_WECHAT_API_V3_KEY=\n# PAY_ALIPAY_APP_PRIVATE_KEY=\n# PAY_ALIPAY_PUBLIC_KEY=\n",
+            );
+        }
+        if features.contains(&ProjectFeature::Captcha) {
+            block.push_str("# 验证码无密钥；参数见 config/captcha.toml。\n");
+        }
+        if features.contains(&ProjectFeature::Notify) {
+            block.push_str("# 通知本地用内存邮件传输；接真实 SMTP 时在此加对应密钥。\n");
+        }
+        block
     };
     format!(
-        "# Copy to `.env` for local secrets and overrides.\n# Precedence: config/*.toml < .env < process environment.\n\nAPP_ENV=development\nAPP_ADDR=127.0.0.1:3000\nAPP_URL=http://127.0.0.1:3000\n{database}\nTRUSTED_PROXIES=none\nALLOWED_HOSTS=127.0.0.1,localhost,[::1]\nRATE_LIMIT_REQUESTS=60\nRATE_LIMIT_WINDOW_SECONDS=60\nVITE_DEV_URL=http://127.0.0.1:5173\nPHOENIX_LOG=info,hyper=warn\n"
+        "# 复制为 `.env`：前后端启动 + 数据库的运行时配置都在这里。\n# 优先级：.env < 进程环境变量。config/ 目录只放 Feature 配置（TOML）。\n\n# ── 应用 ────────────────────────────────────────────\nAPP_ENV=development\nAPP_ADDR=127.0.0.1:3000\nAPP_URL=http://127.0.0.1:3000\n\n# ── 前端（Vite 开发服务器，`px dev` 使用）───────────\nVITE_DEV_URL=http://127.0.0.1:5173\n\n{database_block}\n# ── 日志 ────────────────────────────────────────────\nPHOENIX_LOG=info,hyper=warn\n\n# ── 限流与信任代理 ──────────────────────────────────\nRATE_LIMIT_REQUESTS=60\nRATE_LIMIT_WINDOW_SECONDS=60\nTRUSTED_PROXIES=none\nALLOWED_HOSTS=127.0.0.1,localhost,[::1]\n{feature_block}"
     )
 }
 
-fn app_toml_template(package: &str) -> String {
-    format!(
-        r#"# Application settings (Laravel-style config/app).
-# Secrets and machine-specific overrides belong in `.env`.
-# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
-
-#:schema ./schemas/phoenix-config-app.schema.json
-
-name = {package}
-env = "development"
-addr = "127.0.0.1:3000"
-url = "http://127.0.0.1:3000"
-"#,
-        package = json_string(package),
-    )
-}
-
-fn database_toml_template(database: ProjectDatabase) -> String {
-    format!(
-        r#"# Database connections (Laravel-style config/database).
+/// `config/<feature>.toml` starter: non-secret parameters live here, secrets
+/// are injected from `.env` through `${VAR}` (see `load_feature_config`).
+// One template literal per Feature; the length is the generated files.
+#[allow(clippy::too_many_lines)]
+fn feature_config_template(feature: ProjectFeature) -> String {
+    match feature {
+        ProjectFeature::Captcha => {
+            r"# 图形验证码 Feature（phoenix-captcha）。详见 docs/CAPTCHA.md。
 #
-# Switch engines by changing `default`:
-#   default = "sqlite"   # local file, zero setup
-#   default = "pgsql"    # PostgreSQL
-#   default = "mysql"    # MySQL / MariaDB
-# Enable the matching Cargo feature only when this application uses a database.
+# CaptchaConfig 目前在代码中构造（src/lib.rs 的 features()），本文件记录默认
+# 可调项；修改后把对应值同步到 `CaptchaFeature::with_config(...)`。
 #
-# Or set DB_CONNECTION=pgsql|mysql in `.env` without editing this file.
-# Put DB_PASSWORD in `.env` — do not commit production passwords here.
-# Editor autocomplete: Even Better TOML / Taplo + #:schema below.
-
-#:schema ./schemas/phoenix-config-database.schema.json
-
-default = "{default}"
-
-[connections.sqlite]
-driver = "sqlite"
-# Path is relative to the application root (creates parent dirs as needed by the OS/driver).
-database = "storage/app.sqlite"
-
-[connections.pgsql]
-driver = "pgsql"
-host = "127.0.0.1"
-port = 5432
-database = "phoenix"
-username = "phoenix"
-password = ""
-
-[connections.mysql]
-driver = "mysql"
-host = "127.0.0.1"
-port = 3306
-database = "phoenix"
-username = "phoenix"
-password = ""
-"#,
-        default = if database == ProjectDatabase::All {
-            "sqlite"
-        } else {
-            database.cargo_feature()
-        },
-    )
-}
-
-fn app_taplo_template(database: bool) -> String {
-    let database_rule = if database {
-        "\n[[rule]]\ninclude = [\"config/database.toml\"]\n[rule.schema]\npath = \"./config/schemas/phoenix-config-database.schema.json\"\n"
-    } else {
-        ""
-    };
-    format!(
-        "# Taplo / Even Better TOML schema associations for config/*.toml autocomplete.\n\n[[rule]]\ninclude = [\"config/app.toml\"]\n[rule.schema]\npath = \"./config/schemas/phoenix-config-app.schema.json\"\n{database_rule}"
-    )
-}
-
-fn deploy_restart_example() -> String {
-    r"#!/bin/sh
-# Copy to deploy/restart.sh and make executable.
-# Used by `px release:install` / `px release:rollback` when --restart-cmd is omitted.
-set -eu
-systemctl restart my-app
+# length = 5        # 每次挑战的字符数（1–16）
+# width = 160       # SVG 画布宽度
+# height = 60       # SVG 画布高度
+# noise_curves = 3  # 干扰曲线条数
+# noise_dots = 28   # 噪点数量
 "
-    .to_owned()
+            .to_owned()
+        }
+        ProjectFeature::Pay => r#"# 聚合支付 Feature（phoenix-pay）。详见 docs/PAYMENTS.md。
+#
+# 结构留在本文件，密钥放 `.env`：字符串值支持 `${VAR}` 占位符，加载时从
+# 环境注入（src/lib.rs 的 pay_manager() 通过 load_feature_config("pay") 读取）。
+# 两个渠道段都注释时仅启用 MockProvider——本地/测试即可完整跑通下单与回调。
+
+# [wechat_native]                                       # 微信支付 Native（APIv3）
+# app_id = "wx1234567890"
+# mch_id = "1900000001"
+# mch_serial_no = ""                                    # 商户 API 证书序列号
+# api_v3_key = "${PAY_WECHAT_API_V3_KEY}"               # 密钥进 .env
+# private_key_path = "storage/certs/apiclient_key.pem"  # 商户私钥（不进仓库）
+# notify_url = "https://example.com/pay/notify/wechat"
+
+# [alipay_f2f]                                          # 支付宝当面付（RSA2）
+# app_id = "2021000000000000"
+# app_private_key = "${PAY_ALIPAY_APP_PRIVATE_KEY}"     # 密钥进 .env
+# alipay_public_key = "${PAY_ALIPAY_PUBLIC_KEY}"        # 支付宝公钥（非应用公钥）
+# notify_url = "https://example.com/pay/notify/alipay"
+"#
+        .to_owned(),
+        ProjectFeature::Notify => {
+            r#"# 通知 Feature（phoenix-notify）：邮件 + 数据库双通道。详见 docs/NOTIFICATIONS.md。
+#
+# 本地默认内存邮件传输 + 内存存储（src/lib.rs 的 notifier()）；
+# 生产环境在代码中替换真实 MailTransport 与数据库 store。
+#
+# from = "noreply@example.com"   # 通知邮件的默认发件地址（应用代码中使用）
+"#
+            .to_owned()
+        }
+    }
 }
 
 fn config_template(database: bool) -> String {
     let database = if database {
-        " + `config/database.toml`"
+        " (`DATABASE_URL` selects the database)"
     } else {
         ""
     };
     format!(
-        "pub use phoenix::config::{{AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue}};\n\n/// Load this application's configuration.\n///\n/// Reads `config/app.toml`{database}, then `.env`, then process environment.\n///\n/// # Errors\n///\n/// Returns a source, validation, or production-requirement error.\npub fn load() -> Result<AppConfig, ConfigError> {{\n    AppConfig::load()\n}}\n"
+        "pub use phoenix::config::{{\n    AppConfig, AppConfigBuilder, ConfigError, Environment, SecretValue, load_feature_config,\n}};\n\n/// Load this application's configuration.\n///\n/// Runtime settings come from `.env`, then the process environment{database}.\n/// Feature settings live in `config/<feature>.toml` via `load_feature_config`.\n///\n/// # Errors\n///\n/// Returns a source, validation, or production-requirement error.\npub fn load() -> Result<AppConfig, ConfigError> {{\n    AppConfig::load()\n}}\n"
     )
 }
 
-fn management_template(crate_name: &str) -> String {
+// The body is one template literal; the line count is the generated file.
+#[allow(clippy::too_many_lines)]
+fn management_template(crate_name: &str, feature_migrations: bool) -> String {
+    let migrations_expr = if feature_migrations {
+        // Official Features (pay / notify) contribute migrations through their plugins.
+        "{\n        let mut migrations = __PHOENIX_APP_CRATE__::migrations::all();\n        let features = __PHOENIX_APP_CRATE__::features()\n            .map_err(|error| error as Box<dyn Error>)?;\n        migrations.extend(features.into_parts().migrations);\n        migrations\n    }"
+    } else {
+        "__PHOENIX_APP_CRATE__::migrations::all()"
+    };
     r#"#[cfg(feature = "database")]
 use std::{env, error::Error, io};
 
@@ -1441,7 +1719,7 @@ async fn main() -> CommandResult {
 
     let mut runner = MigrationRunner::new(
         &mut database,
-        __PHOENIX_APP_CRATE__::migrations::all(),
+        __PHOENIX_MIGRATIONS__,
     )?;
     match command {
         "migrate" => {
@@ -1525,6 +1803,7 @@ fn input_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
 "#
+    .replace("__PHOENIX_MIGRATIONS__", migrations_expr)
     .replace("__PHOENIX_APP_CRATE__", crate_name)
 }
 
@@ -1567,15 +1846,33 @@ fn project_readme(package: &str, options: &NewProjectOptions) -> String {
     };
     let database = options.database.map_or_else(
         || "This project has no database dependency. Create one with `px new --database sqlite|pgsql|mysql`.".to_owned(),
-        |database| format!("Selected driver: `{}`. Use `px migrate` and `px status` for migrations.", database.cargo_feature()),
+        |database| format!("Selected driver: `{}` (`DATABASE_URL` in `.env`). Use `px migrate` and `px status` for migrations.", database.cargo_feature()),
     );
     let tailwind = if options.tailwind {
         "Tailwind CSS v4 is enabled through `@tailwindcss/vite`."
     } else {
         "Tailwind CSS is not enabled; add it at creation time with `px new --tailwind`."
     };
+    let features = if options.features.is_empty() {
+        String::new()
+    } else {
+        use std::fmt::Write as _;
+
+        let mut list = String::new();
+        for feature in &options.features {
+            let _ = writeln!(
+                list,
+                "- `{key}` — {summary}（配置：`config/{key}.toml`）",
+                key = feature.key(),
+                summary = feature.summary(),
+            );
+        }
+        format!(
+            "\n## 已启用 Feature\n\n{list}\n装配代码在 `src/lib.rs` 的 `features()`；密钥放 `.env`，非敏感参数放 `config/*.toml`。\n\n> 注意：crates.io 上已发布的 `phoenixrs` 尚未包含 `captcha` / `pay` / `notify`\n> feature（需要 > {PHOENIXRS_VERSION} 的后续版本）。在其发布前请使用\n> `px new --framework-path <Phoenix-rs 检出>` 的本地依赖模式。\n"
+        )
+    };
     format!(
-        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\npx dev\n```\n\n`px dev` builds the browser and renderer bundles before it starts the app, then rebuilds them whenever Rust or React source changes. The development document therefore uses the same Vite assets and renderer contract as `npm run build`.\n\n## Rendering mode\n\nThis application starts in **{mode}** mode. Change only the page chain in `app/controllers/home_controller.rs`:\n\n```rust\n.spa()       // SPA\n.ssr()       // SSR\n.islands()   // Islands\n```\n\nThe controller, routes, renderer and build pipeline stay unchanged.\n\n## Optional integrations\n\n- {database}\n- {tailwind}\n\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n```\n"
+        "# {package}\n\nPhoenix Rust + React application.\n\n## Start\n\n```bash\ncp .env.example .env\npx dev\n```\n\n`px dev` builds the browser and renderer bundles before it starts the app, then rebuilds them whenever Rust or React source changes. The development document therefore uses the same Vite assets and renderer contract as `npm run build`.\n\n运行时配置（地址 / 数据库 / 日志 / 限流）都在 `.env`；`config/` 目录只存放 Feature 的 TOML 配置。\n\n## Rendering mode\n\nThis application starts in **{mode}** mode. Change only the page chain in `app/controllers/home_controller.rs`:\n\n```rust\n.spa()       // SPA\n.ssr()       // SSR\n.islands()   // Islands\n```\n\nThe controller, routes, renderer and build pipeline stay unchanged.\n\n首页链接了三种渲染模式的最小演示页：`/demo/spa`、`/demo/ssr`、`/demo/islands`\n（`views/pages/demo/` 与 `HomeController`，确认理解后即可删除）。\n\n## Optional integrations\n\n- {database}\n- {tailwind}\n{features}\n## Release\n\n```bash\npx release --version 0.1.0 --tarball\n```\n\n`px release:install` / `px release:rollback` 可在切换版本后执行 `deploy/restart.sh`\n（或 `--restart-cmd`）；需要自动重启时创建该脚本并 `chmod +x`。\n"
     )
 }
 
@@ -1618,7 +1915,12 @@ async fn main() -> CommandResult {{
     )
 }
 
-fn lib_template(_database: bool) -> String {
+// The body is one template literal; the line count is the generated file.
+#[allow(clippy::too_many_lines)]
+fn lib_template(database: bool, features: &[ProjectFeature]) -> String {
+    if !features.is_empty() {
+        return lib_template_with_features(database, features);
+    }
     r#"#[path = "../config/mod.rs"]
 pub mod config;
 #[path = "../app/commands/mod.rs"]
@@ -1722,7 +2024,12 @@ pub async fn application(
         (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
     };
     renderer.warm_up().await?;
-    Ok(Application::new(routes(&config, assets.as_ref(), &renderer))?)
+    let built = routes(&config, assets.as_ref(), &renderer);
+    // Connect the database once at startup and share it with every handler via
+    // request state (`State<Database>` / `extensions().get::<Database>()`).
+    #[cfg(feature = "database")]
+    let built = built.with_middleware(StateMiddleware::new(database(&config).await?));
+    Ok(Application::new(built)?)
 }
 
 /// Connect the configured database with every registered Toasty model.
@@ -1738,6 +2045,230 @@ pub async fn database(config: &AppConfig) -> Result<Database, DatabaseError> {
 }
 "#
     .to_owned()
+}
+
+/// `src/lib.rs` variant that assembles the official Features selected by
+/// `px new --feature ...` (docs/FEATURES.md).
+// The body is one template literal; the line count is the generated file.
+#[allow(clippy::too_many_lines)]
+fn lib_template_with_features(_database: bool, features: &[ProjectFeature]) -> String {
+    let captcha = features.contains(&ProjectFeature::Captcha);
+    let pay = features.contains(&ProjectFeature::Pay);
+    let notify = features.contains(&ProjectFeature::Notify);
+
+    let arc_import = if pay || notify {
+        "\nuse std::sync::Arc;\n"
+    } else {
+        ""
+    };
+
+    let mut plugin_lines = String::new();
+    if captcha {
+        plugin_lines.push_str(
+            "    // 图形验证码：注册 GET /captcha（路由名 captcha.image），依赖 Session。\n    // 自定义样式用 CaptchaFeature::with_config(...)（参数见 config/captcha.toml），\n    // 登录表单接入见 docs/CAPTCHA.md（CaptchaProtected 提取器）。\n    let features = features.plugin(phoenix::captcha::CaptchaFeature::new())?;\n",
+        );
+    }
+    if pay {
+        plugin_lines.push_str(
+            "    // 聚合支付：注册回调路由（pay.notify.*）与 payments 迁移。docs/PAYMENTS.md。\n    let features = features.plugin(phoenix::pay::PayFeature::new(pay_manager()?))?;\n",
+        );
+    }
+    if notify {
+        plugin_lines.push_str(
+            "    // 通知：注册 notifications 迁移；发送入口见下方 notifier()。docs/NOTIFICATIONS.md。\n    let features = features.plugin(phoenix::notify::NotifyFeature::new())?;\n",
+        );
+    }
+
+    let mut helper_fns = String::new();
+    if pay {
+        helper_fns.push_str(
+            r#"
+/// 从 `config/pay.toml` 装配支付渠道；文件缺省时仅启用 Mock（本地即可闭环）。
+///
+/// 密钥经 `.env` 注入（`${VAR}` 占位符），非敏感参数留在 TOML。
+fn pay_manager() -> Result<
+    Arc<phoenix::pay::PayManager>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    use phoenix::pay::{AlipayF2FProvider, MockProvider, PayManager, WechatNativeProvider};
+
+    #[derive(Default, serde::Deserialize)]
+    struct PayFileConfig {
+        wechat_native: Option<phoenix::pay::WechatNativeConfig>,
+        alipay_f2f: Option<phoenix::pay::AlipayF2FConfig>,
+    }
+
+    let file: PayFileConfig = phoenix::config::load_feature_config("pay")?;
+    let mut builder = PayManager::builder().provider(Arc::new(MockProvider::new()));
+    if let Some(wechat) = file.wechat_native {
+        builder = builder.provider(Arc::new(WechatNativeProvider::new(wechat)));
+    }
+    if let Some(alipay) = file.alipay_f2f {
+        builder = builder.provider(Arc::new(AlipayF2FProvider::new(alipay)));
+    }
+    Ok(Arc::new(builder.build()))
+}
+"#,
+        );
+    }
+    if notify {
+        helper_fns.push_str(
+            r"
+/// 通知发送器：本地为内存邮件传输 + 内存存储，重启即清空。
+/// 上线前替换为真实 MailTransport 与数据库 store（docs/NOTIFICATIONS.md）。
+#[must_use]
+pub fn notifier() -> phoenix::notify::Notifier {
+    let (mailer, _outbox) = phoenix::mail::Mailer::memory();
+    phoenix::notify::Notifier::new()
+        .with_mailer(mailer)
+        .with_store(Arc::new(phoenix::notify::MemoryNotificationStore::new()))
+}
+",
+        );
+    }
+
+    format!(
+        r#"#[path = "../config/mod.rs"]
+pub mod config;
+#[path = "../app/commands/mod.rs"]
+pub mod commands;
+#[path = "../app/controllers/mod.rs"]
+pub mod controllers;
+#[path = "../app/middleware/mod.rs"]
+pub mod middleware;
+#[cfg(feature = "database")]
+#[path = "../app/models/mod.rs"]
+pub mod models;
+#[path = "../app/props/mod.rs"]
+pub mod props;
+#[path = "../app/requests/mod.rs"]
+pub mod requests;
+#[path = "../app/resources/mod.rs"]
+pub mod resources;
+#[cfg(feature = "database")]
+#[path = "../database/migrations/mod.rs"]
+pub mod migrations;
+#[cfg(feature = "database")]
+#[path = "../database/seeders/mod.rs"]
+pub mod seeders;
+{arc_import}
+use phoenix::plugin::FeatureSet;
+use phoenix::prelude::{{
+    AccessLog, Application, AssetManifest, Csrf, HostAllowlist, NodeRenderer,
+    NonceSecurityPolicy, RateLimit, RateLimitConfig, RendererConfig, RendererManifest, RequestId, RouteGroup, Routes, ServeProductionAssets, SessionConfig, SessionMiddleware,
+    SessionStore, StateMiddleware, TrustedProxies,
+}};
+#[cfg(feature = "database")]
+use phoenix::prelude::{{Database, DatabaseError}};
+
+use config::AppConfig;
+
+/// `px new --feature` 选中的官方 Feature 装配（docs/FEATURES.md）。
+///
+/// # Errors
+///
+/// 返回 Feature 安装冲突（名称 / 能力 / 迁移 ID 重复）或 Feature 配置错误。
+pub fn features() -> Result<FeatureSet, Box<dyn std::error::Error + Send + Sync>> {{
+    let features = FeatureSet::new();
+{plugin_lines}    Ok(features)
+}}
+{helper_fns}
+/// # Errors
+///
+/// 返回路由冲突或 Feature 装配错误。
+#[allow(clippy::duplicate_mod)]
+pub fn routes(
+    config: &AppConfig,
+    assets: Option<&AssetManifest>,
+    renderer: &NodeRenderer,
+) -> Result<Routes, Box<dyn std::error::Error + Send + Sync>> {{
+    let session_config = SessionConfig {{
+        secure: config.public_url().starts_with("https://"),
+        ..SessionConfig::default()
+    }};
+    let session_store = SessionStore::memory(session_config.max_age);
+
+    let mut routes = phoenix::mount_routes!()
+        // 业务路由启用 CSRF；Feature 路由不在此列——支付回调等由平台服务器
+        // 调用，真实性靠验签（docs/PAYMENTS.md），挂 CSRF 会拒掉合法通知。
+        .scoped(RouteGroup::new().middleware(Csrf))
+        .merge(features()?.into_routes())
+        .with_middleware(TrustedProxies::new(config.trusted_proxies().iter().copied()))
+        .with_middleware(RequestId)
+        .with_middleware(AccessLog);
+    if let Some(assets) = assets.cloned() {{
+        // Serve hashed Vite assets before session/CSRF so static GETs stay cheap.
+        routes = routes.with_middleware(ServeProductionAssets::new(assets, "public/assets"));
+    }}
+    Ok(routes
+        .with_middleware(HostAllowlist::new(config.allowed_hosts().iter().cloned()))
+        .with_middleware(RateLimit::new(RateLimitConfig {{
+            requests: config.rate_limit_requests(),
+            window: config.rate_limit_window(),
+        }}))
+        .with_middleware(content_security_policy(config))
+        // 会话全局挂载：验证码等 Feature 路由依赖 Session。
+        .with_middleware(SessionMiddleware::new(session_store, session_config))
+        .with_middleware(StateMiddleware::new(config.clone()))
+        .with_middleware(StateMiddleware::new(assets.cloned()))
+        .with_middleware(StateMiddleware::new(renderer.clone())))
+}}
+
+fn content_security_policy(config: &AppConfig) -> NonceSecurityPolicy {{
+    if !config.environment().is_production() {{
+        return NonceSecurityPolicy::development(
+            config
+                .vite_dev_url()
+                .expect("development configuration always has a Vite origin"),
+        )
+        .expect("AppConfig validates VITE_DEV_URL as one trusted HTTP(S) origin");
+    }}
+    NonceSecurityPolicy::default()
+}}
+
+/// Build the Phoenix application.
+///
+/// # Errors
+///
+/// Returns a route error when route names or patterns conflict.
+pub async fn application(
+    config: AppConfig,
+) -> Result<Application, Box<dyn std::error::Error + Send + Sync>> {{
+    let vite_dev_server = std::env::var_os("PHOENIX_VITE_DEV").is_some();
+    let (assets, renderer) = if !vite_dev_server {{
+        let assets = AssetManifest::load("public/assets/phoenix-manifest.json")?;
+        let renderer_manifest = RendererManifest::load("public/ssr/phoenix-renderer.json")?;
+        let renderer = NodeRenderer::new(
+            RendererConfig::production(&assets, &renderer_manifest, "public/ssr")?,
+        );
+        (Some(assets), renderer)
+    }} else {{
+        // `px dev` sets PHOENIX_VITE_DEV so this process uses Vite's browser
+        // entry while HMR/full reload remains live.
+        (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
+    }};
+    renderer.warm_up().await?;
+    let built = routes(&config, assets.as_ref(), &renderer)?;
+    // Connect the database once at startup and share it with every handler via
+    // request state (`State<Database>` / `extensions().get::<Database>()`).
+    #[cfg(feature = "database")]
+    let built = built.with_middleware(StateMiddleware::new(database(&config).await?));
+    Ok(Application::new(built)?)
+}}
+
+/// Connect the configured database with every registered Toasty model.
+///
+/// # Errors
+///
+/// Returns a database error when the URL or connection is invalid.
+#[cfg(feature = "database")]
+pub async fn database(config: &AppConfig) -> Result<Database, DatabaseError> {{
+    Database::builder(models::all())
+        .connect(config.database_url())
+        .await
+}}
+"#
+    )
 }
 
 fn commands_mod_template() -> String {
@@ -1760,27 +2291,23 @@ pub async fn {function_name}(_ctx: CommandContext<'_>) -> CommandResult {{
     )
 }
 
+// The body is one template literal; the line count is the generated file.
+#[allow(clippy::too_many_lines)]
 fn home_controller_template(render_mode: ProjectRenderMode) -> String {
     format!(
-        r#"use phoenix::prelude::{{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode}};
+        r#"use std::time::{{SystemTime, UNIX_EPOCH}};
+
+use phoenix::prelude::{{AssetManifest, NodeRenderer, Page, Request, Response, StatusCode}};
 
 use crate::config::AppConfig;
-use crate::props::HomeProps;
+use crate::props::{{DemoSsrProps, HomeProps}};
 
 pub struct HomeController;
 
 impl HomeController {{
+    /// 首页；渲染模式由 `px new` 的选择决定（当前 `{render_mode}`）。
     pub async fn index(request: Request) -> Response {{
-        let renderer = request.extensions().get::<NodeRenderer>().cloned();
-        let assets = request
-            .extensions()
-            .get::<Option<AssetManifest>>()
-            .and_then(Option::as_ref);
-        let vite_dev_url = request
-            .extensions()
-            .get::<AppConfig>()
-            .and_then(AppConfig::vite_dev_url);
-        let mut page = Page::new(
+        let page = Page::new(
             "home",
             HomeProps {{
                 title: "Phoenix is ready".to_owned(),
@@ -1788,25 +2315,57 @@ impl HomeController {{
             }},
         )
         {render_mode};
-        if let Some(assets) = assets {{
-            page = match page.production_assets(assets, "client") {{
-                Ok(page) => page,
-                Err(error) => {{
-                    return Response::text(format!("asset manifest error: {{error}}"))
-                        .with_status(StatusCode::INTERNAL_SERVER_ERROR);
-                }}
-            }};
-        }} else if let Some(vite_dev_url) = vite_dev_url {{
-            page = page.script_src(format!(
-                "{{}}/@id/__x00__virtual:phoenix/client",
-                vite_dev_url.trim_end_matches('/'),
-            ));
-        }}
-        match renderer {{
-            Some(renderer) => page.respond_with_renderer(&request, &renderer).await,
-            None => Response::text("Phoenix renderer is unavailable")
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
-        }}
+        render(&request, page).await
+    }}
+
+    /// SPA 演示：整页交给浏览器 React 渲染，任意组件可直接交互。
+    pub async fn demo_spa(request: Request) -> Response {{
+        render(&request, Page::new("demo/spa", serde_json::json!({{}})).spa()).await
+    }}
+
+    /// SSR 演示：服务端先渲染完整 HTML，首屏即含数据（查看网页源代码可见）。
+    pub async fn demo_ssr(request: Request) -> Response {{
+        let rendered_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or_else(|_| "epoch".to_owned(), |at| at.as_secs().to_string());
+        render(&request, Page::new("demo/ssr", DemoSsrProps {{ rendered_at }}).ssr()).await
+    }}
+
+    /// Islands 演示：静态 HTML 中只有标记 `client:load` 的岛屿被水合。
+    pub async fn demo_islands(request: Request) -> Response {{
+        render(&request, Page::new("demo/islands", serde_json::json!({{}})).islands()).await
+    }}
+}}
+
+/// 注入 Vite 资源并交给 Node renderer 输出（三种渲染模式共用）。
+async fn render(request: &Request, mut page: Page) -> Response {{
+    let renderer = request.extensions().get::<NodeRenderer>().cloned();
+    let assets = request
+        .extensions()
+        .get::<Option<AssetManifest>>()
+        .and_then(Option::as_ref);
+    let vite_dev_url = request
+        .extensions()
+        .get::<AppConfig>()
+        .and_then(AppConfig::vite_dev_url);
+    if let Some(assets) = assets {{
+        page = match page.production_assets(assets, "client") {{
+            Ok(page) => page,
+            Err(error) => {{
+                return Response::text(format!("asset manifest error: {{error}}"))
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+            }}
+        }};
+    }} else if let Some(vite_dev_url) = vite_dev_url {{
+        page = page.script_src(format!(
+            "{{}}/@id/__x00__virtual:phoenix/client",
+            vite_dev_url.trim_end_matches('/'),
+        ));
+    }}
+    match renderer {{
+        Some(renderer) => page.respond_with_renderer(request, &renderer).await,
+        None => Response::text("Phoenix renderer is unavailable")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR),
     }}
 }}
 "#,
@@ -1827,6 +2386,20 @@ pub struct HomeProps {
     .to_owned()
 }
 
+fn demo_ssr_props_template() -> String {
+    r#"use serde::Serialize;
+
+/// SSR 演示页数据：由服务端注入，首屏 HTML 即包含（`views/pages/demo/ssr`）。
+#[phoenix::contract(page, page = "demo/ssr")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoSsrProps {
+    pub rendered_at: String,
+}
+"#
+    .to_owned()
+}
+
 fn home_route_template() -> String {
     r#"use phoenix::prelude::Routes;
 
@@ -1837,40 +2410,151 @@ pub fn routes() -> Routes {
     Routes::new()
         .get("/", HomeController::index)
         .name("home")
+        // 三种渲染模式的最小演示页（确认理解后可整组删除）。
+        .get("/demo/spa", HomeController::demo_spa)
+        .name("demo.spa")
+        .get("/demo/ssr", HomeController::demo_ssr)
+        .name("demo.ssr")
+        .get("/demo/islands", HomeController::demo_islands)
+        .name("demo.islands")
 }
 "#
     .to_owned()
 }
 
-fn home_page_template(frontend: ProjectFrontend) -> String {
-    match frontend {
-        ProjectFrontend::Tsx => r#"import type { HomeProps } from "../generated/contracts.js";
+const HOME_PAGE_BODY: &str = r#"  return (
+    <main className="welcome">
+      <p className="eyebrow">PHOENIX / RUST + REACT</p>
+      <h1>{title}</h1>
+      <p>{description}</p>
+      {/* 同一套控制器 / 路由下的三种渲染模式，每页一个最小演示。 */}
+      <ul className="demo-links">
+        <li>
+          <Link href={demo.spa()}>SPA</Link> — 整页浏览器渲染，交互最自由
+        </li>
+        <li>
+          <Link href={demo.ssr()}>SSR</Link> — 服务端渲染完整 HTML，首屏即含数据
+        </li>
+        <li>
+          <Link href={demo.islands()}>Islands</Link> — 静态页里只水合少量交互岛
+        </li>
+      </ul>
+      <code>px make:model Post --all</code>
+    </main>
+  );
+}
+"#;
 
-export default function Home({ title, description }: HomeProps) {
+fn home_page_template(frontend: ProjectFrontend) -> String {
+    let (imports, signature) = match frontend {
+        ProjectFrontend::Tsx => (
+            concat!(
+                "import { Link } from \"@apizero/react\";\n",
+                "import type { HomeProps } from \"../generated/contracts.js\";\n",
+                "import { demo } from \"../generated/routes.js\";",
+            ),
+            "export default function Home({ title, description }: HomeProps) {",
+        ),
+        ProjectFrontend::Jsx => (
+            concat!(
+                "import { Link } from \"@apizero/react\";\n",
+                "import { demo } from \"../generated/routes.js\";",
+            ),
+            "export default function Home({ title, description }) {",
+        ),
+    };
+    format!("{imports}\n\n{signature}\n{HOME_PAGE_BODY}")
+}
+
+/// SPA 演示页：整页 hydrate，`useState` 计数器即时生效（TSX/JSX 同文）。
+fn demo_spa_page_template() -> String {
+    r#"import { useState } from "react";
+import { Link } from "@apizero/react";
+import { home } from "../../generated/routes.js";
+
+// SPA：整页都在浏览器渲染——查看网页源代码只有挂载点，没有正文。
+export default function DemoSpa() {
+  const [count, setCount] = useState(0);
   return (
     <main className="welcome">
-      <p className="eyebrow">PHOENIX / RUST + REACT</p>
-      <h1>{title}</h1>
-      <p>{description}</p>
-      <code>px make:model Post --all</code>
+      <p className="eyebrow">DEMO / SPA</p>
+      <h1>SPA 模式</h1>
+      <p>本页任何组件都可以直接使用浏览器状态与事件。</p>
+      <button type="button" onClick={() => setCount((value) => value + 1)}>
+        点击了 {count} 次
+      </button>
+      <p>
+        <Link href={home()}>← 返回首页</Link>
+      </p>
     </main>
   );
 }
 "#
-        .to_owned(),
-        ProjectFrontend::Jsx => r#"export default function Home({ title, description }) {
+    .to_owned()
+}
+
+fn demo_ssr_page_template(frontend: ProjectFrontend) -> String {
+    let (imports, signature) = match frontend {
+        ProjectFrontend::Tsx => (
+            concat!(
+                "import { Link } from \"@apizero/react\";\n",
+                "import type { DemoSsrProps } from \"../../generated/contracts.js\";\n",
+                "import { home } from \"../../generated/routes.js\";",
+            ),
+            "export default function DemoSsr({ renderedAt }: DemoSsrProps) {",
+        ),
+        ProjectFrontend::Jsx => (
+            concat!(
+                "import { Link } from \"@apizero/react\";\n",
+                "import { home } from \"../../generated/routes.js\";",
+            ),
+            "export default function DemoSsr({ renderedAt }) {",
+        ),
+    };
+    // SSR：完整 HTML 在服务端生成后再 hydrate。
+    format!(
+        r#"{imports}
+
+// SSR：服务端渲染完整 HTML——查看网页源代码能直接看到下面的数据。
+{signature}
   return (
     <main className="welcome">
-      <p className="eyebrow">PHOENIX / RUST + REACT</p>
-      <h1>{title}</h1>
-      <p>{description}</p>
-      <code>px make:model Post --all</code>
+      <p className="eyebrow">DEMO / SSR</p>
+      <h1>SSR 模式</h1>
+      <p>本页由服务端渲染，Rust 注入的时间戳：{{renderedAt}}。</p>
+      <p>刷新后时间戳变化；右键「查看网页源代码」可在 HTML 里找到它。</p>
+      <p>
+        <Link href={{home()}}>← 返回首页</Link>
+      </p>
+    </main>
+  );
+}}
+"#
+    )
+}
+
+/// Islands 演示页：静态正文 + 一个 `client:load` 岛（TSX/JSX 同文）。
+fn demo_islands_page_template() -> String {
+    r#"import { Link } from "@apizero/react";
+import Counter from "../../islands/counter";
+import { home } from "../../generated/routes.js";
+
+// Islands：页面主体是静态 HTML，只有标记 client:load 的组件会加载浏览器代码。
+export default function DemoIslands() {
+  return (
+    <main className="welcome">
+      <p className="eyebrow">DEMO / ISLANDS</p>
+      <h1>Islands 模式</h1>
+      <p>下面的计数器是本页唯一被水合的交互岛，其余内容零 JS。</p>
+      <Counter client:load />
+      <p>
+        <Link href={home()}>← 返回首页</Link>
+      </p>
     </main>
   );
 }
 "#
-        .to_owned(),
-    }
+    .to_owned()
 }
 
 fn styles_template(tailwind: bool) -> String {
@@ -1880,7 +2564,7 @@ fn styles_template(tailwind: bool) -> String {
         ""
     };
     format!(
-        r#"{tailwind}:root {{
+        r"{tailwind}:root {{
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #172033;
   background: #f5f7fb;
@@ -1892,7 +2576,11 @@ body {{ margin: 0; min-width: 320px; min-height: 100vh; }}
 h1 {{ margin: 12px 0; font-size: clamp(42px, 8vw, 76px); line-height: 0.98; }}
 .welcome > p:not(.eyebrow) {{ max-width: 640px; color: #5d6879; font-size: 18px; line-height: 1.7; }}
 code {{ display: inline-block; margin-top: 18px; padding: 12px 14px; border: 1px solid #d7dce5; background: white; }}
-"#
+a {{ color: #315bd6; }}
+button {{ margin-top: 8px; padding: 10px 16px; border: 1px solid #d7dce5; background: white; font-size: 16px; cursor: pointer; }}
+.demo-links {{ margin: 18px 0 0; padding-left: 20px; }}
+.demo-links li {{ margin: 6px 0; color: #5d6879; }}
+"
     )
 }
 
@@ -1902,7 +2590,13 @@ export interface HomeProps {
   title: string;
   description: string;
 }
-export interface PhoenixPageProps { home: HomeProps }
+export interface DemoSsrProps {
+  renderedAt: string;
+}
+export interface PhoenixPageProps {
+  home: HomeProps;
+  "demo/ssr": DemoSsrProps;
+}
 export type PhoenixSharedProps = Record<string, never>;
 export const contractHash = "scaffold" as const;
 "#
@@ -1911,9 +2605,13 @@ export const contractHash = "scaffold" as const;
 
 fn generated_routes_template() -> String {
     r#"// Generated by Phoenix. Vite will refresh this file from Rust routes.
-export const routes = { home: "home" } as const;
-export type PhoenixRouteName = "home";
+export const routes = {
+  home: "home",
+  demo: { spa: "demo.spa", ssr: "demo.ssr", islands: "demo.islands" },
+} as const;
+export type PhoenixRouteName = "home" | "demo.spa" | "demo.ssr" | "demo.islands";
 export const home = routes.home;
+export const demo = routes.demo;
 "#
     .to_owned()
 }
@@ -2082,6 +2780,96 @@ fn add_model_migration(
     add_migration(editor, &format!("create_{table}_table"), &table)
 }
 
+/// Register the `users` table migration generated by `px make:auth`.
+///
+/// Idempotent: a `--force` rebuild reuses the existing migration rather than
+/// stacking a second, duplicate `create_users_table` file.
+fn add_auth_user_migration(editor: &mut ProjectEditor) -> Result<(), ScaffoldError> {
+    if editor
+        .read(Path::new("database/migrations/mod.rs"))?
+        .contains("create_users_table")
+    {
+        return Ok(());
+    }
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ScaffoldError::InvalidClock)?
+        .as_millis();
+    let id = milliseconds.to_string();
+    let module = format!("m_{id}_create_users_table");
+    editor.create(
+        format!("database/migrations/{module}.rs"),
+        auth_user_migration_template(&id),
+    )?;
+    editor.update_registry(
+        "database/migrations/mod.rs",
+        MIGRATIONS_START,
+        MIGRATIONS_END,
+        "migration",
+        &module,
+        render_migration_registry,
+    )
+}
+
+/// Ensure every named feature is present in the project's `[features] default`
+/// array so a bare `cargo check` compiles the generated slice.
+fn enable_project_features(
+    editor: &mut ProjectEditor,
+    features: &[&str],
+) -> Result<(), ScaffoldError> {
+    let relative = PathBuf::from("Cargo.toml");
+    let manifest = editor.read(&relative)?;
+    if manifest.is_empty() {
+        return Err(ScaffoldError::InvalidManagedFile(
+            editor.root.join(&relative),
+        ));
+    }
+    editor.set(relative, ensure_default_features(&manifest, features))
+}
+
+/// Add `features` to the `default = [...]` array in a Cargo manifest, keeping
+/// existing entries and order, and leaving the rest of the file untouched.
+fn ensure_default_features(manifest: &str, features: &[&str]) -> String {
+    let mut updated = manifest
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let is_default = trimmed
+                .strip_prefix("default")
+                .is_some_and(|rest| rest.trim_start().starts_with('='));
+            if is_default
+                && let Some(open) = line.find('[')
+                && let Some(close_offset) = line[open..].find(']')
+            {
+                let close = open + close_offset;
+                let mut entries = line[open + 1..close]
+                    .split(',')
+                    .map(|entry| entry.trim().trim_matches('"').to_owned())
+                    .filter(|entry| !entry.is_empty())
+                    .collect::<Vec<_>>();
+                for feature in features {
+                    if !entries.iter().any(|entry| entry == feature) {
+                        entries.push((*feature).to_owned());
+                    }
+                }
+                let indent = &line[..line.len() - trimmed.len()];
+                let rendered = entries
+                    .iter()
+                    .map(|entry| format!("\"{entry}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return format!("{indent}default = [{rendered}]");
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if manifest.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated
+}
+
 fn add_migration(editor: &mut ProjectEditor, name: &str, table: &str) -> Result<(), ScaffoldError> {
     let milliseconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2198,6 +2986,33 @@ fn page_props_name(page: &PageName) -> QualifiedName {
     }
 }
 
+/// Register the Rust page-props contract and write one auth page component.
+fn add_auth_page(
+    editor: &mut ProjectEditor,
+    name: &str,
+    content: String,
+    frontend: ProjectFrontend,
+) -> Result<(), ScaffoldError> {
+    let page = PageName::parse(name)?;
+    let props = page_props_name(&page);
+    add_rust_item(
+        editor,
+        "app/props",
+        &props,
+        &page_props_template(&props.class, &page.route),
+    )?;
+    let mut path = PathBuf::from("views/pages");
+    for part in &page.parts[..page.parts.len() - 1] {
+        path.push(kebab_case(part));
+    }
+    path.push(format!(
+        "{}.{}",
+        kebab_case(page.parts.last().expect("page has one part")),
+        frontend.extension()
+    ));
+    editor.create(path, content)
+}
+
 fn model_template(name: &str) -> String {
     format!(
         r"use phoenix::database::Model;
@@ -2210,6 +3025,49 @@ pub struct {name} {{
     pub name: String,
 }}
 "
+    )
+}
+
+/// The persistent `User` model backing `px make:auth`.
+fn auth_user_model_template() -> String {
+    r"use phoenix::database::Model;
+
+/// Registered account. Passwords are stored only as Argon2id PHC hashes
+/// (`password_hash`); the plaintext never touches the database.
+#[derive(Clone, Debug, Model)]
+pub struct User {
+    #[key]
+    #[auto]
+    pub id: u64,
+    #[unique]
+    pub email: String,
+    pub name: String,
+    pub password_hash: String,
+    pub created_at: String,
+}
+"
+    .to_owned()
+}
+
+/// The `users` table migration (portable across sqlite / pgsql / mysql).
+fn auth_user_migration_template(id: &str) -> String {
+    format!(
+        r#"use phoenix::database::Migration;
+
+#[must_use]
+pub fn migration() -> Migration {{
+    Migration::new("{id}", "create users table")
+        .up(
+            "CREATE TABLE users (\
+             id BIGINT PRIMARY KEY, \
+             email VARCHAR(255) NOT NULL UNIQUE, \
+             name VARCHAR(255) NOT NULL, \
+             password_hash VARCHAR(255) NOT NULL, \
+             created_at VARCHAR(64) NOT NULL)",
+        )
+        .down("DROP TABLE users")
+}}
+"#
     )
 }
 
@@ -2466,6 +3324,710 @@ pub fn routes() -> Routes {{
     )
 }
 
+fn auth_routes_template() -> String {
+    r#"//! 认证路由：由 `px make:auth` 生成，`mount_routes!()` 自动收集本文件。
+//!
+//! 图形验证码（可选，默认以注释交付）：`CaptchaFeature` 位于独立 crate
+//! `phoenix-captcha`，未随 `phoenix` 门面导出，因此**不是零配置能力**，
+//! 脚手架不默认开启。启用步骤（详见 docs/CAPTCHA.md）：
+//! 1. 应用 `Cargo.toml` 添加依赖 `phoenix-captcha`；
+//! 2. `FeatureSet::new().plugin(CaptchaFeature::new())?` 注册 `GET /captcha`
+//!    （命名路由 `captcha.image`），并把 Feature 路由合并进应用路由；
+//! 3. `LoginInput` 增加 `captcha` 字段并实现 `CaptchaInput`，登录 handler
+//!    换用 `CaptchaProtected` 提取器；
+//! 4. 解开 `views/pages/auth/login` 页面里的 `CaptchaImage` 注释块。
+
+use std::time::Duration;
+
+use phoenix::prelude::{RateLimit, RateLimitConfig, RouteGroup, Routes, typed};
+
+use crate::controllers::AuthController;
+use crate::requests::{LoginInput, PasswordResetInput, RegisterInput};
+use crate::resources::{AuthMessageResource, AuthSessionResource};
+
+#[must_use]
+pub fn routes() -> Routes {
+    // 认证提交接口在全局限流之上叠加更严格的默认（每客户端 IP 每秒 2 次），
+    // 抑制凭据爆破与重置邮件轰炸；次数与窗口按业务调整。
+    let auth_rate_limit = RateLimit::new(RateLimitConfig {
+        requests: 2,
+        window: Duration::from_secs(1),
+    });
+
+    Routes::new()
+        .get("/login", AuthController::show_login)
+        .name("login.show")
+        .get("/register", AuthController::show_register)
+        .name("register.show")
+        .get("/forgot-password", AuthController::show_forgot_password)
+        .name("password-reset.show")
+        .group(RouteGroup::new().middleware(auth_rate_limit), |routes| {
+            routes
+                .post("/login", AuthController::login)
+                .name("login.store")
+                .action::<LoginInput, AuthSessionResource>()
+                .post("/logout", AuthController::logout)
+                .name("logout.store")
+                .post("/register", AuthController::register)
+                .name("register.store")
+                .action::<RegisterInput, AuthSessionResource>()
+                .post(
+                    "/password-reset",
+                    typed(AuthController::request_password_reset),
+                )
+                .name("password-reset.store")
+                .action::<PasswordResetInput, AuthMessageResource>()
+        })
+}
+"#
+    .to_owned()
+}
+
+// The body is one template literal; the line count is the generated file, not logic.
+#[allow(clippy::too_many_lines)]
+fn auth_controller_template() -> String {
+    r#"use phoenix::auth::{AuthError, AuthGuard, AuthUser, UserProvider};
+use phoenix::database::create;
+use phoenix::prelude::{
+    AssetManifest, BoxFuture, Database, FromRequest, IntoResponse, Json, Page, PageResponseError,
+    Password, Request, Response, Session, StatusCode, Validated,
+};
+use serde_json::json;
+
+use crate::config::AppConfig;
+use crate::models::User;
+use crate::props::auth::{AuthForgotPasswordProps, AuthLoginProps, AuthRegisterProps};
+use crate::requests::{LoginInput, PasswordResetInput, RegisterInput};
+use crate::resources::{AuthMessageResource, AuthSessionResource};
+
+/// `UserProvider` backed by the persistent `users` table.
+///
+/// Holds a cloned `Database` handle (a shared connection pool), so each lookup
+/// runs on its own executor without borrowing the request.
+struct DatabaseUserProvider {
+    database: Database,
+}
+
+impl DatabaseUserProvider {
+    fn new(database: Database) -> Self {
+        Self { database }
+    }
+}
+
+impl UserProvider for DatabaseUserProvider {
+    fn find_by_identifier(
+        &self,
+        identifier: &str,
+    ) -> BoxFuture<Result<Option<AuthUser>, AuthError>> {
+        let mut executor = self.database.toasty().clone();
+        let email = identifier.trim().to_ascii_lowercase();
+        Box::pin(async move {
+            match User::filter_by_email(email).get(&mut executor).await {
+                Ok(user) => Ok(Some(auth_user(&user))),
+                Err(error) if error.is_record_not_found() => Ok(None),
+                Err(error) => Err(AuthError::provider(error.to_string())),
+            }
+        })
+    }
+
+    fn find_by_id(&self, id: &str) -> BoxFuture<Result<Option<AuthUser>, AuthError>> {
+        let mut executor = self.database.toasty().clone();
+        let parsed = id.parse::<u64>();
+        Box::pin(async move {
+            let Ok(id) = parsed else { return Ok(None) };
+            match User::filter_by_id(id).get(&mut executor).await {
+                Ok(user) => Ok(Some(auth_user(&user))),
+                Err(error) if error.is_record_not_found() => Ok(None),
+                Err(error) => Err(AuthError::provider(error.to_string())),
+            }
+        })
+    }
+}
+
+/// Map a persisted row onto the framework's minimal `AuthUser` (password hash
+/// included so the guard can verify it with Argon2id).
+fn auth_user(user: &User) -> AuthUser {
+    AuthUser::new(
+        user.id.to_string(),
+        user.email.clone(),
+        user.password_hash.clone(),
+    )
+    .with_name(user.name.clone())
+    .with_role("member")
+}
+
+pub struct AuthController;
+
+impl AuthController {
+    #[allow(clippy::unused_async)]
+    pub async fn show_login(request: Request) -> Response {
+        render_auth_page(
+            &request,
+            Page::new(
+                "auth/login",
+                AuthLoginProps {
+                    title: "登录".to_owned(),
+                },
+            ),
+        )
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn show_register(request: Request) -> Response {
+        render_auth_page(
+            &request,
+            Page::new(
+                "auth/register",
+                AuthRegisterProps {
+                    title: "注册".to_owned(),
+                },
+            ),
+        )
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn show_forgot_password(request: Request) -> Response {
+        render_auth_page(
+            &request,
+            Page::new(
+                "auth/forgot-password",
+                AuthForgotPasswordProps {
+                    title: "找回密码".to_owned(),
+                },
+            ),
+        )
+    }
+
+    /// 邮箱 + 密码登录，成功后开启会话。
+    ///
+    /// 校验交给 `phoenix::auth::AuthGuard`：内部用 Argon2id 比对 `password_hash`，
+    /// 成功后轮换会话 id（OWASP 会话固定防护）并写入 subject。
+    /// 可选图形验证码：启用 `phoenix-captcha` 后改用
+    /// `CaptchaProtected<Validated<Json<LoginInput>>>` 提取器（docs/CAPTCHA.md）。
+    pub async fn login(request: Request) -> Response {
+        let Validated(Json(input)) = match Validated::<Json<LoginInput>>::from_request(&request) {
+            Ok(input) => input,
+            Err(rejection) => return rejection.into_response(),
+        };
+        let Some(session) = request.extensions().get::<Session>().cloned() else {
+            return session_unavailable();
+        };
+        let Some(database) = request.extensions().get::<Database>().cloned() else {
+            return database_unavailable();
+        };
+        let provider = DatabaseUserProvider::new(database);
+        let guard = AuthGuard::new(&provider, &session);
+        match guard.attempt(&input.email, &input.password).await {
+            Ok(Some(user)) => Json(AuthSessionResource {
+                subject: user.identifier().to_owned(),
+                name: user.name().to_owned(),
+                role: "member".to_owned(),
+            })
+            .into_response(),
+            Ok(None) => (
+                StatusCode::UNAUTHORIZED,
+                Json(AuthMessageResource {
+                    message: "邮箱或密码不正确。".to_owned(),
+                }),
+            )
+                .into_response(),
+            Err(error) => provider_error(&error),
+        }
+    }
+
+    /// 注册新用户：唯一邮箱查重、Argon2id 哈希入库，随后自动登录。
+    pub async fn register(request: Request) -> Response {
+        let Validated(Json(input)) = match Validated::<Json<RegisterInput>>::from_request(&request)
+        {
+            Ok(input) => input,
+            Err(rejection) => return rejection.into_response(),
+        };
+        let Some(session) = request.extensions().get::<Session>().cloned() else {
+            return session_unavailable();
+        };
+        let Some(mut database) = request.extensions().get::<Database>().cloned() else {
+            return database_unavailable();
+        };
+        let email = input.email.trim().to_ascii_lowercase();
+        let provider = DatabaseUserProvider::new(database.clone());
+        match provider.find_by_identifier(&email).await {
+            Ok(Some(_)) => return email_taken(),
+            Ok(None) => {}
+            Err(error) => return provider_error(&error),
+        }
+        let password_hash = match Password::hash(&input.password) {
+            Ok(hash) => hash,
+            Err(error) => {
+                return Response::text(format!("password hashing failed: {error}"))
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs().to_string())
+            .unwrap_or_default();
+        let created = create!(User {
+            email: email.clone(),
+            name: input.name.clone(),
+            password_hash: password_hash,
+            created_at: created_at,
+        })
+        .exec(database.toasty_mut())
+        .await;
+        match created {
+            Ok(user) => {
+                // AuthGuard::login rotates the session id and stores the subject.
+                AuthGuard::new(&provider, &session).login(&auth_user(&user));
+                (
+                    StatusCode::CREATED,
+                    Json(AuthSessionResource {
+                        subject: user.email,
+                        name: user.name,
+                        role: "member".to_owned(),
+                    }),
+                )
+                    .into_response()
+            }
+            Err(error) => Response::text(format!("failed to create user: {error}"))
+                .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    }
+
+    /// 退出登录并销毁会话。
+    #[allow(clippy::unused_async)]
+    pub async fn logout(request: Request) -> Json<AuthMessageResource> {
+        if let Some(session) = request.extensions().get::<Session>() {
+            session.destroy();
+        }
+        Json(AuthMessageResource {
+            message: "已退出登录。".to_owned(),
+        })
+    }
+
+    /// 密码重置请求：为防账号枚举，无论邮箱是否存在都返回同一响应。
+    #[allow(clippy::unused_async)]
+    pub async fn request_password_reset(
+        Validated(Json(_input)): Validated<Json<PasswordResetInput>>,
+    ) -> (StatusCode, Json<AuthMessageResource>) {
+        // TODO: 生成重置 token 并通过 phoenix-mail 发送（脚手架不落地邮件）。
+        (
+            StatusCode::ACCEPTED,
+            Json(AuthMessageResource {
+                message: "如果该邮箱已注册，稍后会收到重置说明。".to_owned(),
+            }),
+        )
+    }
+}
+
+/// 邮箱已注册：返回 422 校验错误信封，字段错误对齐 `Validated` 的响应形状。
+fn email_taken() -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({
+            "message": "The submitted data is invalid.",
+            "errors": {
+                "email": [{ "rule": "unique", "message": "该邮箱已注册。" }]
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn session_unavailable() -> Response {
+    Response::text("SessionMiddleware is not mounted")
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn database_unavailable() -> Response {
+    // application() connects the database and mounts it via StateMiddleware.
+    Response::text("database is unavailable")
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn provider_error(error: &AuthError) -> Response {
+    Response::text(format!("auth store error: {error}"))
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// 认证页以 SPA 协议渲染（表单需要可交互），并把 CSRF token 注入页面信封，
+/// 生成的 typed action 会自动携带 `X-CSRF-Token`。
+fn render_auth_page(request: &Request, page: Page) -> Response {
+    let mut page = page.spa();
+    if let Some(token) = request
+        .extensions()
+        .get::<Session>()
+        .and_then(Session::csrf_token)
+    {
+        page = page.csrf_token(token);
+    }
+    let assets = request
+        .extensions()
+        .get::<Option<AssetManifest>>()
+        .and_then(Option::as_ref);
+    if let Some(assets) = assets {
+        page = match page.production_assets(assets, "client") {
+            Ok(page) => page,
+            Err(error) => {
+                return Response::text(format!("asset manifest error: {error}"))
+                    .with_status(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+    } else if let Some(vite_dev_url) = request
+        .extensions()
+        .get::<AppConfig>()
+        .and_then(AppConfig::vite_dev_url)
+    {
+        page = page.script_src(format!(
+            "{}/@id/__x00__virtual:phoenix/client",
+            vite_dev_url.trim_end_matches('/'),
+        ));
+    }
+    page.respond_to(request, None)
+        .unwrap_or_else(PageResponseError::into_response)
+}
+"#
+    .to_owned()
+}
+
+fn login_input_template() -> String {
+    r#"use phoenix::prelude::{
+    Validate, ValidationErrors, Validator, max_length, min_length, required, rules, string,
+};
+use serde::Deserialize;
+
+/// 登录表单入参。
+///
+/// 启用图形验证码后：增加 `pub captcha: String` 字段并实现
+/// `phoenix_captcha::CaptchaInput`（见 routes/auth.rs 顶部说明）。
+#[phoenix::contract(input)]
+#[derive(Debug, Deserialize)]
+pub struct LoginInput {
+    pub email: String,
+    pub password: String,
+}
+
+impl Validate for LoginInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({ "email": self.email, "password": self.password });
+        Validator::new(&data)
+            .field(
+                "email",
+                rules![required(), string(), min_length(3), max_length(120)],
+            )
+            .field(
+                "password",
+                rules![required(), string(), min_length(8), max_length(1024)],
+            )
+            .validate()
+    }
+}
+"#
+    .to_owned()
+}
+
+fn register_input_template() -> String {
+    r#"use phoenix::prelude::{
+    Validate, ValidationErrors, Validator, max_length, min_length, required, rules, string,
+};
+use serde::Deserialize;
+
+/// 注册表单入参。
+#[phoenix::contract(input)]
+#[derive(Debug, Deserialize)]
+pub struct RegisterInput {
+    pub name: String,
+    pub email: String,
+    pub password: String,
+}
+
+impl Validate for RegisterInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({
+            "name": self.name,
+            "email": self.email,
+            "password": self.password,
+        });
+        Validator::new(&data)
+            .field(
+                "name",
+                rules![required(), string(), min_length(1), max_length(40)],
+            )
+            .field(
+                "email",
+                rules![required(), string(), min_length(3), max_length(120)],
+            )
+            .field(
+                "password",
+                rules![required(), string(), min_length(8), max_length(1024)],
+            )
+            .validate()
+    }
+}
+"#
+    .to_owned()
+}
+
+fn password_reset_input_template() -> String {
+    r#"use phoenix::prelude::{
+    Validate, ValidationErrors, Validator, max_length, min_length, required, rules, string,
+};
+use serde::Deserialize;
+
+/// 密码重置请求入参。
+#[phoenix::contract(input)]
+#[derive(Debug, Deserialize)]
+pub struct PasswordResetInput {
+    pub email: String,
+}
+
+impl Validate for PasswordResetInput {
+    fn validate(&self) -> Result<(), ValidationErrors> {
+        let data = serde_json::json!({ "email": self.email });
+        Validator::new(&data)
+            .field(
+                "email",
+                rules![required(), string(), min_length(3), max_length(120)],
+            )
+            .validate()
+    }
+}
+"#
+    .to_owned()
+}
+
+fn auth_session_resource_template() -> String {
+    r#"use serde::Serialize;
+
+/// 登录 / 注册成功后返回给浏览器的会话信息。
+#[phoenix::contract(resource)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthSessionResource {
+    pub subject: String,
+    pub name: String,
+    pub role: String,
+}
+"#
+    .to_owned()
+}
+
+fn auth_message_resource_template() -> String {
+    r#"use serde::Serialize;
+
+/// 认证流程的通用提示消息。
+#[phoenix::contract(resource)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthMessageResource {
+    pub message: String,
+}
+"#
+    .to_owned()
+}
+
+const AUTH_LOGIN_PAGE_BODY: &str = r#"  return (
+    <main className="auth-page">
+      <h1>{title}</h1>
+      <Form
+        action={login.store}
+        initialValues={{ email: "", password: "" }}
+        fields={LoginInputFields}
+        onSuccess={() => redirect(home())}
+      >
+        {(form) => (
+          <>
+            <label htmlFor="login-email">邮箱</label>
+            <input id="login-email" type="email" autoComplete="email" {...form.field("email")} />
+            <FieldError errors={form.errors} name="email" />
+
+            <label htmlFor="login-password">密码</label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              {...form.field("password")}
+            />
+            <FieldError errors={form.errors} name="password" />
+
+            {/* 启用图形验证码后解开（Rust 侧装配见 routes/auth.rs 顶部注释与 docs/CAPTCHA.md）：
+            <CaptchaImage />
+            <input autoComplete="off" {...form.field("captcha")} />
+            <FieldError errors={form.errors} name="captcha" />
+            */}
+
+            <button type="submit" disabled={form.processing}>
+              {form.processing ? "登录中…" : "登录"}
+            </button>
+          </>
+        )}
+      </Form>
+      <p>
+        还没有账号？<Link href={register.show()}>注册</Link>
+        <span> · </span>
+        <Link href={routes["password-reset"].show()}>忘记密码？</Link>
+      </p>
+    </main>
+  );
+}
+"#;
+
+fn auth_login_page_template(frontend: ProjectFrontend) -> String {
+    let (imports, signature) = match frontend {
+        ProjectFrontend::Tsx => (
+            concat!(
+                "import { FieldError, Form, Link, redirect } from \"@apizero/react\";\n",
+                "// 启用图形验证码后解开：\n",
+                "// import { CaptchaImage } from \"@apizero/react\";\n",
+                "import type { AuthLoginProps } from \"../../generated/contracts.js\";\n",
+                "import { LoginInputFields } from \"../../generated/contracts.js\";\n",
+                "import { home, login, register, routes } from \"../../generated/routes.js\";",
+            ),
+            "export default function AuthLogin({ title }: AuthLoginProps) {",
+        ),
+        ProjectFrontend::Jsx => (
+            concat!(
+                "import { FieldError, Form, Link, redirect } from \"@apizero/react\";\n",
+                "// 启用图形验证码后解开：\n",
+                "// import { CaptchaImage } from \"@apizero/react\";\n",
+                "import { LoginInputFields } from \"../../generated/contracts.js\";\n",
+                "import { home, login, register, routes } from \"../../generated/routes.js\";",
+            ),
+            "export default function AuthLogin({ title }) {",
+        ),
+    };
+    format!("{imports}\n\n{signature}\n{AUTH_LOGIN_PAGE_BODY}")
+}
+
+const AUTH_REGISTER_PAGE_BODY: &str = r#"  return (
+    <main className="auth-page">
+      <h1>{title}</h1>
+      <Form
+        action={register.store}
+        initialValues={{ name: "", email: "", password: "" }}
+        fields={RegisterInputFields}
+        onSuccess={() => redirect(home())}
+      >
+        {(form) => (
+          <>
+            <label htmlFor="register-name">昵称</label>
+            <input id="register-name" autoComplete="nickname" {...form.field("name")} />
+            <FieldError errors={form.errors} name="name" />
+
+            <label htmlFor="register-email">邮箱</label>
+            <input
+              id="register-email"
+              type="email"
+              autoComplete="email"
+              {...form.field("email")}
+            />
+            <FieldError errors={form.errors} name="email" />
+
+            <label htmlFor="register-password">密码</label>
+            <input
+              id="register-password"
+              type="password"
+              autoComplete="new-password"
+              {...form.field("password")}
+            />
+            <FieldError errors={form.errors} name="password" />
+
+            <button type="submit" disabled={form.processing}>
+              {form.processing ? "注册中…" : "注册"}
+            </button>
+          </>
+        )}
+      </Form>
+      <p>
+        已有账号？<Link href={login.show()}>登录</Link>
+      </p>
+    </main>
+  );
+}
+"#;
+
+fn auth_register_page_template(frontend: ProjectFrontend) -> String {
+    let (imports, signature) = match frontend {
+        ProjectFrontend::Tsx => (
+            concat!(
+                "import { FieldError, Form, Link, redirect } from \"@apizero/react\";\n",
+                "import type { AuthRegisterProps } from \"../../generated/contracts.js\";\n",
+                "import { RegisterInputFields } from \"../../generated/contracts.js\";\n",
+                "import { home, login, register } from \"../../generated/routes.js\";",
+            ),
+            "export default function AuthRegister({ title }: AuthRegisterProps) {",
+        ),
+        ProjectFrontend::Jsx => (
+            concat!(
+                "import { FieldError, Form, Link, redirect } from \"@apizero/react\";\n",
+                "import { RegisterInputFields } from \"../../generated/contracts.js\";\n",
+                "import { home, login, register } from \"../../generated/routes.js\";",
+            ),
+            "export default function AuthRegister({ title }) {",
+        ),
+    };
+    format!("{imports}\n\n{signature}\n{AUTH_REGISTER_PAGE_BODY}")
+}
+
+const AUTH_FORGOT_PASSWORD_PAGE_BODY: &str = r#"  const [notice, setNotice] = useState("");
+  return (
+    <main className="auth-page">
+      <h1>{title}</h1>
+      {notice ? <p role="status">{notice}</p> : null}
+      <Form
+        action={passwordReset.store}
+        initialValues={{ email: "" }}
+        fields={PasswordResetInputFields}
+        onSuccess={(result) => setNotice(result.message)}
+      >
+        {(form) => (
+          <>
+            <label htmlFor="reset-email">邮箱</label>
+            <input id="reset-email" type="email" autoComplete="email" {...form.field("email")} />
+            <FieldError errors={form.errors} name="email" />
+
+            <button type="submit" disabled={form.processing}>
+              {form.processing ? "发送中…" : "发送重置说明"}
+            </button>
+          </>
+        )}
+      </Form>
+      <p>
+        想起密码了？<Link href={login.show()}>返回登录</Link>
+      </p>
+    </main>
+  );
+}
+"#;
+
+fn auth_forgot_password_page_template(frontend: ProjectFrontend) -> String {
+    let (imports, signature) = match frontend {
+        ProjectFrontend::Tsx => (
+            concat!(
+                "import { useState } from \"react\";\n",
+                "import { FieldError, Form, Link } from \"@apizero/react\";\n",
+                "import type { AuthForgotPasswordProps } from \"../../generated/contracts.js\";\n",
+                "import { PasswordResetInputFields } from \"../../generated/contracts.js\";\n",
+                "import { login, routes } from \"../../generated/routes.js\";\n",
+                "\n",
+                "const passwordReset = routes[\"password-reset\"];",
+            ),
+            "export default function AuthForgotPassword({ title }: AuthForgotPasswordProps) {",
+        ),
+        ProjectFrontend::Jsx => (
+            concat!(
+                "import { useState } from \"react\";\n",
+                "import { FieldError, Form, Link } from \"@apizero/react\";\n",
+                "import { PasswordResetInputFields } from \"../../generated/contracts.js\";\n",
+                "import { login, routes } from \"../../generated/routes.js\";\n",
+                "\n",
+                "const passwordReset = routes[\"password-reset\"];",
+            ),
+            "export default function AuthForgotPassword({ title }) {",
+        ),
+    };
+    format!("{imports}\n\n{signature}\n{AUTH_FORGOT_PASSWORD_PAGE_BODY}")
+}
+
 fn rust_item_path(category: &str, name: &QualifiedName) -> String {
     if name.modules.is_empty() {
         format!("crate::{category}::{}", name.class)
@@ -2500,14 +4062,14 @@ fn page_template(component: &str, props: &str, depth: usize, frontend: ProjectFr
     let contracts = format!("{}generated/contracts.js", "../".repeat(depth));
     if frontend == ProjectFrontend::Jsx {
         return format!(
-            r#"export default function {component}({{ title }}) {{
+            r"export default function {component}({{ title }}) {{
   return (
     <main>
       <h1>{{title}}</h1>
     </main>
   );
 }}
-"#
+"
         );
     }
     format!(
@@ -2617,6 +4179,14 @@ impl ProjectEditor {
         if !self.force && (absolute.exists() || self.changes.contains_key(&relative)) {
             return Err(ScaffoldError::AlreadyExists(absolute));
         }
+        self.changes.insert(relative, content);
+        Ok(())
+    }
+
+    /// Overwrite a file unconditionally (used to patch existing managed files
+    /// such as `Cargo.toml` that have no marker regions).
+    fn set(&mut self, relative: impl Into<PathBuf>, content: String) -> Result<(), ScaffoldError> {
+        let relative = safe_relative(relative.into())?;
         self.changes.insert(relative, content);
         Ok(())
     }
@@ -3027,18 +4597,17 @@ mod tests {
 
         assert!(root.join("src/main.rs").is_file());
         assert!(root.join("src/bin/phoenix-manage.rs").is_file());
-        assert!(root.join("config/app.toml").is_file());
-        assert!(root.join("config/database.toml").is_file());
-        assert!(
-            root.join("config/schemas/phoenix-config-database.schema.json")
-                .is_file()
-        );
-        assert!(root.join("taplo.toml").is_file());
-        assert!(
-            fs::read_to_string(root.join("config/database.toml"))
-                .unwrap()
-                .contains("connections.mysql")
-        );
+        // Runtime settings converged into `.env`; config/ holds Feature TOML only.
+        assert!(!root.join("config/app.toml").exists());
+        assert!(!root.join("config/database.toml").exists());
+        assert!(!root.join("config/schemas").exists());
+        assert!(!root.join("taplo.toml").exists());
+        assert!(!root.join("deploy").exists());
+        let env_example = fs::read_to_string(root.join(".env.example")).unwrap();
+        assert!(env_example.contains("DATABASE_URL=sqlite:storage/app.sqlite"));
+        assert!(env_example.contains("APP_ADDR=127.0.0.1:3000"));
+        assert!(env_example.contains("VITE_DEV_URL="));
+        assert!(env_example.contains("PHOENIX_LOG="));
         assert!(root.join("app/commands/mod.rs").is_file());
         assert!(root.join("config/mod.rs").is_file());
         assert!(root.join("database/seeders/mod.rs").is_file());
@@ -3091,9 +4660,12 @@ mod tests {
         let home_controller =
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
         assert!(home_controller.contains("get::<NodeRenderer>().cloned()"));
-        assert!(home_controller.contains("respond_with_renderer(&request, &renderer).await"));
+        assert!(home_controller.contains("respond_with_renderer(request, &renderer).await"));
         let home_route = fs::read_to_string(root.join("routes/web.rs")).unwrap();
         assert!(home_route.contains(".get(\"/\", HomeController::index)"));
+        assert!(home_route.contains(".name(\"demo.spa\")"));
+        assert!(home_route.contains(".name(\"demo.ssr\")"));
+        assert!(home_route.contains(".name(\"demo.islands\")"));
         let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let status = Command::new(cargo)
             .args(["check", "--quiet"])
@@ -3132,11 +4704,29 @@ mod tests {
         assert!(!cargo.contains("toasty ="));
         assert!(!root.join("config/database.toml").exists());
         assert!(!root.join("src/bin/phoenix-manage.rs").exists());
+        let home_controller =
+            fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
+        // The chosen mode drives the home page; every mode has a demo action.
+        assert!(home_controller.contains("Page::new(\n            \"home\""));
+        assert!(home_controller.contains(".islands();"));
+        assert!(home_controller.contains("Page::new(\"demo/spa\", serde_json::json!({})).spa()"));
+        assert!(home_controller.contains("DemoSsrProps { rendered_at }).ssr()"));
         assert!(
-            fs::read_to_string(root.join("app/controllers/home_controller.rs"))
-                .unwrap()
-                .contains(".islands()")
+            home_controller
+                .contains("Page::new(\"demo/islands\", serde_json::json!({})).islands()")
         );
+        // One demo page per render mode, plus the hydrated counter island.
+        let spa = fs::read_to_string(root.join("views/pages/demo/spa.tsx")).unwrap();
+        assert!(spa.contains("useState"));
+        let ssr = fs::read_to_string(root.join("views/pages/demo/ssr.tsx")).unwrap();
+        assert!(ssr.contains("renderedAt"));
+        let islands = fs::read_to_string(root.join("views/pages/demo/islands.tsx")).unwrap();
+        assert!(islands.contains("client:load"));
+        assert!(root.join("views/islands/counter.tsx").is_file());
+        let home = fs::read_to_string(root.join("views/pages/home.tsx")).unwrap();
+        assert!(home.contains("<Link href={demo.spa()}"));
+        assert!(home.contains("<Link href={demo.ssr()}"));
+        assert!(home.contains("<Link href={demo.islands()}"));
         assert!(!root.join(".git").exists());
 
         let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -3193,12 +4783,21 @@ mod tests {
             .page("reports/index", GenerateOptions::default())
             .unwrap();
         generator
-            .island("Counter", GenerateOptions::default())
+            .island("LikeButton", GenerateOptions::default())
             .unwrap();
         assert!(root.join("views/pages/reports/index.jsx").is_file());
+        assert!(root.join("views/islands/like-button.jsx").is_file());
+        // The scaffolded demo island is already there in the selected frontend.
         assert!(root.join("views/islands/counter.jsx").is_file());
         assert!(
             !fs::read_to_string(root.join("views/pages/reports/index.jsx"))
+                .unwrap()
+                .contains("import type")
+        );
+        generator.auth(GenerateOptions::default()).unwrap();
+        assert!(root.join("views/pages/auth/login.jsx").is_file());
+        assert!(
+            !fs::read_to_string(root.join("views/pages/auth/login.jsx"))
                 .unwrap()
                 .contains("import type")
         );
@@ -3227,6 +4826,118 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn registry_dependencies_use_plain_versions_not_npmjs_tarballs() {
+        let (phoenix, react, react_ssr, vite) =
+            framework_dependency_pins(&DependencySource::Registry, &[]).unwrap();
+        for pin in [&phoenix, &react, &react_ssr, &vite] {
+            assert!(
+                !pin.contains("registry.npmjs.org"),
+                "registry pins must not bypass the user's npm mirror: {pin}"
+            );
+        }
+        assert_eq!(react, format!("^{APIZERO_REACT_VERSION}"));
+        assert_eq!(react_ssr, format!("^{APIZERO_REACT_SSR_VERSION}"));
+        assert_eq!(vite, format!("^{APIZERO_VITE_VERSION}"));
+        assert!(phoenix.contains(&format!("version = \"{PHOENIXRS_VERSION}\"")));
+        assert!(!phoenix.contains("features = ["));
+
+        let (phoenix, ..) = framework_dependency_pins(
+            &DependencySource::Registry,
+            &[ProjectFeature::Captcha, ProjectFeature::Pay],
+        )
+        .unwrap();
+        assert!(phoenix.contains("features = [\"captcha\", \"pay\"]"));
+    }
+
+    #[test]
+    fn feature_selection_generates_config_and_assembly() {
+        let root = temporary_directory("features");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
+                .features(vec![
+                    ProjectFeature::Captcha,
+                    ProjectFeature::Pay,
+                    ProjectFeature::Notify,
+                ])
+                .install_dependencies(false),
+        )
+        .unwrap();
+
+        let cargo_manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo_manifest.contains("features = [\"captcha\", \"pay\", \"notify\"]"));
+
+        let pay_config = fs::read_to_string(root.join("config/pay.toml")).unwrap();
+        assert!(pay_config.contains("${PAY_WECHAT_API_V3_KEY}"));
+        assert!(root.join("config/captcha.toml").is_file());
+        assert!(root.join("config/notify.toml").is_file());
+
+        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("pub fn features()"));
+        assert!(lib.contains("CaptchaFeature::new()"));
+        assert!(lib.contains("PayFeature::new(pay_manager()?)"));
+        assert!(lib.contains("NotifyFeature::new()"));
+        assert!(lib.contains("load_feature_config(\"pay\")"));
+        assert!(lib.contains("pub fn notifier()"));
+        // Webhooks stay outside CSRF; business routes keep it via the scope.
+        assert!(lib.contains(".scoped(RouteGroup::new().middleware(Csrf))"));
+        assert!(lib.contains(".merge(features()?.into_routes())"));
+
+        let manage = fs::read_to_string(root.join("src/bin/phoenix-manage.rs")).unwrap();
+        assert!(manage.contains("features.into_parts().migrations"));
+
+        let env_example = fs::read_to_string(root.join(".env.example")).unwrap();
+        assert!(env_example.contains("PAY_WECHAT_API_V3_KEY"));
+        let stored = fs::read_to_string(root.join(".phoenix")).unwrap();
+        assert!(stored.contains("features=captcha,pay,notify"));
+        let readme = fs::read_to_string(root.join("README.md")).unwrap();
+        assert!(readme.contains("已启用 Feature"));
+
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["check", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stored_feature_options_survive_update_core() {
+        let root = temporary_directory("features-update");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .features(vec![ProjectFeature::Captcha])
+                .install_dependencies(false),
+        )
+        .unwrap();
+        // User values in feature config files must survive `px update`.
+        fs::write(root.join("config/captcha.toml"), "length = 6\n").unwrap();
+
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        let _ = generator
+            .update_core(
+                &UpdateProjectOptions::new()
+                    .dependencies(DependencySource::Local(framework_root()))
+                    .install_dependencies(false),
+            )
+            .unwrap();
+
+        let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("CaptchaFeature::new()"));
+        let cargo_manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo_manifest.contains("features = [\"captcha\"]"));
+        assert_eq!(
+            fs::read_to_string(root.join("config/captcha.toml")).unwrap(),
+            "length = 6\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3308,6 +5019,166 @@ mod tests {
         assert!(models.contains("Comment"));
         let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
         assert!(migrations.contains("pub fn all()"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn make_auth_requires_a_database() {
+        let root = temporary_directory("auth-no-db");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .initialize_git(false)
+                .install_dependencies(false),
+        )
+        .unwrap();
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        // No driver was selected at `px new`, so the persistent User model has
+        // nowhere to live: refuse with a clear, actionable error and write nothing.
+        assert!(matches!(
+            generator.auth(GenerateOptions::default()),
+            Err(ScaffoldError::AuthRequiresDatabase)
+        ));
+        assert!(!root.join("routes/auth.rs").exists());
+        assert!(!root.join("app/models/user.rs").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines, reason = "one assertion per generated file")]
+    fn make_auth_generates_a_working_authentication_slice() {
+        let root = temporary_directory("auth");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
+                .initialize_git(false)
+                .install_dependencies(false),
+        )
+        .unwrap();
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        generator.auth(GenerateOptions::default()).unwrap();
+
+        for path in [
+            "routes/auth.rs",
+            "app/controllers/auth_controller.rs",
+            "app/models/user.rs",
+            "app/requests/login_input.rs",
+            "app/requests/register_input.rs",
+            "app/requests/password_reset_input.rs",
+            "app/resources/auth_session_resource.rs",
+            "app/resources/auth_message_resource.rs",
+            "app/props/auth/auth_login_props.rs",
+            "app/props/auth/auth_register_props.rs",
+            "app/props/auth/auth_forgot_password_props.rs",
+            "views/pages/auth/login.tsx",
+            "views/pages/auth/register.tsx",
+            "views/pages/auth/forgot-password.tsx",
+        ] {
+            assert!(root.join(path).is_file(), "missing {path}");
+        }
+
+        // Persistent User model + migration registered like `px make:model`.
+        let user_model = fs::read_to_string(root.join("app/models/user.rs")).unwrap();
+        assert!(user_model.contains("#[derive(Clone, Debug, Model)]"));
+        assert!(user_model.contains("#[unique]"));
+        assert!(user_model.contains("pub email: String"));
+        assert!(user_model.contains("pub password_hash: String"));
+        assert!(user_model.contains("pub created_at: String"));
+        let models = fs::read_to_string(root.join("app/models/mod.rs")).unwrap();
+        assert!(models.contains("// phoenix:model: User"));
+        assert!(models.contains("pub use user::User;"));
+        let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
+        assert!(migrations.contains("create_users_table"));
+        // The Argon2id (`password`) and guard (`auth`) facade features are on by default.
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let default_line = cargo
+            .lines()
+            .find(|line| line.trim_start().starts_with("default ="))
+            .expect("default features line");
+        assert!(default_line.contains("\"sqlite\""));
+        assert!(default_line.contains("\"password\""));
+        assert!(default_line.contains("\"auth\""));
+
+        let routes = fs::read_to_string(root.join("routes/auth.rs")).unwrap();
+        assert!(routes.contains(".name(\"login.show\")"));
+        assert!(routes.contains(".name(\"login.store\")"));
+        assert!(routes.contains(".name(\"logout.store\")"));
+        assert!(routes.contains(".name(\"register.store\")"));
+        assert!(routes.contains(".name(\"password-reset.store\")"));
+        assert!(routes.contains(".action::<LoginInput, AuthSessionResource>()"));
+        assert!(routes.contains(".action::<RegisterInput, AuthSessionResource>()"));
+        assert!(routes.contains(".action::<PasswordResetInput, AuthMessageResource>()"));
+        assert!(routes.contains("RateLimit::new(RateLimitConfig {"));
+        assert!(routes.contains("phoenix-captcha"), "captcha assembly notes");
+
+        let controller =
+            fs::read_to_string(root.join("app/controllers/auth_controller.rs")).unwrap();
+        // Credentials go through Argon2id + the phoenix-auth guard, never plaintext.
+        assert!(
+            controller
+                .contains("use phoenix::auth::{AuthError, AuthGuard, AuthUser, UserProvider}")
+        );
+        assert!(controller.contains("impl UserProvider for DatabaseUserProvider"));
+        assert!(controller.contains("guard.attempt(&input.email, &input.password)"));
+        assert!(controller.contains("Password::hash(&input.password)"));
+        assert!(controller.contains("StatusCode::UNPROCESSABLE_ENTITY"));
+        assert!(controller.contains("Validated::<Json<LoginInput>>::from_request"));
+        assert!(controller.contains("CaptchaProtected"));
+        assert!(!controller.contains("DemoUser"), "no in-memory demo store");
+        assert!(
+            !controller.contains("user.password == input.password"),
+            "no plaintext password comparison"
+        );
+        let controllers = fs::read_to_string(root.join("app/controllers/mod.rs")).unwrap();
+        assert!(controllers.contains("pub use auth_controller::AuthController;"));
+        let requests = fs::read_to_string(root.join("app/requests/login_input.rs")).unwrap();
+        assert!(requests.contains("#[phoenix::contract(input)]"));
+        assert!(requests.contains("impl Validate for LoginInput"));
+        let props = fs::read_to_string(root.join("app/props/auth/auth_login_props.rs")).unwrap();
+        assert!(props.contains("#[phoenix::contract(page, page = \"auth/login\")]"));
+
+        let login_page = fs::read_to_string(root.join("views/pages/auth/login.tsx")).unwrap();
+        assert!(login_page.contains("<Form"));
+        assert!(login_page.contains("form.field(\"email\")"));
+        assert!(login_page.contains("form.field(\"password\")"));
+        assert!(login_page.contains("<FieldError errors={form.errors} name=\"password\" />"));
+        assert!(login_page.contains("fields={LoginInputFields}"));
+        assert!(login_page.contains("CaptchaImage"));
+        let reset_page =
+            fs::read_to_string(root.join("views/pages/auth/forgot-password.tsx")).unwrap();
+        assert!(reset_page.contains("fields={PasswordResetInputFields}"));
+        assert!(reset_page.contains("routes[\"password-reset\"]"));
+
+        assert!(matches!(
+            generator.auth(GenerateOptions::default()),
+            Err(ScaffoldError::AlreadyExists(_))
+        ));
+        generator.auth(GenerateOptions { force: true }).unwrap();
+        // The forced rebuild must not stack a second users migration. Assert on
+        // the registration itself rather than counting substrings: one
+        // migration is named three times in the registry (marker comment,
+        // `pub mod`, and the `all()` entry).
+        let migrations = fs::read_to_string(root.join("database/migrations/mod.rs")).unwrap();
+        assert_eq!(
+            migrations.matches("pub mod m_").count(),
+            1,
+            "exactly one migration is registered:\n{migrations}"
+        );
+        let migration_files = fs::read_dir(root.join("database/migrations"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != "mod.rs")
+            .count();
+        assert_eq!(migration_files, 1, "and exactly one migration file exists");
+
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["check", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
         fs::remove_dir_all(root).unwrap();
     }
 
