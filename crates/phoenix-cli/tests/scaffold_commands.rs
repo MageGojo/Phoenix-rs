@@ -171,17 +171,54 @@ fn database_commands_dispatch_to_the_project_management_binary() {
     }
 
     let project = project.canonicalize().expect("canonical project path");
-    let invocations = fs::read_to_string(capture).expect("captured cargo invocations");
-    let expected = ["status", "migrate", "rollback\t3", "fresh\t--seed", "seed"];
-    for (line, command) in invocations.lines().zip(expected) {
+    let invocations = fs::read_to_string(&capture).expect("captured cargo invocations");
+    // `seed` is the one command that needs the project's `factory` feature:
+    // without it the factories compile away and seeding inserts nothing while
+    // reporting success.
+    let expected = [
+        ("status", ""),
+        ("migrate", ""),
+        ("rollback\t3", ""),
+        ("fresh\t--seed", ""),
+        ("seed", "--features\tfactory\t"),
+    ];
+    for (line, (command, features)) in invocations.lines().zip(expected) {
         assert_eq!(
             line,
             format!(
-                "{}\trun\t--quiet\t--bin\tphoenix-manage\t--\t{command}",
+                "{}\trun\t--quiet\t--bin\tphoenix-manage\t{features}--\t{command}",
                 project.display()
             )
         );
     }
     assert_eq!(invocations.lines().count(), expected.len());
+
+    // A project generated before factories existed has no such feature, and
+    // passing an unknown one to Cargo is a hard error — so `px seed` must fall
+    // back to the plain invocation rather than break for them.
+    let manifest_path = project.join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("manifest");
+    fs::write(
+        &manifest_path,
+        manifest.replace("factory = [\"phoenix/factory\"]", ""),
+    )
+    .expect("rewrite manifest");
+    fs::write(&capture, "").expect("reset capture");
+    let status = Command::new(env!("CARGO_BIN_EXE_px"))
+        .args(["seed"])
+        .current_dir(&project)
+        .env("CARGO", &fake_cargo)
+        .env("PX_CAPTURE", &capture)
+        .status()
+        .expect("CLI should start");
+    assert!(status.success());
+    let invocations = fs::read_to_string(&capture).expect("captured cargo invocations");
+    assert_eq!(
+        invocations.trim_end(),
+        format!(
+            "{}\trun\t--quiet\t--bin\tphoenix-manage\t--\tseed",
+            project.display()
+        )
+    );
     fs::remove_dir_all(root).expect("remove temporary project");
 }

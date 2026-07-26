@@ -14,7 +14,34 @@
 px make:model Note --all
 ```
 
-会生成模型、迁移、Request、Resource、控制器、routes、页面 Props、React 页，并刷新 contracts。
+会生成模型、迁移、Request、Resource、控制器、routes、页面 Props、React 页、**工厂**，并刷新 contracts。
+
+打开 `app/models/note.rs`——它短得有点意外：
+
+```rust
+#[model]
+pub struct Note {
+    pub name: String,
+}
+```
+
+表名 `notes`、`#[key] #[auto] pub id: i64`、`#[derive(Debug, Model)]` 都是约定补的。想接管某一条，写出来即可（见本章末讲解）。
+
+### 1.5 加一个关联（可选但建议做一遍）
+
+```bash
+px make:model User --has-many=Note --migration --factory
+px make:model Note --belongs-to=User --migration --factory --force
+```
+
+`Note` 里多出来的只有一行：
+
+```rust
+#[belongs_to]
+pub user: Deferred<User>,
+```
+
+`user_id` 字段、`key = user_id, references = id` 的映射，都不用你写。**单向也行**——只在 `Note` 写 `#[belongs_to]`，`User` 什么都不加，一样能用。
 
 ### 2. 修正迁移 SQL（SQLite）
 
@@ -45,13 +72,40 @@ px migrate
 
 生成器默认的假 id（`"generated"`）必须删掉。
 
-### 5. 手工验收
+### 5. 批量造点数据（仅开发/测试）
+
+`--factory` 已经在 `database/seeders/note_factory.rs` 生成了工厂。在 `database/seeders/mod.rs` 的 `run` 里播种：
+
+```rust
+use phoenix::database::factory::Seeder;
+
+let mut seeder = Seeder::new(database)?;          // ← 生产环境在这一行就拒绝
+let users = seeder.create::<User>(5).await?;
+for user in &users {
+    seeder.create_with::<Note, _>(4, user.id).await?;
+}
+```
+
+```bash
+px seed
+```
+
+`px seed` 会在项目声明了 `factory` feature 时自动带上它——否则工厂会被编译掉，播种「成功」但一行都没插。
+
+两点要记住：
+
+- **两道闸门**：Cargo feature `factory` 不开就不编译；`Seeder::new` 在 `PHOENIX_ENV`/`APP_ENV` 是 `production`/`prod`/`staging` 时直接报错。任何一道单独都不够——feature 可能被 `--all-features` 顺手打开，运行时检查又已经编进二进制。
+- **唯一列用 `f.unique_email()` / `f.unique(prefix)`**：它们靠计数器不靠随机。随机的局部名几千行就会撞，报出来是一个和真实原因无关的唯一约束错误。
+
+调试时用 `Seeder::seeded(2026)` 固定种子，同一份数据可以重放。
+
+### 6. 手工验收
 
 ```bash
 px dev
 ```
 
-- 浏览器打开 `/notes`：空列表文案  
+- 浏览器打开 `/notes`：能看到播种出来的行  
 - 带 CSRF 的 POST `/notes` `{"name":"first"}` → 201  
 - 刷新列表可见新行  
 

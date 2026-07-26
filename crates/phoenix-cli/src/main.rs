@@ -30,7 +30,7 @@ Usage:
   px status
   px rollback [--step <count>]
   px fresh [--seed]
-  px seed
+  px seed                              # 自动带上 factory feature（若项目声明）
   px make:auth [--force]
   px make:controller <name> [--resource] [--route] [--force]
   px make:model <name> [--all] [--migration] [--controller] [--resource] [--factory]
@@ -164,6 +164,19 @@ async fn dev(arguments: Vec<String>) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// Whether the project's manifest declares the `factory` feature.
+///
+/// Projects generated before factories existed do not, and passing an unknown
+/// feature to Cargo is a hard error — so this degrades to the plain run rather
+/// than breaking `px seed` for them.
+fn project_declares_factory_feature(root: &std::path::Path) -> bool {
+    std::fs::read_to_string(root.join("Cargo.toml")).is_ok_and(|manifest| {
+        manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("factory ="))
+    })
+}
+
 fn database_command(command: &str, arguments: &[String]) -> Result<(), String> {
     let generator = current_generator()?;
     let manager = generator.root().join("src/bin/phoenix-manage.rs");
@@ -175,8 +188,15 @@ fn database_command(command: &str, arguments: &[String]) -> Result<(), String> {
     }
 
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
-        .args(["run", "--quiet", "--bin", "phoenix-manage", "--", command])
+    let mut process = Command::new(cargo);
+    process.args(["run", "--quiet", "--bin", "phoenix-manage"]);
+    // Seeding lives behind the project's `factory` feature, so `px seed`
+    // without it would compile the factories away and silently insert nothing.
+    if command == "seed" && project_declares_factory_feature(generator.root()) {
+        process.args(["--features", "factory"]);
+    }
+    let status = process
+        .args(["--", command])
         .args(arguments)
         .current_dir(generator.root())
         .status()

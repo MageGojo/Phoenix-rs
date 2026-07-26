@@ -26,6 +26,14 @@
 在 `tests/feature/`（无则创建）增加测试：例如 GET `/notes` 返回 200，或 POST 校验 422。  
 参照 `docs/TESTING_AND_STORAGE.md` 与示例测试风格；优先用框架测试工具，避免必须抢固定端口。
 
+需要成批的测试数据时开 `factory` feature 用工厂，别在测试里手写十几个 `create!`：
+
+```bash
+cargo test --features sqlite,factory
+```
+
+固定种子（`Seeder::seeded(7)`）让失败的用例可以原样重放——这正是种子存在的理由。
+
 ```bash
 cargo test
 ```

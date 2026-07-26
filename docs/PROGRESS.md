@@ -773,3 +773,21 @@
 
 ### 全量门禁
 - `cargo test --workspace` 88 个测试二进制全绿；clippy 零告警；fmt 干净
+
+## 2026-07-26：教程回填新写法 + `px seed` 修好一个静默失败
+
+### 教程更新（老章节回填）
+- **03 项目地图**：补 `database/seeders/`（播种入口 + 工厂，仅开发/测试）
+- **09 模型迁移与 CRUD**：必做步骤改成新写法——先看生成的模型有多短（表名/主键/derive 都是约定），再加一步 1.5「加一个关联」（两条命令，`Note` 里只多一行 `#[belongs_to]`），新增第 5 步「批量造点数据」（两道闸门、唯一列为什么用计数器、固定种子可重放）
+- **13 Feature 与测试**：测试需要成批数据时用工厂而不是手写十几个 `create!`；固定种子让失败用例可原样重放
+- 15–20 与「番外 · 业务能力速览」在上一轮已随支付回调 / 账单解压 / 加密会话共享一并刷新，本轮无需再动
+
+### 顺手修掉一个静默失败
+写教程时发现：`px seed` 直接 `cargo run --bin phoenix-manage -- seed`，**不带 `--features factory`**。工厂文件是 `#![cfg(feature = "factory")]`，于是被整体编译掉——播种「成功」，一行都没插。这种错最难查，因为没有任何错误信息。
+
+改成：`px seed` 读项目 Cargo.toml，声明了 `factory` 就自动带上。**不能无条件加**——工厂出现之前生成的项目没有这个 feature，而未知 feature 对 Cargo 是硬错误，会把 `px seed` 直接搞坏。测试两条路径都钉住（有 feature 带上、没 feature 回退）。
+
+### 全量门禁
+- `cargo test --workspace` 88 个测试二进制全绿；clippy 零告警；fmt 干净
+- `npm run ci:node` 全绿（128 + 7 + 18 + 6 测试、typecheck、client/SSR 生产构建）
+- 状态：完成并已 push
