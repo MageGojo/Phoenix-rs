@@ -1,0 +1,34 @@
+[package]
+name = "phoenix-captcha"
+description = "SVG image captcha Feature with session-backed one-time verification for Phoenix"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", default-features = false }
+phoenix-http = { version = "0.1.1", path = "../phoenix-http", default-features = false }
+phoenix-plugin = { version = "0.1.1", path = "../phoenix-plugin", features = ["database"] }
+phoenix-routing = { version = "0.1.1", path = "../phoenix-routing" }
+phoenix-security = { version = "0.1.1", path = "../phoenix-security", default-features = false }
+phoenix-validation = { version = "0.1.1", path = "../phoenix-validation" }
+rand.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toasty.workspace = true
+
+[dev-dependencies]
+# Tests exercise the Toasty-backed DbCaptchaStore against SQLite, so the driver
+# feature is enabled for the test build only (the library itself is
+# backend-agnostic and links no driver).
+phoenix-database = { version = "0.1.1", path = "../phoenix-database", features = ["sqlite"] }
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
