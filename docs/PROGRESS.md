@@ -711,4 +711,36 @@
 - `cargo test --workspace` 86 个测试二进制全绿；`cargo clippy --workspace --all-targets` 零告警；`cargo fmt --all --check` 干净
 - JS：@apizero/react 128、react-ssr 7、vite 18、blog 6 全绿；`npm run ci:node`（含 typecheck + client/SSR 生产构建）通过
 - 真实 Redis：`PHOENIX_TEST_REDIS_URL=… cargo test -p phoenix-redis --test broadcast_contracts` 4 项全绿
-- 状态：完成（待用户 push）；后续：退款异步通知（微信独立 notify URL）、支付宝账单 ZIP 解压、Hub 会话表跨进程共享
+- 状态：完成（待用户 push）；后续（已在下一条收口）：退款异步通知、支付宝账单 ZIP 解压、加密传输会话表跨进程共享
+
+## 2026-07-26：最后三项后续收口（退款回调 / 账单解压 / 跨进程加密会话）
+
+### 微信退款异步通知
+- 退款回调**走独立 URL**，且 URL 是每笔退款请求带上去的，所以配置项（`refund_notify_url`）、路由（`pay.notify.wechat.refund`）都独立
+- `verify_refund_notify`：先验签解密再取字段；`event_type` 必须是 `REFUND.*`——投到退款路由的**支付**回调直接拒绝（两种 resource 结构不同，混用会把支付事件写进退款记录）
+- `PayManager::handle_refund_notify` 幂等（网关会重投）；**回调金额与库里那笔对不上直接报错**，不静默记录；只报「仍在处理」的回调被确认但不算迁移；落地后同步订单状态
+- `REFUND.ABNORMAL` → `Failed`：它表示钱**没有**退出、需人工处理，挂 pending 等于永远等不到结果
+
+### 支付宝账单 ZIP 解压
+- 自研最小 ZIP 读取器（中央目录 + 本地头 + stored/DEFLATE，无加密/ZIP64/分卷）：所有长度对缓冲区边界检查，**解压总量先封顶再解**（256 MiB），声称膨胀到 1 TB 的账单是被拒绝而不是被尝试
+- DEFLATE 用 `flate2`——它本来就在 lock 里（MySQL / Redis 驱动带的），没有引入新的第三方 crate
+- **GBK 不转码**：转码需要一张本 crate 不该携带的编码表。改为**在字节层匹配**表头与状态值（每个别名同时带 UTF-8 与 GBK 两种拼写），而真正读取的列在两种编码下都是 ASCII；`parse_bill_csv_bytes` 是驱动入口
+- ZIP 里明细与汇总两个成员**不靠文件名猜**（文件名同样是 GBK）：每个成员都喂给解析器，取行数最多的那个
+- 假网关测试用真实 GBK 字节 + 真实 ZIP 结构，端到端验证
+
+### 加密传输会话跨进程共享
+- 抽出 `SecureSessionStore` 接缝（`MemorySecureSessionStore` 默认 / `RedisSecureSessionStore`）；查表可能跨网络，故中间件把会话解析移进 async 块
+- **诚实标注：这里存的是密钥material**，不是普通缓存。能读 `phoenix:secure:*` 就能解密所有在线页面会话的流量——走 TLS + AUTH、优先关闭持久化、`session_ttl` 保持短。不需要实例互换时，**粘性路由 + 进程内存储仍是保证更强的一档**
+- 明确不做「再套一层主密钥加密」：会把主密钥分发变成新的最弱环节，且不改变「能读 Redis 就能解密」这个事实
+- 存储读不出来时按会话不存在处理（fail closed），不退回明文
+- 真实 Redis 契约测试：在 A 握手、请求打到 B 仍拿到密文；并用进程内存储做**反例对照**（不共享，所以那种部署必须粘性路由）
+
+### 文档 / 教程 / README
+- PAYMENTS / SECURE_TRANSPORT / REDIS / FEATURES 更新；README 特性一览与文档索引补齐业务型 Feature、实时、加密传输、调度、i18n
+- 教程新增选修 `advanced/番外-业务能力速览.md`（五个业务能力各自解决什么、**不**解决什么）；13 章修掉已删除的 `database.toml` 陈述
+
+### 全量门禁
+- `cargo test --workspace` 全绿；`cargo clippy --workspace --all-targets` 零告警；`cargo fmt --all --check` 干净
+- JS 159 项全绿
+- 真实 Redis：广播 4 项 + 跨进程加密会话 3 项全绿
+- 状态：完成（待用户 push）；后续：邮件真实 SMTP、队列生产驱动、服务端 partial props 求值、正式安全评审

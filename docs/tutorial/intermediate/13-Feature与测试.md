@@ -10,8 +10,12 @@
 
 ### 1. 阅读能力表
 
-打开 `docs/FEATURES.md`，浏览：`sqlite` / `pgsql` / `auth` / `jwt` / `password` / `tls` / `websocket` / `sse` / `metrics` / `storage` / `queue` / `mail` 等。  
-规则：**需要什么开什么**；`database.toml` 的 `default` 必须与已启用驱动一致。
+打开 `docs/FEATURES.md`，浏览两类能力：
+
+- **基础设施**：`sqlite` / `pgsql` / `mysql` / `auth` / `jwt` / `password` / `tls` / `websocket` / `sse` / `metrics` / `storage` / `queue` / `mail` / `redis` / `schedule`
+- **业务型 Feature**（`FeatureSet::plugin` 装配）：`captcha` / `pay` / `notify`
+
+规则：**需要什么开什么**。数据库连接串在 `.env` 的 `DATABASE_URL`，必须与已启用的驱动 feature 一致（开了 `sqlite` 就别指向 postgres）。
 
 ### 2. 做一个「只开文档、暂不接业务」的选择
 
@@ -40,6 +44,8 @@ cd examples/render-modes-smoke
 ## 讲解
 
 第三方扩展用 `FeatureSet::plugin`（高级第 17 章），不要在业务里隐式全局注册黑魔法。
+
+框架自带的业务型 Feature（验证码 / 支付 / 通知）也走同一条装配路径，还会带来自己的路由与迁移——所以「开一个 feature」不是零成本，先想清楚要不要。想先看看它们各自解决什么、**不**解决什么，去 [番外 · 业务能力速览](../advanced/番外-业务能力速览.md)。
 
 ## 验收
 

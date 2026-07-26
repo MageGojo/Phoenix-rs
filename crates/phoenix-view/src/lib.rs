@@ -922,7 +922,9 @@ impl From<phoenix_crypto::SecureError> for EncryptionError {
         use phoenix_crypto::SecureError;
         match error {
             SecureError::Expired => Self::Expired,
-            SecureError::AuthenticationFailed => Self::AuthenticationFailed,
+            SecureError::AuthenticationFailed | SecureError::SessionStore(_) => {
+                Self::AuthenticationFailed
+            }
             SecureError::InvalidFrame | SecureError::InvalidPublicKey => Self::InvalidEnvelope,
             SecureError::Clock => Self::InvalidClock,
             SecureError::KeyAgreement | SecureError::SealFailed => Self::EncryptionFailed,

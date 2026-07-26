@@ -40,11 +40,13 @@ Cursor 会从 `.cursor/skills/phoenix/` 自动发现 Skill；其它 Agent 请按
 
 ## 特性一览
 
-- **Laravel 风格 DX**：命名路由、Resource、中间件别名、`px new` / `px make:*` / `px migrate` / `px dev` / `px release*`
-- **类型安全全链路**：Rust Request / Resource / Page Props 契约自动生成 TypeScript 与可调用 action
-- **React 一等公民**：Islands（默认）、SPA、SSR；页面协议局部导航；表单 / prefetch / partial reload
-- **安全默认开启**：Session、CSRF、CSP nonce、Host allowlist、限流、JWT + RBAC/ABAC；Argon2id 密码哈希（`phoenix-crypto`）
-- **数据与运维**：Toasty（SQLite / PostgreSQL / MySQL）+ 迁移、Prometheus 指标、可选 Redis / Queue / Mail / Storage
+- **Laravel 风格 DX**：命名路由、Resource、中间件别名、`px new` / `px make:*`（含 `make:auth`）/ `px migrate` / `px dev` / `px release*`
+- **类型安全全链路**：Rust Request / Resource / Page Props 契约自动生成 TypeScript 与可调用 action；命名路由 URL 构造器；`Paginated<T>` 泛型直通
+- **React 一等公民**：Islands（默认）、SPA、SSR；页面协议局部导航；表单 / 文件上传进度 / prefetch / partial reload / 分页组件
+- **安全默认开启**：Session、CSRF、CSP nonce、Host allowlist、限流、JWT + RBAC/ABAC；Argon2id 密码哈希；一键加密传输（ECDH + AES-256-GCM，请求与响应双向）
+- **数据与运维**：Toasty（SQLite / PostgreSQL / MySQL）+ 迁移 + 分页、Prometheus 指标、Redis / 队列 / 邮件 / 本地与 S3 存储、cron 调度
+- **业务型 Feature**：图形验证码、通知（邮件 + 站内信）、支付（微信 Native / 支付宝当面付，含退款与对账）
+- **实时**：WebSocket Hub（频道、在线状态、背压策略）+ Redis pub/sub 跨实例广播
 - **扩展与发版**：编译期 Feature 插件；制品校验 + `current` 原子切换与回滚
 
 ## 快速开始
@@ -87,7 +89,7 @@ px dev
 
 ### 系统教程（按序学习）
 
-从零到发版的分阶教材（初级 → 中级 → 高级，含验收）：
+从零到发版的分阶教材（初级 → 中级 → 高级，含验收），另有两篇选修番外（文件上传、业务能力速览）：
 
 **[docs/tutorial/README.md](docs/tutorial/README.md)**
 
@@ -199,8 +201,13 @@ npm run ci:node
 | [AUTHORIZATION.md](docs/AUTHORIZATION.md) | 授权（RBAC / ABAC） |
 | [MAIL.md](docs/MAIL.md) / [QUEUE.md](docs/QUEUE.md) | 邮件与队列 |
 | [METRICS.md](docs/METRICS.md) / [TLS.md](docs/TLS.md) | Prometheus 指标 / TLS |
-| [MULTI_APP.md](docs/MULTI_APP.md) / [REALTIME.md](docs/REALTIME.md) | 多应用挂载 / 实时能力 |
-| [REDIS.md](docs/REDIS.md) | Redis Session / 限流后端 |
+| [MULTI_APP.md](docs/MULTI_APP.md) / [REALTIME.md](docs/REALTIME.md) | 多应用挂载 / 实时能力（含 Redis 跨实例广播） |
+| [REDIS.md](docs/REDIS.md) | Redis Session / 限流 / 队列 / 锁 / 广播 / 加密会话 |
+| [PAYMENTS.md](docs/PAYMENTS.md) | 支付：微信 / 支付宝、退款、对账 |
+| [NOTIFICATIONS.md](docs/NOTIFICATIONS.md) / [CAPTCHA.md](docs/CAPTCHA.md) | 通知（邮件 + 站内信）/ 图形验证码 |
+| [SECURE_TRANSPORT.md](docs/SECURE_TRANSPORT.md) | 一键加密传输（TLS 之上的纵深防御） |
+| [SCHEDULE.md](docs/SCHEDULE.md) / [VALIDATION.md](docs/VALIDATION.md) | cron 调度 / 校验与本地化消息 |
+| [I18N.md](docs/I18N.md) / [REACT.md](docs/REACT.md) | 视图 i18n / React 用户向手册 |
 | [TESTING_AND_STORAGE.md](docs/TESTING_AND_STORAGE.md) | 测试与存储 |
 | [工具与约定.md](docs/工具与约定.md) | 命令、依赖、断点续作 |
 | [PROGRESS.md](docs/PROGRESS.md) | 进度表（对账线索） |
@@ -210,7 +217,7 @@ npm run ci:node
 
 ## 当前状态
 
-早期开发阶段。**crates.io** 门面 [`phoenixrs`](https://crates.io/crates/phoenixrs) 与 CLI [`px-cli`](https://crates.io/crates/px-cli) 持续发版；GitHub / GitCode 双镜像同步。能力按 Cargo feature 按需编译（`sqlite`/`tls`/`websocket`/`sse`/`auth`/`jwt`/`password`/`metrics` 等，见 [docs/FEATURES.md](docs/FEATURES.md)）。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。仍在演进：邮件真实 SMTP、队列生产驱动、`px make:auth` 生成器、服务端 partial props 求值。
+早期开发阶段。**crates.io** 门面 [`phoenixrs`](https://crates.io/crates/phoenixrs) 与 CLI [`px-cli`](https://crates.io/crates/px-cli) 持续发版；GitHub / GitCode 双镜像同步。能力按 Cargo feature 按需编译（`sqlite`/`tls`/`websocket`/`sse`/`auth`/`jwt`/`password`/`metrics` 等，见 [docs/FEATURES.md](docs/FEATURES.md)）。核心垂直切片（HTTP、路由、契约、React、安全、CLI、迁移）、TOML 配置、MySQL 驱动、Feature 插件与发版流水线 MVP 已可运行；blog 示例 Auth 为真实持久化链路（Toasty 用户 + Argon2id + Cookie Session，见 [docs/AUTH_ADMIN.md](docs/AUTH_ADMIN.md)）。业务型 Feature（验证码 / 通知 / 支付）与实时、调度、加密传输均已落地并有集成测试（支付与实时的网关 / Redis 契约测试可对真实依赖运行）。仍在演进：邮件真实 SMTP、队列生产驱动、服务端 partial props 求值、正式安全评审。
 
 ## 公司与许可
 
