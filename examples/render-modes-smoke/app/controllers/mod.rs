@@ -32,7 +32,11 @@ pub(crate) async fn respond_with_renderer(request: Request, mut page: Page) -> R
                     .with_status(StatusCode::INTERNAL_SERVER_ERROR);
             }
         };
-    } else if let Some(vite_dev_url) = vite_dev_url {
+    }
+    // Only `px dev` may override the hashed entry with Vite HMR.
+    if std::env::var_os("PHOENIX_VITE_DEV").is_some()
+        && let Some(vite_dev_url) = vite_dev_url
+    {
         page = page.script_src(format!(
             "{}/@id/__x00__virtual:phoenix/client",
             vite_dev_url.trim_end_matches('/'),

@@ -119,10 +119,12 @@ pub async fn application(
         )?);
         (Some(assets), renderer)
     } else {
-        // `px dev` sets PHOENIX_VITE_DEV so this process uses Vite's browser
-        // entry while HMR/full reload remains live.
+        // `px dev` sets PHOENIX_VITE_DEV so JS comes from Vite HMR.
+        // Still load the hashed CSS manifest so Islands SSR can link stylesheets
+        // in <head> before the Vite client runs — otherwise hard refresh FOUCs.
+        let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
         (
-            None,
+            assets,
             NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")),
         )
     };

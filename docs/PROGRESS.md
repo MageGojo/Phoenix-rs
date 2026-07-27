@@ -802,3 +802,14 @@
 - `cargo test --workspace` 88 个测试二进制全绿；clippy 零告警；fmt 干净
 - `npm run ci:node` 全绿（128 + 7 + 18 + 6 测试、typecheck、client/SSR 生产构建）
 - 状态：完成并已 push
+
+## 2026-07-27：打包产物禁止泄漏 Vite 开发 origin
+
+- 根因：部分应用在已挂生产 manifest 后仍按 `AppConfig::vite_dev_url()`（`APP_ENV!=production` 即有值）覆盖 `<script type="module">`，导致 `px release` / staging 在 `.env` 含 `VITE_DEV_URL=http://127.0.0.1:5173` 时把开发机地址写进 HTML。
+- 修复：
+  1. `phoenix-view`：`default_script_src` 仅在 `PHOENIX_VITE_DEV` 时读 `VITE_DEV_URL`
+  2. 脚手架 / smoke：manifest 优先；**仅** `PHOENIX_VITE_DEV` 覆盖 Vite HMR；`px dev` 仍可加载 hashed CSS 防 FOUC
+  3. 文档：`CONFIG.md` / `RELEASE_PIPELINE.md` 明确「打包 ≠ `APP_ENV`，资源生命周期看 `PHOENIX_VITE_DEV`」
+- 验收：`cargo test -p phoenix-view --lib`；`cargo test -p px-cli --lib scaffold::`；my_blog staging `/login` 在 `APP_ENV=development` + `VITE_DEV_URL=…5173` 下仍输出 `/assets/phoenix-ubIx1D6k.js`，无 `5173`
+- 版本：`phoenix-view 0.1.5`、`px-cli 0.1.12`
+- 状态：已完成@378b312

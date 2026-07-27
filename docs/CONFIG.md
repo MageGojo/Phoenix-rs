@@ -30,11 +30,20 @@ config/
 | 分组 | 键 |
 | --- | --- |
 | 应用 | `APP_ENV` / `APP_ADDR` / `APP_URL` /（可选 `APP_NAME`） |
-| 前端 | `VITE_DEV_URL`（`px dev` 的 Vite 开发服务器地址） |
+| 前端 | `VITE_DEV_URL`（仅 `px dev` 使用的 Vite 开发服务器地址；生产 / `px release` 制品即使写了也不会注入 HTML） |
 | 数据库 | `DATABASE_URL` |
 | 日志 | `PHOENIX_LOG` |
 | 限流 | `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW_SECONDS` |
 | 代理与 Host | `TRUSTED_PROXIES` / `ALLOWED_HOSTS` |
+
+## 前端资源生命周期
+
+| 启动方式 | 浏览器入口 |
+| --- | --- |
+| `px dev`（注入 `PHOENIX_VITE_DEV=1`） | Vite HMR：`{VITE_DEV_URL}/@id/__x00__virtual:phoenix/client`；若存在 hashed CSS manifest 仍会链入 `<head>` 防 FOUC |
+| `px release` 制品 / `cargo run -- serve` / 其它（无 `PHOENIX_VITE_DEV`） | `production_assets` 的 hashed `/assets/phoenix-*.js` + CSS |
+
+`APP_ENV=development` 或 `.env` 里留着 `VITE_DEV_URL` **不能**单独触发 Vite 注入——否则打包后的 HTML 会泄漏开发机 origin（如 `127.0.0.1:5173`）。
 
 ## 选择数据库
 

@@ -683,7 +683,10 @@ impl Page {
 }
 
 fn default_script_src() -> String {
-    if cfg!(debug_assertions) {
+    // Vite HMR entry is a `px dev` lifecycle concern (`PHOENIX_VITE_DEV`), not a
+    // compile-profile or APP_ENV concern. Packaged / `cargo run -- serve` builds
+    // must never embed `VITE_DEV_URL` (would leak localhost / LAN origins).
+    if std::env::var_os("PHOENIX_VITE_DEV").is_some() {
         let vite_url =
             std::env::var("VITE_DEV_URL").unwrap_or_else(|_| "http://127.0.0.1:5173".to_owned());
         return format!(
@@ -1276,6 +1279,25 @@ mod tests {
 
         assert!(
             html.contains("src=\"http://localhost/app.js?mode=dev&amp;name=&quot;test&quot;\"")
+        );
+    }
+
+    #[test]
+    fn default_script_skips_vite_unless_phoenix_vite_dev_is_set() {
+        // `cargo test` / CI must not set PHOENIX_VITE_DEV; that flag is only for `px dev`.
+        assert!(
+            std::env::var_os("PHOENIX_VITE_DEV").is_none(),
+            "this unit test requires PHOENIX_VITE_DEV to be unset"
+        );
+        let response = Page::new("dashboard/show", json!({})).into_response();
+        let html = String::from_utf8_lossy(response.body());
+        assert!(
+            html.contains("src=\"/assets/phoenix.js\""),
+            "packaged/default pages must use the production placeholder entry"
+        );
+        assert!(
+            !html.contains("127.0.0.1:5173"),
+            "VITE_DEV_URL must not leak into HTML without PHOENIX_VITE_DEV"
         );
     }
 

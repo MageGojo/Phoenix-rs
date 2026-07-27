@@ -52,6 +52,7 @@ $PHOENIX_DEPLOY_ROOT/
 - 无数据库的应用不会生成 / 打包 `phoenix-manage`；`release:install` 在 `manifest.migrations.included = false` 时自动跳过迁移
 - `public/assets/`、`public/ssr/`（Vite 产物；**不要**把 `assets/` 内容摊平进 `public/`）
 - 应用启动后由 `ServeProductionAssets` 按 `phoenix-manifest.json` 白名单对外提供 `/assets/*`；页面须 `Page::production_assets(..., "client")` 写入 hashed URL，勿硬编码 `/assets/phoenix.js`
+- 制品 HTML **不得**出现 `VITE_DEV_URL` / `:5173`：只有 `px dev` 注入的 `PHOENIX_VITE_DEV` 才会切换到 Vite 客户端；`APP_ENV` 与 shared `.env` 里的开发地址不影响打包产物
 - `config/*.toml`（非密钥）
 - `database/migrations/`
 - `manifest.toml`（版本、checksum、contract_hash）

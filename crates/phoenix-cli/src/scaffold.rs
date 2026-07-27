@@ -2079,9 +2079,14 @@ pub async fn application(
         );
         (Some(assets), renderer)
     } else {
-        // `px dev` sets PHOENIX_VITE_DEV so this process uses Vite's browser
-        // entry while HMR/full reload remains live.
-        (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
+        // `px dev` sets PHOENIX_VITE_DEV so JS comes from Vite HMR.
+        // Still load the hashed CSS manifest so Islands SSR can link stylesheets
+        // in <head> before the Vite client runs — otherwise hard refresh FOUCs.
+        let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
+        (
+            assets,
+            NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")),
+        )
     };
     renderer.warm_up().await?;
     let built = routes(&config, assets.as_ref(), &renderer);
@@ -2303,9 +2308,14 @@ pub async fn application(
         );
         (Some(assets), renderer)
     }} else {{
-        // `px dev` sets PHOENIX_VITE_DEV so this process uses Vite's browser
-        // entry while HMR/full reload remains live.
-        (None, NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")))
+        // `px dev` sets PHOENIX_VITE_DEV so JS comes from Vite HMR.
+        // Still load the hashed CSS manifest so Islands SSR can link stylesheets
+        // in <head> before the Vite client runs — otherwise hard refresh FOUCs.
+        let assets = AssetManifest::load("public/assets/phoenix-manifest.json").ok();
+        (
+            assets,
+            NodeRenderer::new(RendererConfig::node("public/ssr/renderer.js")),
+        )
     }};
     renderer.warm_up().await?;
     let built = routes(&config, assets.as_ref(), &renderer)?;
@@ -2416,7 +2426,13 @@ async fn render(request: &Request, mut page: Page) -> Response {{
                     .with_status(StatusCode::INTERNAL_SERVER_ERROR);
             }}
         }};
-    }} else if let Some(vite_dev_url) = vite_dev_url {{
+    }}
+    // Only `px dev` (PHOENIX_VITE_DEV) may override the browser entry with Vite.
+    // Packaged binaries must keep hashed assets even when APP_ENV=development /
+    // VITE_DEV_URL is set — otherwise HTML leaks the Vite origin.
+    if std::env::var_os("PHOENIX_VITE_DEV").is_some()
+        && let Some(vite_dev_url) = vite_dev_url
+    {{
         page = page.script_src(format!(
             "{{}}/@id/__x00__virtual:phoenix/client",
             vite_dev_url.trim_end_matches('/'),
@@ -3856,10 +3872,13 @@ fn render_auth_page(request: &Request, page: Page) -> Response {
                     .with_status(StatusCode::INTERNAL_SERVER_ERROR);
             }
         };
-    } else if let Some(vite_dev_url) = request
-        .extensions()
-        .get::<AppConfig>()
-        .and_then(AppConfig::vite_dev_url)
+    }
+    // Only `px dev` (PHOENIX_VITE_DEV) may override the browser entry with Vite.
+    if std::env::var_os("PHOENIX_VITE_DEV").is_some()
+        && let Some(vite_dev_url) = request
+            .extensions()
+            .get::<AppConfig>()
+            .and_then(AppConfig::vite_dev_url)
     {
         page = page.script_src(format!(
             "{}/@id/__x00__virtual:phoenix/client",
@@ -4845,6 +4864,10 @@ mod tests {
             fs::read_to_string(root.join("app/controllers/home_controller.rs")).unwrap();
         assert!(home_controller.contains("get::<NodeRenderer>().cloned()"));
         assert!(home_controller.contains("respond_with_renderer(request, &renderer).await"));
+        assert!(
+            home_controller.contains("PHOENIX_VITE_DEV"),
+            "scaffold must gate Vite client injection on PHOENIX_VITE_DEV"
+        );
         let home_route = fs::read_to_string(root.join("routes/web.rs")).unwrap();
         assert!(home_route.contains(".get(\"/\", HomeController::index)"));
         assert!(home_route.contains(".name(\"demo.spa\")"));
