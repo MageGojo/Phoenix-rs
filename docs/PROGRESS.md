@@ -812,4 +812,4 @@
   3. 文档：`CONFIG.md` / `RELEASE_PIPELINE.md` 明确「打包 ≠ `APP_ENV`，资源生命周期看 `PHOENIX_VITE_DEV`」
 - 验收：`cargo test -p phoenix-view --lib`；`cargo test -p px-cli --lib scaffold::`；my_blog staging `/login` 在 `APP_ENV=development` + `VITE_DEV_URL=…5173` 下仍输出 `/assets/phoenix-ubIx1D6k.js`，无 `5173`
 - 版本：`phoenix-view 0.1.5`、`px-cli 0.1.12`
-- 状态：已完成@378b312
+- 状态：已完成@631b86f（GitHub/GitCode 已 push；crates.io 因依赖 feature 校验失败暂未发，本地 `cargo install --path crates/phoenix-cli` 已是 0.1.12）
