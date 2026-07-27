@@ -348,6 +348,10 @@ pub fn show(
 
 脚手架在挂好 production assets 后，**只有** `px dev` 注入的 `PHOENIX_VITE_DEV` 才会把 module script 改写为 Vite HMR 入口；`APP_ENV` / `VITE_DEV_URL` 单独存在时不会覆盖 hashed URL（避免 release HTML 泄漏开发机 origin）。
 
+生产 client/SSR build（`@apizero/vite`）默认 `terser` 压缩并 mangle 顶层标识符、剥离 `console`/`debugger`；Island 仍按需拆 chunk。不要对 React props 做属性名混淆。
+
+`shared` 应保持精简（会话 + 布局 chrome）；页面专属 CMS/SEO 数据放各页 `props` 或 `PageHead`，见 [REACT.md](./REACT.md)。
+
 需要完整缓冲响应时使用 `respond_with_renderer(...).await`。renderer 失败会返回 503，不会静默改成 SPA。流式响应的 Header 一旦发送便不能改写状态，因此生产启动必须先调用 `warm_up()`；流中失败会关闭未完成文档且不会追加 hydration/module script。客户端断开、协议错误和 deadline 会在释放 worker 锁前原子作废对应进程，排队请求只会启动干净 worker，不会读取前一请求的残留帧。
 
 ### CSP nonce 与页面缓存

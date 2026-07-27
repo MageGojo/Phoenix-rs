@@ -813,3 +813,13 @@
 - 验收：`cargo test -p phoenix-view --lib`；`cargo test -p px-cli --lib scaffold::`；my_blog staging `/login` 在 `APP_ENV=development` + `VITE_DEV_URL=…5173` 下仍输出 `/assets/phoenix-ubIx1D6k.js`，无 `5173`
 - 版本：`phoenix-view 0.1.5`、`px-cli 0.1.12`
 - 状态：已完成@631b86f（GitHub/GitCode 已 push；Release [v0.1.12](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.12)；crates.io `px-cli 0.1.12` 已上架；`phoenix-view`/`phoenixrs` 因 crates.io 校验依赖 feature 失败暂未发）
+
+## 2026-07-27：`px feature:add` + 生产前端压缩（px-cli 0.1.13 / @apizero/vite 0.1.4）
+
+- 新增：`px feature:add <captcha|pay|notify>`——按需写入 `config/<key>.toml`（含中文注释）、更新 `.phoenix` features、在 `Cargo.toml` 启用对应 feature（写入 `default`）、补齐 `.env.example` 密钥注释。
+- `src/lib.rs` 仅在已有 `features()` / `FeatureSet` 脚手架时同步装配；否则打印手动接线提示，不盲目改写。
+- `@apizero/vite@0.1.4`：生产 client/SSR 默认 `terser` minify + toplevel mangle、去 console/debugger、关 sourcemap / modulePreload polyfill（安全压缩，不做破坏 React 的属性混淆）。
+- 文档：`REACT.md` / `RENDERING.md` 明确 shared 只放跨页 chrome / 会话。
+- 验收：`cargo test -p px-cli --lib feature_add`；`npm test` in `packages/phoenix-vite`；my_blog `/login` shared 无 aboutBio。
+- 产物：`crates/phoenix-cli/*`、`packages/phoenix-vite/*`、`docs/{CONFIG,REACT,RENDERING,PROGRESS}.md`
+- 状态：已完成（案例 my_blog：`/login` shared 仅 chrome 7 字段；生产 entry terser 压缩且无 console；待填 commit）

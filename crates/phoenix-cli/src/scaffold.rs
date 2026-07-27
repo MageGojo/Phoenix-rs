@@ -478,6 +478,13 @@ pub enum ScaffoldError {
     AuthRequiresDatabase,
 }
 
+/// Files changed by `px feature:add` and an optional manual integration note.
+#[derive(Clone, Debug, Default)]
+pub struct FeatureAddResult {
+    pub written: Vec<PathBuf>,
+    pub integration_note: Option<String>,
+}
+
 /// Write the project skeleton only (no `git init`, no `npm install`).
 ///
 /// Returns the number of files written so callers can report progress.
@@ -799,6 +806,77 @@ impl ProjectGenerator {
         let mut editor = ProjectEditor::new(&self.root, options.force);
         add_command(&mut editor, &name)?;
         editor.commit()
+    }
+
+    /// Enable one official Feature in an existing Phoenix project.
+    ///
+    /// The command writes only the requested Feature's TOML starter, preserves
+    /// existing environment examples, and refreshes the generated `FeatureSet`
+    /// assembly only when the project already opted into that scaffold pattern.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when project metadata or Cargo.toml cannot be read or
+    /// written.
+    pub fn add_feature(&self, feature: ProjectFeature) -> Result<FeatureAddResult, ScaffoldError> {
+        let mut stored = self.stored_options();
+        if !stored.features.contains(&feature) {
+            stored.features.push(feature);
+            stored.features.sort_unstable();
+        }
+
+        let mut editor = ProjectEditor::new(&self.root, false);
+        editor.set(PROJECT_OPTIONS_FILE, format_stored_options(&stored))?;
+
+        let config_path = PathBuf::from(format!("config/{}.toml", feature.key()));
+        if !self.root.join(&config_path).is_file() {
+            editor.create(&config_path, feature_config_template(feature))?;
+        }
+
+        let cargo_path = PathBuf::from("Cargo.toml");
+        let cargo = editor.read(&cargo_path)?;
+        if cargo.is_empty() {
+            return Err(ScaffoldError::InvalidManagedFile(
+                self.root.join(&cargo_path),
+            ));
+        }
+        editor.set(
+            &cargo_path,
+            enable_app_feature_in_manifest(&cargo, feature.key()),
+        )?;
+
+        let env_path = PathBuf::from(".env.example");
+        let env = editor.read(&env_path)?;
+        if env.is_empty() {
+            editor.set(
+                &env_path,
+                append_feature_env_example(&env_example_template(stored.database, &[]), feature),
+            )?;
+        } else if !env_example_has_feature_comment(&env, feature) {
+            editor.set(&env_path, append_feature_env_example(&env, feature))?;
+        }
+
+        let lib_path = PathBuf::from("src/lib.rs");
+        let lib = editor.read(&lib_path)?;
+        let integration_note = if lib.contains("use phoenix::plugin::FeatureSet;")
+            && lib.contains("pub fn features() -> Result<FeatureSet")
+        {
+            editor.set(
+                &lib_path,
+                lib_template_with_features(stored.database.is_some(), &stored.features),
+            )?;
+            None
+        } else {
+            Some(format!(
+                "未更新 src/lib.rs：未检测到 FeatureSet 装配。请手动注册 `{}` 插件；可参考 docs/FEATURES.md。",
+                feature.key()
+            ))
+        };
+
+        Ok(FeatureAddResult {
+            written: editor.commit()?,
+            integration_note,
+        })
     }
 
     /// Generate the authentication starter kit (`px make:auth`).
@@ -1343,6 +1421,62 @@ fn patch_cargo_toml_core(cargo: &str, phoenix_dependency: &str) -> String {
     body
 }
 
+/// Make an app-level Feature forward to the Phoenix facade and enable it by
+/// default, retaining every existing feature declaration and default entry.
+fn enable_app_feature_in_manifest(manifest: &str, feature: &str) -> String {
+    let feature_line = format!("{feature} = [\"phoenix/{feature}\"]");
+    let mut lines = manifest.lines().map(str::to_owned).collect::<Vec<_>>();
+    let has_newline = manifest.ends_with('\n');
+    let section_start = lines.iter().position(|line| line.trim() == "[features]");
+
+    if let Some(start) = section_start {
+        let section_end = lines[start + 1..]
+            .iter()
+            .position(|line| {
+                let trimmed = line.trim();
+                trimmed.starts_with('[') && trimmed.ends_with(']')
+            })
+            .map_or(lines.len(), |offset| start + 1 + offset);
+        let has_feature = lines[start + 1..section_end].iter().any(|line| {
+            line.trim_start()
+                .strip_prefix(feature)
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        });
+        if !has_feature {
+            lines.insert(section_end, feature_line);
+        }
+        let has_default = lines[start + 1..]
+            .iter()
+            .take_while(|line| {
+                let trimmed = line.trim();
+                !(trimmed.starts_with('[') && trimmed.ends_with(']'))
+            })
+            .any(|line| {
+                line.trim_start()
+                    .strip_prefix("default")
+                    .is_some_and(|rest| rest.trim_start().starts_with('='))
+            });
+        if !has_default {
+            lines.insert(start + 1, format!("default = [\"{feature}\"]"));
+        }
+    } else {
+        let insert_at = lines
+            .iter()
+            .position(|line| line.trim() == "[dependencies]")
+            .unwrap_or(lines.len());
+        lines.insert(insert_at, String::new());
+        lines.insert(insert_at + 1, "[features]".to_owned());
+        lines.insert(insert_at + 2, format!("default = [\"{feature}\"]"));
+        lines.insert(insert_at + 3, feature_line);
+    }
+
+    let mut rendered = lines.join("\n");
+    if has_newline {
+        rendered.push('\n');
+    }
+    ensure_default_features(&rendered, &[feature])
+}
+
 fn patch_package_json_core(
     raw: &str,
     react: &str,
@@ -1414,11 +1548,14 @@ fn patch_package_json_core(
         );
     }
 
-    if tailwind {
-        let dev_dependencies = object
-            .entry("devDependencies")
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(deps) = dev_dependencies.as_object_mut() {
+    let dev_dependencies = object
+        .entry("devDependencies")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(deps) = dev_dependencies.as_object_mut() {
+        // Required by `@apizero/vite` production minify (`build.minify = "terser"`).
+        deps.entry("terser".to_owned())
+            .or_insert_with(|| serde_json::Value::String("^5.43.0".to_owned()));
+        if tailwind {
             deps.entry("@tailwindcss/vite".to_owned())
                 .or_insert_with(|| serde_json::Value::String("^4.3.0".to_owned()));
             deps.entry("tailwindcss".to_owned())
@@ -1473,6 +1610,7 @@ fn project_files(
   "devDependencies": {{
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "terser": "^5.43.0",
     "typescript": "^5.8.0",
     "vite": "^7.3.6"{tailwind}
   }}
@@ -1641,22 +1779,51 @@ fn env_example_template(database: Option<ProjectDatabase>, features: &[ProjectFe
     } else {
         let mut block =
             String::from("\n# ── Feature 密钥（config/*.toml 里以 ${VAR} 引用）─────\n");
-        if features.contains(&ProjectFeature::Pay) {
-            block.push_str(
-                "# PAY_WECHAT_API_V3_KEY=\n# PAY_ALIPAY_APP_PRIVATE_KEY=\n# PAY_ALIPAY_PUBLIC_KEY=\n",
-            );
-        }
-        if features.contains(&ProjectFeature::Captcha) {
-            block.push_str("# 验证码无密钥；参数见 config/captcha.toml。\n");
-        }
-        if features.contains(&ProjectFeature::Notify) {
-            block.push_str("# 通知本地用内存邮件传输；接真实 SMTP 时在此加对应密钥。\n");
+        for feature in [
+            ProjectFeature::Pay,
+            ProjectFeature::Captcha,
+            ProjectFeature::Notify,
+        ] {
+            if features.contains(&feature) {
+                block.push_str(feature_env_comments(feature));
+            }
         }
         block
     };
     format!(
         "# 复制为 `.env`：前后端启动 + 数据库的运行时配置都在这里。\n# 优先级：.env < 进程环境变量。config/ 目录只放 Feature 配置（TOML）。\n\n# ── 应用 ────────────────────────────────────────────\nAPP_ENV=development\nAPP_ADDR=127.0.0.1:3000\nAPP_URL=http://127.0.0.1:3000\n\n# ── 前端（Vite 开发服务器，`px dev` 使用）───────────\nVITE_DEV_URL=http://127.0.0.1:5173\n\n{database_block}\n# ── 日志 ────────────────────────────────────────────\nPHOENIX_LOG=info,hyper=warn\n\n# ── 限流与信任代理 ──────────────────────────────────\nRATE_LIMIT_REQUESTS=60\nRATE_LIMIT_WINDOW_SECONDS=60\nTRUSTED_PROXIES=none\nALLOWED_HOSTS=127.0.0.1,localhost,[::1]\n{feature_block}"
     )
+}
+
+const fn feature_env_comments(feature: ProjectFeature) -> &'static str {
+    match feature {
+        ProjectFeature::Captcha => "# 验证码无密钥；参数见 config/captcha.toml。\n",
+        ProjectFeature::Pay => {
+            "# PAY_WECHAT_API_V3_KEY=\n# PAY_ALIPAY_APP_PRIVATE_KEY=\n# PAY_ALIPAY_PUBLIC_KEY=\n"
+        }
+        ProjectFeature::Notify => "# 通知本地用内存邮件传输；接真实 SMTP 时在此加对应密钥。\n",
+    }
+}
+
+fn env_example_has_feature_comment(env: &str, feature: ProjectFeature) -> bool {
+    match feature {
+        ProjectFeature::Captcha => env.contains("# 验证码无密钥；参数见 config/captcha.toml。"),
+        ProjectFeature::Pay => env.contains("# PAY_WECHAT_API_V3_KEY="),
+        ProjectFeature::Notify => {
+            env.contains("# 通知本地用内存邮件传输；接真实 SMTP 时在此加对应密钥。")
+        }
+    }
+}
+
+fn append_feature_env_example(env: &str, feature: ProjectFeature) -> String {
+    let mut updated = env.trim_end().to_owned();
+    if !updated.contains("# ── Feature 密钥（config/*.toml 里以 ${VAR} 引用）─────")
+    {
+        updated.push_str("\n\n# ── Feature 密钥（config/*.toml 里以 ${VAR} 引用）─────");
+    }
+    updated.push('\n');
+    updated.push_str(feature_env_comments(feature));
+    updated
 }
 
 /// `config/<feature>.toml` starter: non-secret parameters live here, secrets
@@ -4786,6 +4953,8 @@ mod tests {
             .unwrap()
     }
 
+    // Flat scaffold assertions; length is coverage, not logic.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn creates_a_complete_local_project_without_installing() {
         let root = temporary_directory("new");
@@ -5112,6 +5281,42 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn feature_add_writes_only_requested_config_and_records_option() {
+        let root = temporary_directory("feature-add");
+        create_project(
+            &NewProjectOptions::new(&root)
+                .dependencies(DependencySource::Local(framework_root()))
+                .database(Some(ProjectDatabase::Sqlite))
+                .install_dependencies(false),
+        )
+        .unwrap();
+
+        let generator = ProjectGenerator::discover(&root).unwrap();
+        let result = generator.add_feature(ProjectFeature::Captcha).unwrap();
+
+        assert!(result.integration_note.is_some());
+        let captcha = fs::read_to_string(root.join("config/captcha.toml")).unwrap();
+        assert!(captcha.contains("# 图形验证码 Feature（phoenix-captcha）。"));
+        assert!(captcha.contains("# length = 5"));
+        assert!(!root.join("config/pay.toml").exists());
+        assert!(!root.join("config/notify.toml").exists());
+        assert!(
+            fs::read_to_string(root.join(".phoenix"))
+                .unwrap()
+                .contains("features=captcha")
+        );
+        let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(cargo.contains("default = [\"sqlite\", \"captcha\"]"));
+        assert!(cargo.contains("captcha = [\"phoenix/captcha\"]"));
+        assert!(
+            fs::read_to_string(root.join(".env.example"))
+                .unwrap()
+                .contains("# 验证码无密钥；参数见 config/captcha.toml。")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

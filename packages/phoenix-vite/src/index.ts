@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
-import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
+import type { ConfigEnv, Plugin, ResolvedConfig, UserConfig, ViteDevServer } from "vite";
 import ts from "typescript";
 
 import {
@@ -59,7 +59,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
     name: "phoenix",
     enforce: "pre",
 
-    config() {
+    config(_userConfig: UserConfig, env?: ConfigEnv) {
       // Vite reads `<meta property="csp-nonce" nonce="...">` at runtime.
       // Never set `html.cspNonce` here: Phoenix emits a fresh value per HTTP request.
       //
@@ -67,6 +67,7 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
       // physical `react` under the monorepo `node_modules`, while app islands use
       // the app's copy — production then throws "Cannot read properties of null
       // (reading 'useState')". Dev hides this via optimizeDeps prebundling.
+      const isBuild = env?.command === "build";
       const reactSingleton = {
         resolve: {
           dedupe: ["react", "react-dom"] as string[],
@@ -81,15 +82,43 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
           ],
         },
       };
+      // Production: terser minify + identifier mangling (keeps React props intact).
+      // Not full AST obfuscation — that breaks React/islands; this is the safe default.
+      const productionMinify = {
+        minify: "terser" as const,
+        cssMinify: true,
+        target: "es2020" as const,
+        sourcemap: false,
+        reportCompressedSize: true,
+        terserOptions: {
+          compress: {
+            drop_console: true,
+            drop_debugger: true,
+            passes: 2,
+            pure_getters: true,
+          },
+          mangle: {
+            toplevel: true,
+            safari10: true,
+          },
+          format: {
+            comments: false,
+          },
+        },
+      };
       if (options.renderer) {
         return {
           ...reactSingleton,
           publicDir: false,
+          esbuild: isBuild
+            ? { drop: ["console", "debugger"] as const, legalComments: "none" as const }
+            : undefined,
           build: {
             emptyOutDir: true,
             outDir: "public/ssr",
             ssr: true,
             ssrEmitAssets: true,
+            ...productionMinify,
             rollupOptions: {
               input: SERVER_ID,
               output: { entryFileNames: "renderer.js" },
@@ -100,9 +129,14 @@ export function phoenix(options: PhoenixViteOptions = {}): Plugin {
       return {
         ...reactSingleton,
         publicDir: false,
+        esbuild: isBuild
+          ? { drop: ["console", "debugger"] as const, legalComments: "none" as const }
+          : undefined,
         build: {
           emptyOutDir: true,
           outDir: "public/assets",
+          modulePreload: { polyfill: false },
+          ...productionMinify,
           rollupOptions: {
             input: CLIENT_ID,
             output: {

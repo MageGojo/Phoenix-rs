@@ -25,6 +25,7 @@ Usage:
                    [--feature captcha,pay,notify] [--no-features]
                    [--framework-path <path>] [--no-install] [--no-git]
   px update [--framework-path <path>] [--no-install] [--dry-run]
+  px feature:add <captcha|pay|notify>
   px dev
   px migrate
   px status
@@ -58,6 +59,7 @@ Usage:
 Examples:
   px new my-app
   px update
+  px feature:add captcha
   px migrate
   px rollback --step 2
   px fresh --seed
@@ -101,6 +103,7 @@ async fn run(raw: Vec<OsString>) -> Result<(), String> {
         "dev" => dev(arguments).await,
         "new" => new_project(arguments),
         "update" => update_project(&arguments),
+        "feature:add" => add_feature(&arguments),
         "migrate" => database_command("migrate", &no_options(&arguments)?),
         "status" => database_command("status", &no_options(&arguments)?),
         "rollback" => database_command("rollback", &rollback_options(&arguments)?),
@@ -614,6 +617,22 @@ fn update_project(arguments: &[String]) -> Result<(), String> {
             "Updated Phoenix core files in {} (business code left untouched).",
             generator.root().display()
         );
+    }
+    Ok(())
+}
+
+fn add_feature(arguments: &[String]) -> Result<(), String> {
+    let [feature] = arguments else {
+        return Err("usage: px feature:add <captcha|pay|notify>".to_owned());
+    };
+    let feature = feature.parse::<ProjectFeature>()?;
+    let generator = current_generator()?;
+    let result = generator
+        .add_feature(feature)
+        .map_err(|error| error.to_string())?;
+    print_written(&generator, &result.written);
+    if let Some(note) = result.integration_note {
+        println!("NOTE {note}");
     }
     Ok(())
 }

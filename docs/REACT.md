@@ -30,6 +30,20 @@ startPhoenix({ pages, islands });
 
 之后同源链接自动变成局部导航（只换页面内容，不整页刷新）。三种渲染模式（SPA / Islands / SSR）共用这一套；**同模式页面之间是局部导航**。以下情况运行时会自动退回整页浏览器导航，你不需要处理：目标页渲染模式不同、服务端 `asset_version` / `contract_hash` 变化（例如刚发了新版）、页面协议版本不一致——都是为了避免旧 bundle / 错误模式渲染新页面。
 
+### Shared 要瘦：按需，别把整站 CMS 塞进每一页
+
+`PageEnvelope.shared` / `useShared()` 是**跨页布局级**数据（常见：`user`、`csrfToken`、页眉页脚品牌 chrome）。  
+**不要**把「关于我 / SEO / robots / 后台专用字段」放进 shared——登录页也会整包进 hydration JSON。
+
+| 放哪里 | 放什么 |
+| --- | --- |
+| `shared` | 几乎每页布局都要用的极少字段 |
+| 页面 `props` | 本页内容（关于页的 bio、首页侧栏简介、文章正文…） |
+| island `props` | 该岛交互所需（Astro islands 同理：岛只收自己的 props） |
+| `PageHead` / 服务端 | SEO meta、canonical、验证码 meta（不必进 React props） |
+
+框架不会自动裁剪 shared；控制器里显式 `.shared(...)` 时自己控体积。
+
 ## 2. 页面组件：props 即契约
 
 ```tsx
@@ -75,7 +89,7 @@ urlFor("users.show", { id: 9 });                         // 手动逃生口，�
 import { usePage, useShared, useFlash, useNavigating } from "@apizero/react";
 
 const { props, errors } = usePage<MembersPageProps>();
-const shared = useShared<PhoenixSharedProps>();   // 布局级共享数据（当前用户等）
+const shared = useShared<PhoenixSharedProps>();   // 仅放跨页真需要的数据（见下）
 const { flash } = useFlash<{ notice?: string }>(); // 一次性提示，服务端下一跳自动清
 const { processing } = useNavigating();            // 导航中？配合骨架屏/禁用按钮
 ```

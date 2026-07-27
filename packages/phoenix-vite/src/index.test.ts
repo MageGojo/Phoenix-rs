@@ -18,12 +18,20 @@ afterEach(() => {
 describe("Phoenix Vite plugin", () => {
   it("hashes every production asset so immutable caching is safe", () => {
     const plugin = phoenix();
-    const config = invokeHook(plugin.config) as {
-      build: { rollupOptions: { output: { assetFileNames: string } } };
+    const config = invokeHook(plugin.config, {}, { command: "build", mode: "production" }) as {
+      build: {
+        minify: string;
+        modulePreload?: { polyfill: boolean };
+        rollupOptions: { output: { assetFileNames: string } };
+        terserOptions?: { mangle?: { toplevel?: boolean } };
+      };
       html?: { cspNonce?: string };
     };
 
     expect(config.build.rollupOptions.output.assetFileNames).toBe("[name]-[hash][extname]");
+    expect(config.build.minify).toBe("terser");
+    expect(config.build.terserOptions?.mangle?.toplevel).toBe(true);
+    expect(config.build.modulePreload?.polyfill).toBe(false);
     expect(config.html?.cspNonce).toBeUndefined();
   });
 

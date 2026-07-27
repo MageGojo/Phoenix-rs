@@ -92,6 +92,17 @@ private_key_path = "storage/certs/apiclient_key.pem"
 notify_url = "https://shop.example.com/pay/notify/wechat"
 ```
 
+已有项目按需添加一个官方 Feature：
+
+```bash
+px feature:add captcha
+# 或 px feature:add pay / px feature:add notify
+```
+
+该命令只创建指定的 `config/<feature>.toml`，并更新 `.phoenix`、应用 Cargo
+feature 与 `.env.example` 的对应密钥说明。若项目已有 `features()` / `FeatureSet`
+脚手架，会同步注册插件；否则 CLI 会提示你手动在 `src/lib.rs` 装配，避免覆盖自定义应用代码。
+
 `load_feature_config` 语义：
 
 - 读 `config/<name>.toml`（相对应用根）；文件或目录缺失 → `T::default()`，Feature 保持零配置可跑；
