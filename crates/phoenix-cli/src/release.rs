@@ -95,6 +95,7 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
 
     let public_assets = ensure_dir(root.join("public/assets"))?;
     let public_ssr = ensure_dir(root.join("public/ssr"))?;
+    let public_static_dirs = list_public_static_dirs(&root.join("public"))?;
     let config = ensure_dir(root.join("config"))?;
     let migrations = ensure_dir(root.join("database/migrations"))?;
 
@@ -129,6 +130,7 @@ pub fn release_build(args: Vec<String>) -> Result<(), String> {
             phoenix_manage: manage_path,
             public_assets,
             public_ssr,
+            public_static_dirs,
             config,
             migrations,
         },
@@ -597,6 +599,39 @@ fn ensure_dir(path: PathBuf) -> Result<PathBuf, String> {
             .map_err(|error| format!("failed to create directory {}: {error}", path.display()))?;
     }
     Ok(path)
+}
+
+/// Collect `public/*` directories that are not Vite build outputs (`assets` / `ssr`).
+fn list_public_static_dirs(public_root: &Path) -> Result<Vec<PathBuf>, String> {
+    if !public_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut dirs = Vec::new();
+    let entries = fs::read_dir(public_root).map_err(|error| {
+        format!(
+            "failed to read public directory {}: {error}",
+            public_root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to read public directory entry under {}: {error}",
+                public_root.display()
+            )
+        })?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if name == "assets" || name == "ssr" {
+            continue;
+        }
+        dirs.push(path);
+    }
+    dirs.sort();
+    Ok(dirs)
 }
 
 fn run_command(program: &str, args: &[&str], cwd: &Path, label: &str) -> Result<(), String> {

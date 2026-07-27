@@ -130,6 +130,7 @@ mod tests {
                 phoenix_manage: Some(manage),
                 public_assets: sources_root.join("public"),
                 public_ssr: sources_root.join("public_ssr"),
+                public_static_dirs: Vec::new(),
                 config: sources_root.join("config"),
                 migrations: sources_root.join("migrations"),
             },

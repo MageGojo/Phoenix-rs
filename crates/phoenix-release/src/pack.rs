@@ -46,6 +46,8 @@ pub struct StagingSources {
     pub phoenix_manage: Option<PathBuf>,
     pub public_assets: PathBuf,
     pub public_ssr: PathBuf,
+    /// Extra static dirs under `public/` (e.g. `fonts/`, `images/`), excluding assets/ssr.
+    pub public_static_dirs: Vec<PathBuf>,
     pub config: PathBuf,
     pub migrations: PathBuf,
 }
@@ -85,6 +87,15 @@ pub fn write_staging(
 
     copy_tree(&sources.public_assets, &staging.join("public/assets"))?;
     copy_tree(&sources.public_ssr, &staging.join("public/ssr"))?;
+    for static_dir in &sources.public_static_dirs {
+        let Some(name) = static_dir.file_name() else {
+            continue;
+        };
+        if name == "assets" || name == "ssr" {
+            continue;
+        }
+        copy_tree(static_dir, &staging.join("public").join(name))?;
+    }
     copy_tree(&sources.config, &config_dir)?;
 
     let migration_count = copy_tree(&sources.migrations, &migrations_dir)?;
@@ -375,6 +386,12 @@ mod tests {
                 phoenix_manage: Some(manage),
                 public_assets,
                 public_ssr,
+                public_static_dirs: {
+                    let fonts = dir.path().join("public/fonts");
+                    fs::create_dir_all(&fonts).unwrap();
+                    fs::write(fonts.join("fonts.css"), b"/* fonts */").unwrap();
+                    vec![fonts]
+                },
                 config: dir.path().join("config"),
                 migrations: dir.path().join("migrations"),
             },
@@ -385,8 +402,10 @@ mod tests {
         assert!(staging.join("bin/phoenix-manage").is_file());
         assert!(staging.join("public/assets/app.js").is_file());
         assert!(staging.join("public/ssr/renderer.js").is_file());
+        assert!(staging.join("public/fonts/fonts.css").is_file());
         assert!(manifest.checksums.contains_key("bin/demo"));
         assert!(manifest.checksums.contains_key("public/assets/app.js"));
+        assert!(manifest.checksums.contains_key("public/fonts/fonts.css"));
 
         let tarball = dir.path().join("demo.tar.gz");
         create_tarball(&staging, &tarball).unwrap();
@@ -428,6 +447,7 @@ mod tests {
                 phoenix_manage: None,
                 public_assets,
                 public_ssr,
+                public_static_dirs: Vec::new(),
                 config: dir.path().join("config"),
                 migrations: dir.path().join("migrations"),
             },
