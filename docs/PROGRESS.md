@@ -606,7 +606,10 @@
 - 改动：`StagingSources.public_static_dirs`；CLI 扫描 `public/*`（跳过 assets/ssr）一并打进制品
 - 版本：`phoenix-release 0.1.3`、`px-cli 0.1.11`
 - 验收：`cargo test -p phoenix-release`；`px release` 制品含 fonts/images；HEAD `/fonts/fonts.css` 200
-- 状态：进行中（push + crates.io + GitHub Release v0.1.11）
+- Push：`origin` + `gitcode` → `main@b28a4ea`；tag `v0.1.11`
+- crates.io：`phoenix-release 0.1.3`、`px-cli 0.1.11`
+- GitHub Release：[v0.1.11](https://github.com/MageGojo/Phoenix-rs/releases/tag/v0.1.11)
+- 状态：已完成@b28a4ea
 
 ## 2026-07-26：系统教程 docs/tutorial
 
