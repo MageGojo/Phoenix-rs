@@ -822,4 +822,4 @@
 - 文档：`REACT.md` / `RENDERING.md` 明确 shared 只放跨页 chrome / 会话。
 - 验收：`cargo test -p px-cli --lib feature_add`；`npm test` in `packages/phoenix-vite`；my_blog `/login` shared 无 aboutBio。
 - 产物：`crates/phoenix-cli/*`、`packages/phoenix-vite/*`、`docs/{CONFIG,REACT,RENDERING,PROGRESS}.md`
-- 状态：已完成（案例 my_blog：`/login` shared 仅 chrome 7 字段；生产 entry terser 压缩且无 console；待填 commit）
+- 状态：已完成（案例 my_blog：`/login` shared 仅 chrome 7 字段；生产 entry terser 压缩且无 console；@fc94578）
