@@ -600,6 +600,14 @@
 - 未上传：`.env` / 证书与 sqlite / `dist/` / Docker 卷；未重发无变更 crate / npm
 - 状态：已完成@57637b0
 
+## 2026-07-27：px-cli 0.1.11 — release 打包静态资源
+
+- 修复：`px release` 只打 `public/assets` + `public/ssr`，漏掉 `fonts/`、`images/` 等 → 生产 `/fonts/fonts.css` 404
+- 改动：`StagingSources.public_static_dirs`；CLI 扫描 `public/*`（跳过 assets/ssr）一并打进制品
+- 版本：`phoenix-release 0.1.3`、`px-cli 0.1.11`
+- 验收：`cargo test -p phoenix-release`；`px release` 制品含 fonts/images；HEAD `/fonts/fonts.css` 200
+- 状态：进行中（push + crates.io + GitHub Release v0.1.11）
+
 ## 2026-07-26：系统教程 docs/tutorial
 
 - 新增按序教材：`docs/tutorial/README.md`（学习路径）+ `00` + 初级 01–07 + 中级 08–14 + 高级 15–20
