@@ -823,3 +823,11 @@
 - 验收：`cargo test -p px-cli --lib feature_add`；`npm test` in `packages/phoenix-vite`；my_blog `/login` shared 无 aboutBio。
 - 产物：`crates/phoenix-cli/*`、`packages/phoenix-vite/*`、`docs/{CONFIG,REACT,RENDERING,PROGRESS}.md`
 - 状态：已完成（案例 my_blog：`/login` shared 仅 chrome 7 字段；生产 entry terser 压缩且无 console；@fc94578）
+
+## 2026-07-28：多应用 scoped 保留全局中间件（静态资源 404）
+
+- 问题：`applications!` 对每个模块 `Routes::scoped(prefix)` 时，错误地把 `global_middleware` 摊进每条已注册路由；未匹配路径（如 `/assets/*` 的 `ServeProductionAssets`）不再经过全局中间件 → 生产静态资源 404。
+- 修复：`phoenix-routing` 的 `scoped` 保留 `global_middleware`；回归测试 `scoped_keeps_global_middleware_for_unmatched_paths`；文档见 `MULTI_APP.md`「全局中间件与静态资源」。
+- 触发案例：mgapi 多应用（`/` `/app` `/admin`）生产资源。
+- 状态：已完成
+

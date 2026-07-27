@@ -8,7 +8,7 @@ use std::{
 use bytes::Bytes;
 use futures_util::FutureExt;
 pub use http::Method;
-use http::{HeaderValue, StatusCode, header, uri::Authority};
+use http::{HeaderName, HeaderValue, StatusCode, header, uri::Authority};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use phoenix_http::{
     Handler, IntoResponse, Middleware, Request, RequestBodyMode, Response, RouteManifest,
@@ -209,9 +209,17 @@ impl Routes {
     }
 
     /// Apply a path/name/middleware scope to an existing route collection.
+    ///
+    /// Route-level and group middleware are applied to the scoped declarations.
+    /// Global middleware already attached to `self` stays global on the returned
+    /// collection so catch-all concerns (for example production asset serving)
+    /// still run for unmatched paths after multi-app prefix scoping.
     #[must_use]
-    pub fn scoped(self, group: RouteGroup) -> Self {
-        Self::new().group(group, |_| self)
+    pub fn scoped(mut self, group: RouteGroup) -> Self {
+        let globals = std::mem::take(&mut self.global_middleware);
+        let mut scoped = Self::new().group(group, |_| self);
+        scoped.global_middleware = globals;
+        scoped
     }
 
     /// Compile route definitions into an immutable request router.
@@ -1058,5 +1066,44 @@ mod tests {
         assert_eq!(response.headers()["x-content-type-options"], "nosniff");
         assert_eq!(router.url("items.index", &[]).unwrap(), "/items");
         assert_eq!(router.url("items.store", &[]).unwrap(), "/items");
+    }
+
+    #[tokio::test]
+    async fn scoped_keeps_global_middleware_for_unmatched_paths() {
+        use phoenix_http::{Next, middleware_fn};
+
+        // Multi-app remounts each module with `.scoped(prefix)`. Global middleware
+        // such as production asset serving must still wrap unmatched paths.
+        let mark_global = middleware_fn(|request: Request, next: Next| async move {
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                HeaderName::from_static("x-scoped-global"),
+                HeaderValue::from_static("1"),
+            );
+            response
+        });
+
+        let site = Routes::new()
+            .get("/", |_request: Request| async { "ok" })
+            .name("home")
+            .with_middleware(mark_global)
+            .scoped(RouteGroup::new().name("website."))
+            .build()
+            .unwrap();
+        let router =
+            Router::multi(vec![RouterMount::new("website", "/", None::<String>, site).unwrap()])
+                .unwrap();
+
+        let home = router
+            .handle(Request::new(Method::GET, "/".parse().unwrap()))
+            .await;
+        assert_eq!(home.status(), StatusCode::OK);
+        assert_eq!(home.headers()["x-scoped-global"], "1");
+
+        let missing = router
+            .handle(Request::new(Method::GET, "/assets/app.css".parse().unwrap()))
+            .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.headers()["x-scoped-global"], "1");
     }
 }

@@ -313,3 +313,10 @@
   - `metrics` → 可选 `phoenix-metrics`，并转发到 runtime / security / view / queue
 - 原因：极简岛页 / 反代 TLS / 无登录站点不应为未使用能力付出静态链接成本（尤其 aws-lc、tungstenite、jsonwebtoken、argon2）。
 - 边界：Session/CSRF/HostAllowlist、PageEnvelope、validation、routing 等网站默认承诺保持常驻；叶子 crate 可为自测保留 default features，门面依赖一律 `default-features = false`。
+
+## ADR-043：多应用 scoped 必须保留全局中间件
+
+- 状态：已接受
+- 决定：`Routes::scoped` 只给已注册路由加前缀/命名，**不得**清空或摊平 `global_middleware`；生产静态资源等未匹配路径仍走全局中间件。
+- 原因：`applications!` 依赖 scoped 重挂；若全局中间件被摊进业务路由，`ServeProductionAssets` 对 `/assets/*` 失效导致 404。
+- 边界：路由级 middleware 仍只作用于对应路由；文档见 `docs/MULTI_APP.md`。

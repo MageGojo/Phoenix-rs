@@ -95,3 +95,9 @@ let application = Application::new(routes())?;
 ```
 
 只有需要多应用时才改用 `Application::multi()`；生成的仍是同一个 `Application`，HTTP/2、body 限制、优雅关闭、日志与测试调用方式保持一致。
+
+## 全局中间件与静态资源
+
+`ApplicationModule` / `applications!` 会用 `Routes::scoped(prefix/name)` 给每个应用加路径与命名前缀。**已挂在 Routes 上的全局中间件在 scoped 之后仍然是全局的**——未匹配到业务路由的请求（典型如 `ServeProductionAssets` 服务的 `/assets/*`）也会经过它们。
+
+因此生产资源中间件应继续按脚手架方式挂在组装完成的 Routes 全局层，而不是拆成业务路由；多应用不会再把这类中间件「摊」进单条路由导致静态资源 404。
