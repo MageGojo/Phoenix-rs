@@ -34,8 +34,8 @@ pub fn payments_migration() -> Migration {
              subject TEXT NOT NULL, \
              notify_payload TEXT, \
              paid_at TEXT, \
-             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, \
-             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+             created_at TEXT NOT NULL, \
+             updated_at TEXT NOT NULL)")
         .up(
             "CREATE UNIQUE INDEX IF NOT EXISTS payments_provider_out_trade_no \
              ON payments (provider, out_trade_no)",
@@ -63,7 +63,7 @@ pub fn refunds_migration() -> Migration {
              currency TEXT NOT NULL, \
              status TEXT NOT NULL, \
              reason TEXT, \
-             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+             created_at TEXT NOT NULL)")
         .up(
             "CREATE UNIQUE INDEX IF NOT EXISTS payment_refunds_provider_out_refund_no \
              ON payment_refunds (provider, out_refund_no)",

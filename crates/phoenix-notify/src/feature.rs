@@ -21,7 +21,7 @@ pub fn notifications_migration() -> Migration {
              type TEXT NOT NULL, \
              data TEXT NOT NULL, \
              read_at TEXT, \
-             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+             created_at TEXT NOT NULL)")
         .up("CREATE INDEX IF NOT EXISTS notifications_notifiable_read \
              ON notifications (notifiable_id, read_at)")
         .down("DROP INDEX IF EXISTS notifications_notifiable_read")
