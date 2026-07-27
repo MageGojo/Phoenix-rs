@@ -829,5 +829,5 @@
 - 问题：`applications!` 对每个模块 `Routes::scoped(prefix)` 时，错误地把 `global_middleware` 摊进每条已注册路由；未匹配路径（如 `/assets/*` 的 `ServeProductionAssets`）不再经过全局中间件 → 生产静态资源 404。
 - 修复：`phoenix-routing` 的 `scoped` 保留 `global_middleware`；回归测试 `scoped_keeps_global_middleware_for_unmatched_paths`；文档见 `MULTI_APP.md`「全局中间件与静态资源」。
 - 触发案例：mgapi 多应用（`/` `/app` `/admin`）生产资源。
-- 状态：已完成
+- 状态：已完成@0fc8346（已推送 origin/gitcode；同批 MySQL TEXT DEFAULT 修复@cd930ad）
 
